@@ -466,3 +466,38 @@ class TestMarkdown(unittest.TestCase):
         self.assertIn("&lt;img", out)
         self.assertNotIn(" style=", out)
         self.assertNotIn(" class=", out)
+
+
+class TestFlowTimes(DetailCase):
+    """DVDG-544 regressions from the live T-0003: a respawned coder and a reviewer FAIL next to a QA pass."""
+
+    def seed_rework(self):
+        x = self.con.execute
+        x("INSERT INTO goals VALUES('G-81','p1','Rework goal','intent','1. a','active',2,'owner',NULL,?,?)", (ts(8, 0), ts(8, 0)))
+        x(T_INS, ("T-81", "G-81", "g-81-a", "Rework task", "s", "a", "coder", "in_progress", "coder-t-81",
+                  "https://github.com/o/r/pull/81", 2, ts(9, 0), ts(10, 43)))
+        x(E_INS, (ts(9, 10), "lead-g-81-a", "task", "T-81", "task-auto-start", "spawn coder-t-81"))
+        # the respawn reused the agent row: `started` now holds the second start, not the first
+        x(A_INS, ("coder-t-81", "coder", "G-81", "g-81-a", "T-81", "live", "m", ts(10, 43), None))
+        x(E_INS, (ts(9, 40), "coder-t-81", "task", "T-81", "update", "status=in_review pr=https://github.com/o/r/pull/81"))
+        x(V_INS, ("T-81", "u", "cccccccc33", "reviewer", "fail", "bug", "reviewer-81", ts(10, 37)))
+        x(V_INS, ("T-81", "u", "cccccccc33", "qa", "pass", "ok", "qa-81", ts(10, 42)))
+        x(E_INS, (ts(10, 43), "lead-g-81-a", "task", "T-81", "update", "status=in_progress"))
+
+    def node_time(self, page, label):
+        m = re.search(rf'<text class="flow-label"[^>]*>{re.escape(label)}</text><text class="flow-time"[^>]*>([^<]*)<', page)
+        return m.group(1) if m else None
+
+    def test_respawn_keeps_the_first_coder_start(self):
+        self.seed_rework()
+        page = self.page("/task/T-81")
+        self.assertEqual(self.node_time(page, "Planned"), "10m 00s")    # 09:00 created -> 09:10 first start, not 10:43
+        self.assertEqual(self.node_time(page, "Coding"), "30m 00s")     # 09:10 -> 09:40 PR opened (was unknown)
+
+    def test_reviewer_fail_with_qa_pass_never_reaches_the_judge(self):
+        self.seed_rework()
+        page = self.page("/task/T-81")
+        states = {label: state for state, label in re.findall(r'class="flow-node flow-node--(\w+)[^"]*"><title>([^:<]+):', page)}
+        self.assertEqual(states["Judge"], "pending")
+        self.assertEqual(states["Coding"], "current")
+        self.assertEqual(self.node_time(page, "Judge"), "")              # no time counted from the QA pass

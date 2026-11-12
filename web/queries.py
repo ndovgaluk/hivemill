@@ -521,6 +521,9 @@ def task_lifecycle(con, tid, now=None):
     verdicts = _dicts(con.execute("SELECT role, verdict, head_sha, created FROM verdicts WHERE task_id=? ORDER BY id", (tid,)))
     spawns = [r["started"] for r in con.execute(
         "SELECT started FROM agents WHERE task_id=? AND role='coder' AND started IS NOT NULL", (tid,)) if _epoch(r["started"]) is not None]
+    # a respawn reuses the agent row (name is its key) and overwrites `started`; the task-auto-start event of the
+    # first worker start is written once, so it keeps the real first start (DVDG-544)
+    spawns += [e["ts"] for e in evs if e["action"] == "task-auto-start" and _epoch(e["ts"]) is not None]
     first_spawn = min(spawns, key=_epoch, default=None)
     merged = max((e["ts"] for e in evs if e["action"] == "merged" and _epoch(e["ts"]) is not None), key=_epoch, default=None)
     ups = [(e["ts"], e["detail"] or "") for e in evs if e["action"] == "update" and _epoch(e["ts"]) is not None]
@@ -604,6 +607,25 @@ FLOW_BODY_CHARS = 8000   # instruction text per note when shown (server.show_tex
 _SHA_ONLY_RE = re.compile(r"^@?([0-9a-f]{7,40})$")
 
 
+_JUDGE_EVENT_PREFIX = "judge-"   # judge-blocked, judge-reject, judge-hold, … : the judge acted on the task
+_PASS_VERDICT = "pass"
+
+
+def _judge_reached(con, tid):
+    """The task reached the judge: a judge verdict or judge-* event exists, or the latest reviewer and QA verdicts are
+    both passes on the same head commit (a fail by either since then means the work went back to the coder)."""
+    if con.execute("SELECT 1 FROM verdicts WHERE task_id=? AND role='judge' LIMIT 1", (tid,)).fetchone() or con.execute(
+            "SELECT 1 FROM events WHERE entity='task' AND entity_id=? AND action LIKE ? LIMIT 1",
+            (tid, _JUDGE_EVENT_PREFIX + "%")).fetchone():
+        return True
+    latest = {}
+    for v in con.execute("SELECT role, verdict, head_sha FROM verdicts WHERE task_id=? AND role IN ('reviewer','qa') ORDER BY id",
+                         (tid,)):
+        latest[v["role"]] = v
+    r, q = latest.get("reviewer"), latest.get("qa")
+    return bool(r and q and r["verdict"] == q["verdict"] == _PASS_VERDICT and r["head_sha"] and r["head_sha"] == q["head_sha"])
+
+
 def task_flow(con, tid, now=None, show_text=False):
     """The /task diagram data (read-only): per stage of FLOW_STAGES its state, seconds spent (an open stage counts until
     `now`; None = unknown) and up to FLOW_NOTES_MAX notes, oldest first. The goal stage holds the HQ chain that led to
@@ -633,6 +655,9 @@ def task_flow(con, tid, now=None, show_text=False):
             starts[k] = max(starts.get(k, start), start)  # latest start (the current review round)
     merged = con.execute("SELECT 1 FROM events WHERE entity='task' AND entity_id=? AND action='merged' LIMIT 1",
                          (tid,)).fetchone() is not None
+    if not _judge_reached(con, tid):
+        starts.pop("judge", None)   # task_lifecycle opens "judge" at any reviewer/QA pass; one pass with a fail is no handoff
+        secs["judge"] = None
     reached = {"goal": True, "planned": True, "coding": "coding" in starts, "review": "review" in starts,
                "judge": "judge" in starts and starts["judge"] >= starts.get("review", 0), "merged": merged}
     status = t["status"]
