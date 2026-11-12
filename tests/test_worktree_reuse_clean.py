@@ -341,10 +341,14 @@ class WorktreeReuseCleanTests(FactoryTestCase):
 
     def runs(self):
         """clean with the flag on and then off; each time the output must say gitdir mismatch."""
+        paths = [r["path"] for r in self.pool()]
         for flag in ("1", "0"):
             self.cfg_sql("worktree_reuse", flag)
             p = self.clean()
             self.assertIn("kept: gitdir mismatch", p.stdout, f"flag {flag}")
+            for path in paths:  # every seeded pool row, not just one of them, is refused for the ownership reason
+                self.assertTrue(any(path in l and "kept: gitdir mismatch" in l for l in p.stdout.splitlines()),
+                                f"flag {flag}: {path} not refused as a gitdir mismatch:\n{p.stdout}")
 
     def free_row(self, path):
         self.env.sql("INSERT OR REPLACE INTO worktree_pool(path, project_id, state, task_id, reset_ok, released_at) "
@@ -449,7 +453,15 @@ class WorktreeReuseCleanTests(FactoryTestCase):
         w7 = self.stale(7)
         alias = self.env.home_dir / "alias_dotgit"
         alias.symlink_to(w7 / ".git")  # a resolved compare accepts this alias of w7/.git
-        (self.admin_of(w7) / "gitdir").write_text(str(alias) + "\n")
+        # w7's own admin stays registered (so `git worktree list` names w7 exactly once); w7/.git is aimed at a second admin
+        # whose back pointer is the alias: only the unresolved back-pointer compare (step 9) refuses it
+        bad = self.wroot() / "alias_admin"
+        bad.mkdir()
+        real = self.admin_of(w7)
+        for n in ("commondir", "HEAD"):
+            (bad / n).write_text((real / n).read_text())
+        (bad / "gitdir").write_text(str(alias) + "\n")
+        (w7 / ".git").write_text(f"gitdir: {bad}\n")
         self.runs()
         self.s_intact(s, snap, head)
         self.assertEqual([r["state"] for r in self.pool()], ["claimed"] * 2)
