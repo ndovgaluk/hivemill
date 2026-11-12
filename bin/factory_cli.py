@@ -12324,6 +12324,44 @@ def clean_sandbox_dirs(con, pane_cwds, dry_run, root=None):
     return [r for r in rows if r not in kept], len(kept)  # kept dirs are counted, not listed, so a quiet run stays quiet
 
 
+def worktree_owns_gitdir(repo, wt):
+    """True when wt's `.git` is not a forged pointer: a plain file `gitdir: <D>` where D is a direct child of the project's
+    <common>/worktrees/ and D/gitdir points back at wt/.git. A per-task clone (`.git` a directory) has no pointer, so it is
+    owned. A symlink, a missing .git or anything unreadable is NOT owned (fail closed). Reads files only: no git call runs in
+    wt, so a worker-planted pointer cannot make git write into a sibling's admin dir. ONE helper for G-001 (director M102)."""
+    wt = Path(wt)
+    gitp = wt / ".git"
+    try:
+        if gitp.is_symlink():
+            return False
+        if gitp.is_dir():
+            return True
+        lines = gitp.read_text(errors="replace").splitlines()
+        r = _git(repo, "rev-parse", "--git-common-dir")
+        if r.returncode != 0 or not lines or not lines[0].startswith("gitdir:"):
+            return False
+        common = Path(repo, r.stdout.strip()).resolve()
+        d = Path(wt, lines[0][len("gitdir:"):].strip()).resolve()
+        if d.parent != common / "worktrees":
+            return False
+        back = Path(d, "gitdir").read_text(errors="replace").strip()
+        return Path(back).resolve() == wt.resolve() / ".git"
+    except (OSError, ValueError):
+        return False
+
+
+def _gitdir_mismatch_alert(con, t_id, path):
+    """One event and one director message per path (deduped on an existing event for that path)."""
+    path = str(path)
+    if con.execute("SELECT 1 FROM events WHERE action='worktree-gitdir-mismatch' AND entity_id=?", (path,)).fetchone():
+        return
+    event(con, "worktree", path, "worktree-gitdir-mismatch", {"path": path, "task": t_id})
+    send(con, "director", f"worktree {path} has a forged .git pointer",
+         f"`factory clean` found that {path}/.git does not point at its own admin dir under the project's .git/worktrees/ "
+         f"(task {t_id}). It ran no git command there and kept the directory. Find who wrote the pointer, then fix or "
+         "remove the directory by hand.", "alert", task=t_id if t_id and t_id != "-" else None, sender="cleaner")
+
+
 def _pool_settings(con):
     """(reuse on, per-project cap) from worktree_reuse / worktree_pool_max; the cap is 0 when reuse is off or unreadable."""
     if cfg(con, "worktree_reuse") != "1":
@@ -12355,15 +12393,22 @@ def _worktree_locked(repo, wt):
 def _pool_poolable(repo, wt):
     """A linked (not cloned) worktree that is not locked and whose HEAD tree has no .gitmodules."""
     gitp = wt / ".git"
-    if gitp.is_symlink() or not gitp.is_file() or _worktree_locked(repo, wt):
+    if gitp.is_symlink() or not gitp.is_file() or not worktree_owns_gitdir(repo, wt) or _worktree_locked(repo, wt):
         return False
-    if _git(wt, "rev-parse", "--verify", "-q", "HEAD").returncode != 0:
+    noreplace = _carry_env()  # a refs/replace/* in the shared repo could hide .gitmodules: read the real objects
+
+    def cgit(*args):
+        return git_run(wt, *HARDENED_GIT_FLAGS, *args, env=noreplace)
+
+    if cgit("rev-parse", "--verify", "-q", "HEAD").returncode != 0:
         return False
-    return _git(wt, "cat-file", "-e", "HEAD:.gitmodules").returncode != 0
+    return cgit("cat-file", "-e", "HEAD:.gitmodules").returncode != 0
 
 
 def _pool_reset(repo, wt, base):
     """Detach wt at origin/<base> (else <base>), drop tracked changes and untracked non-ignored files; ignored files stay."""
+    if not worktree_owns_gitdir(repo, wt):
+        return False
     ref = f"origin/{base}" if _git(repo, "rev-parse", "--verify", "-q", f"refs/remotes/origin/{base}").returncode == 0 else base
     return (_git(wt, "checkout", "-q", "--detach", ref).returncode == 0
             and _git(wt, "reset", "-q", "--hard").returncode == 0
@@ -12398,6 +12443,13 @@ def _clean_stale_claims(con, a, panes, pane_cwds, listed, rows):
             continue
         if t["status"] not in ("done", "cancelled"):
             row["reason"] = f"pooled kept: claimed by {pr['task_id']}"
+            continue
+        prj = con.execute("SELECT repo_path FROM projects WHERE id=?", (pr["project_id"],)).fetchone()
+        if (wt / ".git").is_file() and not (wt / ".git").is_symlink() and (
+                not prj or not Path(prj["repo_path"]).is_dir() or not worktree_owns_gitdir(prj["repo_path"], wt)):
+            row["reason"] = "kept: gitdir mismatch"
+            if not a.dry_run:
+                _gitdir_mismatch_alert(con, pr["task_id"] or "-", wt)
             continue
         top = cgit(wt, "rev-parse", "--show-toplevel")
         if top.returncode != 0 or Path(top.stdout.strip()).resolve() != wt:
@@ -12503,6 +12555,14 @@ def cmd_clean(a):
                 continue
             _git(repo, "fetch", "-q", "origin")
             repos[repo] = base
+        twt = Path(t["worktree"]) if t["worktree"] else None
+        if (twt and t["status"] in ("done", "cancelled") and twt.is_absolute() and (twt / ".git").is_file()
+                and not (twt / ".git").is_symlink() and not worktree_owns_gitdir(repo, twt)):
+            # once, before ANY git call inside the worktree (clean_verdict runs several): a forged pointer would aim them at a sibling
+            row["reason"] = "kept: gitdir mismatch"
+            if not a.dry_run:
+                _gitdir_mismatch_alert(con, t["id"], twt.resolve())
+            continue
         why, wt, has_branch = clean_verdict(con, t, repo, base, panes, listed)
         if why:
             row["reason"] = why

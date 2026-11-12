@@ -259,6 +259,67 @@ class WorktreeReuseCleanTests(FactoryTestCase):
         self.assertEqual(git("rev-parse", "HEAD", cwd=wt), head)
         self.assertIn("factory/t-0001", self.branches())
 
+    # 15 gitdir ownership (director M107 option A), flag on and off
+    def _admin_state(self, s):
+        admin = Path(git("rev-parse", "--git-dir", cwd=s))
+        names = ["HEAD", "index", "ORIG_HEAD", "logs/HEAD"]
+        return {n: ((admin / n).read_bytes() if (admin / n).exists() else None) for n in names}
+
+    def _forged_gitdir_case(self, reuse):
+        self.cfg_sql("worktree_reuse", reuse)
+        w, _ = self.task(1)
+        s, _ = self.task(2, status="in_progress", with_pr=False)
+        before = self._admin_state(s)
+        s_head = git("rev-parse", "HEAD", cwd=s)
+        (w / ".git").write_text(f"gitdir: {self.repo}/.git/worktrees/{s.name}\n")
+        for run in (1, 2):
+            p = self.clean()
+            self.assertRegex(p.stdout, r"T-0001\s.*kept: gitdir mismatch")
+            self.assertTrue(w.exists())
+            self.assertEqual(self.pool(), [])
+            self.assertEqual(self._admin_state(s), before)
+            self.assertEqual(git("rev-parse", "HEAD", cwd=s), s_head)
+            self.assertEqual(git("branch", "--show-current", cwd=s), "factory/t-0002")
+            self.assertEqual(len(self.events("worktree-gitdir-mismatch")), 1)
+            msgs = self.env.sql("SELECT * FROM messages WHERE subject LIKE '%forged .git pointer%'")
+            self.assertEqual(len(msgs), 1, f"run {run}")
+            self.assertIn(str(w.resolve()), msgs[0]["subject"])
+
+    def test_forged_gitdir_kept_flag_on(self):
+        self._forged_gitdir_case("1")
+
+    def test_forged_gitdir_kept_flag_off(self):
+        self._forged_gitdir_case("0")
+
+    def test_forged_gitdir_claimed_stale_row_kept(self):
+        s, _ = self.task(2, status="in_progress", with_pr=False)
+        before = self._admin_state(s)
+        w = self.env.home_dir / "worktrees" / "forged-claim"
+        git("worktree", "add", "-q", "--detach", str(w), "origin/main", cwd=self.repo)
+        (w / ".git").write_text(f"gitdir: {self.repo}/.git/worktrees/{s.name}\n")
+        self.env.seed_task("T-0006", status="done")
+        self.seed_claim(w, "T-0006")
+        p = self.clean()
+        self.assertRegex(p.stdout, r"kept: gitdir mismatch")
+        self.assertEqual(self._admin_state(s), before)
+        self.assertEqual([r["state"] for r in self.pool()], ["claimed"])
+
+    # 17 hardened submodule check: a replace ref must not hide .gitmodules
+    def test_replace_ref_cannot_hide_gitmodules(self):
+        w, _ = self.task(1)
+        plain_tree_commit = git("rev-parse", "HEAD", cwd=w)
+        (w / ".gitmodules").write_text("[submodule \"s\"]\n\tpath = s\n\turl = ../s\n")
+        git("add", ".gitmodules", cwd=w)
+        git("commit", "-q", "-m", "mod", cwd=w)
+        git("push", "-q", "origin", "factory/t-0001", cwd=w)
+        self.env.seed_pr(URL % 1, sha=git("rev-parse", "HEAD", cwd=w), state="MERGED")
+        # plain git now reads the commit without .gitmodules
+        git("replace", "HEAD", plain_tree_commit, cwd=w)
+        self.assertNotEqual(git("rev-parse", "HEAD", cwd=w), "")
+        self.clean()
+        self.assertEqual(self.pool(), [])
+        self.assertFalse(w.exists())  # treated as a submodule worktree: removed as today, not pooled
+
 
 if __name__ == "__main__":
     unittest.main()
