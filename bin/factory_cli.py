@@ -12476,6 +12476,11 @@ def _worktree_locked(repo, wt):
 
 def _pool_poolable(repo, wt):
     """A linked (not cloned) worktree that is not locked and whose HEAD tree has no .gitmodules. GitdirMismatch when forged."""
+    try:
+        if not stat.S_ISREG(os.lstat(os.path.join(os.path.abspath(str(wt)), ".git")).st_mode):
+            return False  # a per-task clone (.git a directory) is never pooled: it takes the clone removal path
+    except OSError:
+        return False
     if _worktree_locked(repo, wt):
         return False
     if _wt_git(repo, wt, "rev-parse", "--verify", "-q", "HEAD").returncode != 0:

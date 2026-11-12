@@ -546,6 +546,26 @@ class WorktreeReuseCleanTests(FactoryTestCase):
                     self.assertIsNone(bad.search(text[ln - 1]), f"{node.name}:{ln} touches a worktree outside _wt_git/_wt_remove")
         self.assertEqual(seen, scoped)
 
+    def test_merged_clone_is_removed_not_flagged_with_flag_on(self):
+        # self-review finding: a per-task clone (.git a directory) must not hit the ownership refusal when pooling is on
+        wt = self.env.home_dir / "worktrees" / "G-001-T-0001"
+        git("-c", "protocol.file.allow=always", "clone", "-q", "--shared", "--no-checkout", str(self.repo), str(wt), cwd=self.env.home)
+        git("remote", "set-url", "origin", str(self.origin), cwd=wt)
+        git("fetch", "-q", "origin", cwd=wt)
+        git("checkout", "-q", "-b", "factory/t-0001", "origin/main", cwd=wt)
+        (wt / "f1").write_text("work\n")
+        git("add", "f1", cwd=wt)
+        git("-c", "user.name=zz", "-c", "user.email=zz@example.invalid", "commit", "-q", "-m", "work", cwd=wt)
+        git("push", "-q", "origin", "factory/t-0001", cwd=wt)
+        self.env.seed_task("T-0001", status="done", pr_url=URL % 1)
+        self.env.sql("UPDATE tasks SET worktree=?, branch='factory/t-0001' WHERE id='T-0001'", (str(wt),))
+        self.env.seed_pr(URL % 1, sha=git("rev-parse", "HEAD", cwd=wt), state="MERGED")
+        p = self.clean()
+        self.assertNotIn("gitdir mismatch", p.stdout)
+        self.assertFalse(wt.exists())
+        self.assertEqual(self.pool(), [])
+        self.assertEqual(self.env.sql("SELECT * FROM messages WHERE subject LIKE '%forged .git pointer%'"), [])
+
 
 if __name__ == "__main__":
     unittest.main()
