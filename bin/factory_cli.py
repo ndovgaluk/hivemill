@@ -12436,6 +12436,33 @@ def _wt_remove(repo, wt):
     return _git(repo, "worktree", "remove", "--force", os.path.abspath(str(wt)))
 
 
+CLONE_SYMLINK_WHY = "outside worktrees/ (clone must be a direct, non-symlink child)"
+
+
+def clone_owns_gitdir(wt):
+    """(True, "ok") when wt is a plain per-task clone: a real directory (no symlink in its path) whose .git is a real
+    directory with no commondir/gitdir file (either makes git treat it as a linked worktree of another repo). Else
+    (False, why). No git call runs and nothing from inside wt is resolved (T-0006, staff-engineer design T4)."""
+    try:
+        w = os.path.abspath(str(wt))
+        if os.path.realpath(w) != w:
+            return False, "symlink in path"
+        if not stat.S_ISDIR(_lstat_mode(w)):
+            return False, "not a directory"
+        dotgit = os.path.join(w, ".git")
+        if not stat.S_ISDIR(_lstat_mode(dotgit)):
+            return False, ".git is not a real directory"
+        for name in ("commondir", "gitdir"):
+            try:
+                os.lstat(os.path.join(dotgit, name))
+            except FileNotFoundError:
+                continue
+            return False, f".git/{name} exists"
+        return True, "ok"
+    except (OSError, ValueError) as e:
+        return False, f"unreadable: {type(e).__name__}"
+
+
 def _gitdir_mismatch_alert(con, t_id, path):
     """One event and one director message per path (deduped on an existing event for that path)."""
     path = str(path)
@@ -12659,6 +12686,10 @@ def cmd_clean(a):
                     admin, why = worktree_owns_gitdir(repo, twt)
                     if admin is None:
                         raise GitdirMismatch(why)
+                elif twt.is_symlink() or (gp.is_dir() and not gp.is_symlink()):  # per-task clone (T-0006): .git must be its own plain dir
+                    ok, why = clone_owns_gitdir(twt)
+                    if not ok:
+                        raise GitdirMismatch(CLONE_SYMLINK_WHY if twt.is_symlink() else why)
             why, wt, has_branch = clean_verdict(con, t, repo, base, panes, listed)
             if why:
                 row["reason"] = why
@@ -12713,8 +12744,10 @@ def cmd_clean(a):
             row["reason"] = f"removed {' + '.join(gone)}; {err}" if err else "merged and clean"
             event(con, "task", t["id"], "cleaned", {"worktree": str(wt) if ("worktree" in gone or "clone" in gone) else None,
                                                     "branch": t["branch"] if "branch" in gone else None})
-        except GitdirMismatch:
+        except GitdirMismatch as e:
             row["action"], row["reason"] = "skip", "kept: gitdir mismatch"
+            if str(e) == CLONE_SYMLINK_WHY:  # keeps the long-standing reason text of a symlinked clone dir (test_clean_clones)
+                row["reason"] += ": " + CLONE_SYMLINK_WHY
             if not a.dry_run:
                 _gitdir_mismatch_alert(con, t["id"], os.path.abspath(t["worktree"]))
             continue
