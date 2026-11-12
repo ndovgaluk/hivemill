@@ -642,7 +642,9 @@ def task_flow(con, tid, now=None, show_text=False):
     keys = [k for k, _ in FLOW_STAGES]
     secs, starts = dict.fromkeys(keys), {}
     g = con.execute("SELECT created FROM goals WHERE id=?", (t["goal_id"],)).fetchone() if t["goal_id"] else None
-    ge, te = _epoch(g["created"]) if g else None, _epoch(t["created"])
+    # HQ time ends where the task's first stage starts (the PM's spec work, else the task's creation): no double count
+    ge = _epoch(g["created"]) if g else None
+    te = min((e for e in [_epoch(st["start"]) for st in lc["stages"]] + [_epoch(t["created"])] if e is not None), default=None)
     if ge is not None and te is not None and te >= ge:
         secs["goal"] = round(te - ge)
     for st in lc["stages"]:

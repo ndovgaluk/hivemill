@@ -501,3 +501,13 @@ class TestFlowTimes(DetailCase):
         self.assertEqual(states["Judge"], "pending")
         self.assertEqual(states["Coding"], "current")
         self.assertEqual(self.node_time(page, "Judge"), "")              # no time counted from the QA pass
+
+    def test_goal_time_stops_where_the_pm_spec_work_starts(self):
+        self.seed_rework()
+        x = self.con.execute
+        x(T_INS, ("P-81", "G-81", "g-81-a", "Plan the goal", "s", "a", "pm", "done", "pm-81", None, 2, ts(8, 50), ts(9, 0)))
+        x(A_INS, ("pm-81", "pm", "G-81", "g-81-a", "P-81", "done", "m", ts(8, 50), ts(9, 0)))
+        x(E_INS, (ts(9, 0), "pm-81", "task", "T-81", "add", "Rework task"))
+        page = self.page("/task/T-81")
+        self.assertEqual(self.node_time(page, "Goal (HQ)"), "50m 00s")   # 08:00 goal -> 08:50 PM starts the spec
+        self.assertEqual(self.node_time(page, "Planned"), "20m 00s")     # spec 08:50-09:00 + queued 09:00-09:10
