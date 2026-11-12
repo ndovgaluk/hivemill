@@ -41,6 +41,7 @@ Result: HEAD is on the task branch at `origin/<base>`, `git status --porcelain -
 ## Failure fallback and stale-claim recovery
 
 - **Fallback.** A free row whose directory is gone is deleted (`worktree-reuse-failed`) and the next row is tried. A worktree that cannot be reset is removed (or kept and alerted if the ownership check fails) and spawn goes on to the next row, and finally to a fresh worktree. A reuse failure never fails the spawn by itself; only a refused git config does.
+- **Claim loop cap.** If the ownership answer keeps changing, the claim loop stops after (number of pool rows for the project + 1) passes, releases any claim it still holds, records one `worktree-reuse-failed` event with reason "claim loop hit its cap of <n>; creating a fresh worktree", and spawn creates a fresh worktree (T-0008).
 - **Crash during spawn.** A claim with `reset_ok=0` whose spawn died before the reset finished is redone on the next spawn of that task (the guard runs before the fetch).
 - **Stale claims.** `factory clean` judges every `claimed` row: a missing path is dropped (`worktree-pool-stale`); a claim whose task is `done` or `cancelled` and no longer records the path, with a clean worktree and no live agent or pane, is released to the pool. Anything else is kept with a reason (`stale claim kept: ...`).
 
@@ -65,5 +66,5 @@ With the flag off `factory clean` removes every free pooled worktree and its row
 
 - **TOCTOU.** A worker running as the same uid can swap a worktree's `.git` between the ownership check and the git call that follows. Accepted residual (director M128); the check narrows, but cannot close, this window.
 - **`core.worktree`.** A per-worktree config entry `core.worktree` that redirects the work tree elsewhere is not checked (T-0006 review M175).
-- **Variants in the pooled reset** (T-0003 review M191): `git_config_guard` and the pre-push hook install run through `wt/.git` rather than the pinned git dir, so a swap during the reset can affect them; a swap mid-reset can leave the pooled worktree on the task branch, so the fresh-worktree fallback fails with "already checked out"; and the claim loop has no iteration cap if the ownership answer flips between iterations.
+- **Variants in the pooled reset** (T-0003 review M191): `git_config_guard` and the pre-push hook install run through `wt/.git` rather than the pinned git dir, so a swap during the reset can affect them; and a swap mid-reset can leave the pooled worktree on the task branch, so the fresh-worktree fallback fails with "already checked out".
 - **Go.** `spawn` and `clean` are not ported to Go; only the two config keys are mirrored there.
