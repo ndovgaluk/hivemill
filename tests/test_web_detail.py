@@ -331,7 +331,8 @@ class TestFlow(DetailCase):
             self.assertIn(f'href="#{anchor}"', page)             # a node, the arrow into Coding, the rejection loop
             self.assertIn(f'id="{anchor}"', page)               # the block the click highlights (CSS :target)
         block = page[page.index('id="flow-in-coding"'):]
-        self.assertIn("lead-g-80-a → coder-80b (decision): fix the review findings", block[:400])
+        self.assertIn("lead-g-80-a → coder-80b (decision): fix the review findings", block[:600])
+        self.assertIn(f'title="{ts(9, 55)}"', block[:600])                 # each line leads with its time
         self.assertNotIn("FIX-BODY", page)                     # text stays hidden without serve_show_text
 
     def test_goal_page_shows_who_instructed_whom(self):

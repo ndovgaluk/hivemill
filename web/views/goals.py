@@ -329,7 +329,7 @@ def _goal_flow_section(d):
     names = {n["key"]: n["label"] for n in gf["nodes"]}
     blocks = []
     for n in gf["nodes"]:
-        agents = [el("div", el("span", f"{a['name']} · {a['status']} · {dur(a['seconds'])}", class_="flow-note"),
+        agents = [el("div", flow_note(f"{a['name']} started · {a['status']} · {dur(a['seconds'])}", None, a["started"]),
                      flow_note("its summary of the work", a["summary"]) if a["summary"] else None)
                   for a in n["agents"]]
         blocks.append(el("div", el("h4", f"{n['label']} · {len(n['agents'])} agent(s) · {dur(n['seconds'])}"
@@ -337,7 +337,7 @@ def _goal_flow_section(d):
                          *(agents or [el("span", "no agent of this role on the goal (messages only)", class_="flow-note")]),
                          id=charts.goal_node_id(n["key"]), class_="flow-stage"))
     for l in gf["links"]:
-        msgs = [flow_note(f"{m['ts'] or '?'} · {m['from']} → {m['to']} ({m['kind']}): {m['subject']}", m["body"])
+        msgs = [flow_note(f"{m['from']} → {m['to']} ({m['kind']}): {m['subject']}", m["body"], m["ts"])
                 for m in l["messages"]]
         blocks.append(el("div", el("h4", f"{names[l['a']]} ⇄ {names[l['b']]} · {l['ab']} → · {l['ba']} ←"),
                          el("span", f"+{l['more']} earlier", class_="flow-note") if l["more"] else None, *msgs,

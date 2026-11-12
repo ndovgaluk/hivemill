@@ -598,11 +598,13 @@ def _usage_section(d):
                    note, el("p", _rework_line(d), class_="muted"))
 
 
-def flow_note(text, body):
-    """One note line; with instruction text (only present when show_text is on) it opens to the Markdown."""
+def flow_note(text, body, when=None):
+    """One note line, led by its time (full timestamp on hover); with instruction text (only present when show_text
+    is on) it opens to the Markdown."""
+    line = (el("span", ts(when), class_="muted"), " ", text) if when else (text,)
     if not body:
-        return el("span", text, class_="flow-note")
-    return el("details", el("summary", text), el("div", md(body), class_="flow-text"), class_="flow-note")
+        return el("span", *line, class_="flow-note")
+    return el("details", el("summary", *line), el("div", md(body), class_="flow-text"), class_="flow-note")
 
 
 def flow_hint(show_text):
@@ -623,10 +625,10 @@ def _flow_section(d):
         rest = [n for n in st["notes"] if not n.get("incoming")]
         blocks.append(el("div",
                          el("h4", f"{st['label']} · {st['state']} · {dur(st['seconds'])}"),
-                         el("div", el("strong", "Instructions received"), *[flow_note(n["text"], n["body"]) for n in inc],
+                         el("div", el("strong", "Instructions received"), *[flow_note(n["text"], n["body"], n["ts"]) for n in inc],
                             id=charts.flow_in_id(st["key"]), class_="flow-in") if inc else None,
                          el("span", f"+{st['more']} earlier", class_="flow-note") if st["more"] else None,
-                         *[flow_note(n["text"], n["body"]) for n in rest],
+                         *[flow_note(n["text"], n["body"], n["ts"]) for n in rest],
                          id=charts.flow_stage_id(st["key"]), class_="flow-stage"))
     head = el("p", f"Total {dur(fl['total_s'])}" + (" so far" if fl["open"] else "") + f" · {flow_hint(d.get('show_text'))}",
               class_="muted")
