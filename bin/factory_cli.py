@@ -9235,6 +9235,33 @@ def _pool_drop(con, repo, wt, task, reason):
     event(con, "task", task, "worktree-reuse-failed", {"path": str(wt), "reason": reason})
 
 
+def worktree_owns_gitdir(repo, wt):
+    """(gitdir, "") when `wt` really is a linked worktree of `repo`, else (None, reason). wt/.git is worker-writable and
+    untrusted: it must be a regular file whose gitdir line names a dir directly under <common>/worktrees that points
+    back at this very wt/.git (a planted redirect to another task's git dir is refused)."""
+    wt = Path(wt)
+    cd = git_run(repo, "rev-parse", "--git-common-dir")
+    if cd.returncode != 0:
+        return None, f"rev-parse: {cd.stderr.strip()}"
+    wtroot = Path(repo, cd.stdout.strip()).resolve() / "worktrees"
+    dotgit = wt / ".git"
+    try:
+        if dotgit.is_symlink() or not dotgit.is_file():
+            return None, f"{dotgit} is not a regular file"
+        line = dotgit.read_text().strip()
+        if not line.startswith("gitdir:"):
+            return None, f"{dotgit} has no gitdir line"
+        gitdir = (wt / line[len("gitdir:"):].strip()).resolve()
+        if gitdir.parent != wtroot:
+            return None, f"git dir {gitdir} is not under {wtroot}"
+        back = gitdir / "gitdir"
+        if back.is_symlink() or not back.is_file() or (gitdir / back.read_text().strip()).resolve() != dotgit.resolve():
+            return None, f"{gitdir}/gitdir does not point back at {dotgit}"
+    except (OSError, UnicodeDecodeError) as e:
+        return None, f"cannot verify git dir of {wt}: {e}"
+    return gitdir, ""
+
+
 def reset_pooled_worktree(con, repo, wt, branch, start):
     """Make a pooled (or crash-claimed) worktree look like a fresh `worktree add`: per-worktree leftovers gone, git
     config guard re-run, `branch` reset to `start`, tracked changes and untracked non-ignored files removed (ignored
@@ -9248,27 +9275,9 @@ def reset_pooled_worktree(con, repo, wt, branch, start):
         _pool_drop(con, repo, wt, task, reason)
         return False
 
-    cd = git_run(repo, "rev-parse", "--git-common-dir")
-    if cd.returncode != 0:
-        return fail(f"rev-parse: {cd.stderr.strip()}")
-    wtroot = Path(repo, cd.stdout.strip()).resolve() / "worktrees"
-    # The worktree is worker-writable, so wt/.git is untrusted: it must be a regular file whose gitdir line names a
-    # git dir under <common>/worktrees that points back at this very wt/.git (no redirect to a sibling task).
-    dotgit = wt / ".git"
-    try:
-        if dotgit.is_symlink() or not dotgit.is_file():
-            return fail(f"{dotgit} is not a regular file")
-        line = dotgit.read_text().strip()
-        if not line.startswith("gitdir:"):
-            return fail(f"{dotgit} has no gitdir line")
-        gitdir = (wt / line[len("gitdir:"):].strip()).resolve()
-        if gitdir.parent != wtroot:
-            return fail(f"git dir {gitdir} is not under {wtroot}")
-        back = gitdir / "gitdir"
-        if back.is_symlink() or not back.is_file() or (gitdir / back.read_text().strip()).resolve() != dotgit.resolve():
-            return fail(f"{gitdir}/gitdir does not point back at {dotgit}")
-    except (OSError, UnicodeDecodeError) as e:
-        return fail(f"cannot verify git dir of {wt}: {e}")
+    gitdir, why = worktree_owns_gitdir(repo, wt)
+    if gitdir is None:
+        return fail(why)
     try:
         for name in ("config.worktree", "MERGE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD"):
             (gitdir / name).unlink(missing_ok=True)
