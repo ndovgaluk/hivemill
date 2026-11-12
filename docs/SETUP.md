@@ -181,6 +181,7 @@ Read the Upgrade section of that version's release notes (https://github.com/vol
 | `serve_bind` | empty | `factory serve` listen address. Empty = the source address of the default route. |
 | `serve_port` | `8765` | `factory serve` TCP port. |
 | `serve_hostnames` | empty | Extra `Host` names `factory serve` accepts besides its bind address, comma separated. For example a LAN name such as `factory.example`. |
+| `serve_show_text` | `0` | `1` shows the instruction text in the `/task/<id>` Flow section (message bodies, the task's spec and acceptance, verdict summaries), rendered as Markdown. Takes effect only while `factory serve` is bound to a loopback address (`127.0.0.1`, `::1`); on a LAN bind it stays hidden. Read on every request. Director or owner. |
 | `factory_remote_url` | empty | The one `origin` URL the git guard allows for the factory checkout. Empty = learned once from the live checkout; see [Identity and remote](#identity-and-remote). |
 | `state_push` | `0` | `1` = also push the `state` branch (a full database dump) to `origin`; needs `git_push` `1`; see [Identity and remote](#identity-and-remote). |
 | `opus_effort` | `medium` | `--effort` level for Opus agents. Empty leaves Claude's default. Sonnet agents are never touched. |

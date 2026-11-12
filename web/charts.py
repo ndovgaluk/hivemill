@@ -186,7 +186,9 @@ def _flow_node(i, st, live):
     cls = f"flow-node flow-node--{st['state']}" + (" flow-node--live" if live else "")
     tip = [f"{st['label']}: {st['state']}, {dur(st['seconds'])}"] + [f"{n['ts'] or '?'}  {n['text']}" for n in st["notes"]]
     if st["more"]:
-        tip.append(f"+{st['more']} more")
+        tip.insert(1, f"(+{st['more']} earlier)")
+    if any(n.get("body") for n in st["notes"]):
+        tip.append("Instruction text: see the Flow table below.")
     kids = [el("title", "\n".join(tip)),
             el("rect", class_="flow-box", x=x, y=FLOW_TOP, width=FLOW_W, height=FLOW_H, rx=8),
             el("text", st["label"], class_="flow-label", x=x + 10, y=FLOW_TOP + 22),

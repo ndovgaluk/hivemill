@@ -582,7 +582,8 @@ def task_lifecycle(con, tid, now=None):
 
 # ───────────────────── task flow (DVDG-544): stages, where the task is now, time per stage ─────────────────────
 
-FLOW_STAGES = (("planned", "Planned"), ("coding", "Coding"), ("review", "Review / QA"), ("judge", "Judge"), ("merged", "Merged"))
+FLOW_STAGES = (("goal", "Goal (HQ)"), ("planned", "Planned"), ("coding", "Coding"), ("review", "Review / QA"), ("judge", "Judge"),
+               ("merged", "Merged"))
 
 
 class FlowState:
@@ -590,28 +591,37 @@ class FlowState:
 
 
 _LC_TO_FLOW = {"spec": "planned", "queued": "planned", "coding": "coding", "review": "review", "judge": "judge"}
-_ROLE_TO_FLOW = {"pm": "planned", "lead": "planned", "coder": "coding", "reviewer": "review", "qa": "review", "judge": "judge"}
+_ROLE_TO_FLOW = {"boss": "goal", "director": "goal", "pm": "planned", "lead": "planned", "coder": "coding", "reviewer": "review",
+                 "qa": "review", "judge": "judge"}
 _EVENT_TO_FLOW = {"add": "planned", "task-auto-start": "coding", "stop-requested": "coding", "judge-reject": "judge", "merged": "merged"}
 _STATUS_TO_FLOW = {"todo": "planned", "in_progress": "coding", "in_review": "review", "done": "merged"}
 _REJECT_VERDICTS = ("fail", "reject")
 _TERMINAL = ("done", "cancelled")
-FLOW_NOTES_MAX = 5
-FLOW_NOTE_CHARS = 120
+FLOW_NOTES_MAX = 12      # per stage, the latest ones, shown oldest first so a chain of instructions reads top to bottom
+FLOW_NOTE_CHARS = 140
+FLOW_BODY_CHARS = 8000   # instruction text per note when shown (server.show_text_allowed)
 _SHA_ONLY_RE = re.compile(r"^@?([0-9a-f]{7,40})$")
 
 
-def task_flow(con, tid, now=None):
+def task_flow(con, tid, now=None, show_text=False):
     """The /task diagram data (read-only): per stage of FLOW_STAGES its state, seconds spent (an open stage counts until
-    `now`; None = unknown) and up to FLOW_NOTES_MAX notes, newest first. Notes are who/when/what facts only (actor,
-    action, verdict kind, head sha, rejection cause, message subject): never specs, acceptance, note text, verdict
-    summaries or message bodies, the UI's privacy rule. None for an unknown task."""
+    `now`; None = unknown) and up to FLOW_NOTES_MAX notes, oldest first. The goal stage holds the HQ chain that led to
+    the task (goal-level messages up to the task's creation, boss → director → lead …) and the time from goal to task.
+    Notes are who/when/what facts (actor, action, verdict kind, head sha, rejection cause, message subject). Instruction
+    text (message bodies, the task's spec and acceptance, verdict summaries) is added as a note's `body` only when
+    `show_text` (the owner's serve_show_text on a loopback bind, web/server.show_text_allowed); otherwise it is never read
+    into the result, the UI's privacy rule. None for an unknown task."""
     lc = task_lifecycle(con, tid, now)
-    t = con.execute("SELECT status, attempts FROM tasks WHERE id=?", (tid,)).fetchone()
+    t = con.execute("SELECT status, attempts, goal_id, created, spec, acceptance FROM tasks WHERE id=?", (tid,)).fetchone()
     if lc is None or t is None:
         return None
     now_e = _now(now).timestamp()
     keys = [k for k, _ in FLOW_STAGES]
     secs, starts = dict.fromkeys(keys), {}
+    g = con.execute("SELECT created FROM goals WHERE id=?", (t["goal_id"],)).fetchone() if t["goal_id"] else None
+    ge, te = _epoch(g["created"]) if g else None, _epoch(t["created"])
+    if ge is not None and te is not None and te >= ge:
+        secs["goal"] = round(te - ge)
     for st in lc["stages"]:
         k, s, start = _LC_TO_FLOW[st["stage"]], st["seconds"], _epoch(st["start"])
         if s is None and start is not None and st["end"] is None:
@@ -622,7 +632,7 @@ def task_flow(con, tid, now=None):
             starts[k] = max(starts.get(k, start), start)  # latest start (the current review round)
     merged = con.execute("SELECT 1 FROM events WHERE entity='task' AND entity_id=? AND action='merged' LIMIT 1",
                          (tid,)).fetchone() is not None
-    reached = {"planned": True, "coding": "coding" in starts, "review": "review" in starts,
+    reached = {"goal": True, "planned": True, "coding": "coding" in starts, "review": "review" in starts,
                "judge": "judge" in starts and starts["judge"] >= starts.get("review", 0), "merged": merged}
     status = t["status"]
     if merged or status in _TERMINAL:
@@ -634,10 +644,17 @@ def task_flow(con, tid, now=None):
     notes = {k: [] for k in keys}
     last_reached = current or max((k for k in keys if reached[k]), key=keys.index)
 
-    def note(k, ts, text):
-        notes[k].append((_epoch(ts) or 0, ts, text[:FLOW_NOTE_CHARS]))
+    def note(k, ts, text, body=None):
+        notes[k].append((_epoch(ts) or 0, ts, text[:FLOW_NOTE_CHARS], (body or "")[:FLOW_BODY_CHARS] if show_text else None))
 
     roles = {r["name"]: r["role"] for r in con.execute("SELECT name, role FROM agents")}
+    if t["goal_id"]:   # the HQ chain before the task existed: owner/boss → director → lead (kickoff) …
+        for msg in con.execute("SELECT sender, recipient, kind, subject, body, created FROM messages WHERE goal_id=? "
+                               "AND task_id IS NULL AND created<=? ORDER BY id", (t["goal_id"], t["created"])):
+            note("goal", msg["created"], f"{msg['sender']} → {msg['recipient']} ({msg['kind']}): {msg['subject']}", msg["body"])
+    if show_text and (t["spec"] or t["acceptance"]):
+        note("planned", t["created"], "task spec and acceptance (the plan's instructions to the worker)",
+             f"{t['spec'] or ''}\n\n## Acceptance\n\n{t['acceptance'] or ''}")
     for e in con.execute("SELECT ts, actor, action, detail FROM events WHERE entity='task' AND entity_id=? ORDER BY id", (tid,)):
         m = re.search(r"\bstatus=(\w+)", e["detail"] or "") if e["action"] == "update" else None
         if m:
@@ -646,10 +663,10 @@ def task_flow(con, tid, now=None):
             sha = _SHA_ONLY_RE.match(e["detail"] or "") if e["action"] == "merged" else None
             note(_EVENT_TO_FLOW[e["action"]], e["ts"], f"{e['actor']}: {e['action']}" + (f" @{sha.group(1)[:8]}" if sha else ""))
     rejections = 0
-    for v in con.execute("SELECT role, verdict, head_sha, created FROM verdicts WHERE task_id=? ORDER BY id", (tid,)):
+    for v in con.execute("SELECT role, verdict, head_sha, summary, created FROM verdicts WHERE task_id=? ORDER BY id", (tid,)):
         rejections += v["verdict"] in _REJECT_VERDICTS
         sha = f" @{v['head_sha'][:8]}" if v["head_sha"] else ""
-        note(_ROLE_TO_FLOW.get(v["role"], "review"), v["created"], f"{v['role']} {v['verdict'].upper()}{sha}")
+        note(_ROLE_TO_FLOW.get(v["role"], "review"), v["created"], f"{v['role']} {v['verdict'].upper()}{sha}", v["summary"])
     if has_column(con, "rejection_incidents", "created"):
         for r in con.execute("SELECT cause, kind, created FROM rejection_incidents WHERE task_id=?", (tid,)):
             note(_ROLE_TO_FLOW.get(r["kind"], "review"), r["created"], f"rejected: {r['cause']}")
@@ -661,17 +678,19 @@ def task_flow(con, tid, now=None):
             note(k, a["ended"], f"{a['name']} ended")
         if a["status"] == "live":
             live = {"name": a["name"], "role": a["role"]}
-    for msg in con.execute("SELECT sender, recipient, kind, subject, created FROM messages WHERE task_id=? ORDER BY id", (tid,)):
-        k = _ROLE_TO_FLOW.get(roles.get(msg["sender"]), last_reached)
-        note(k, msg["created"], f"{msg['sender']} → {msg['recipient']} ({msg['kind']}): {msg['subject']}")
+    for msg in con.execute("SELECT sender, recipient, kind, subject, body, created FROM messages WHERE task_id=? ORDER BY id", (tid,)):
+        # a message is about the work its recipient does next (kickoff → that worker's stage); else its sender's stage
+        k = (_ROLE_TO_FLOW.get(roles.get(msg["recipient"])) if msg["kind"] in ("request", "decision") else None) \
+            or _ROLE_TO_FLOW.get(roles.get(msg["sender"]), last_reached)
+        note(k, msg["created"], f"{msg['sender']} → {msg['recipient']} ({msg['kind']}): {msg['subject']}", msg["body"])
     stages = []
     for k, label in FLOW_STAGES:
         state = (FlowState.CURRENT if k == current else FlowState.DONE if reached[k]
                  else FlowState.SKIPPED if merged or status in _TERMINAL else FlowState.PENDING)
-        ordered = sorted(notes[k], key=lambda n: n[0], reverse=True)
+        ordered = sorted(notes[k], key=lambda n: n[0])[-FLOW_NOTES_MAX:]
         stages.append({"key": k, "label": label, "state": state, "seconds": secs[k],
-                       "notes": [{"ts": ts, "text": text} for _e, ts, text in ordered[:FLOW_NOTES_MAX]],
-                       "more": max(0, len(ordered) - FLOW_NOTES_MAX)})
+                       "notes": [{"ts": ts, "text": text, "body": body} for _e, ts, text, body in ordered],
+                       "more": max(0, len(notes[k]) - FLOW_NOTES_MAX)})
     return {"task_id": tid, "stages": stages, "current": current, "rejections": rejections, "attempts": t["attempts"] or 0,
             "live": live if current else None, "total_s": lc["total"]["seconds"], "open": lc["total"]["open"]}
 

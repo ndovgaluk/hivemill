@@ -1,4 +1,5 @@
-"""Tasks list and task detail with the full PR cycle. Never renders specs, acceptance text, notes or verdict summaries."""
+"""Tasks list and task detail with the full PR cycle. Never renders specs, acceptance text, notes or verdict summaries,
+except the DVDG-544 Flow section when the owner turned on serve_show_text on a loopback-bound server (web/server.show_text_allowed)."""
 import re
 from types import SimpleNamespace
 
@@ -8,7 +9,7 @@ from web.components import (data_table, disclosure, empty_state, filter_bar, ago
                             GROUP_ORDER, COLLAPSED)
 from web.prices import PRICES_AS_OF
 from web.tokens import attribute, rollup, task_usage
-from web.html import LABELS, badge, card, dur, el, empty, kpi, link, table, ts
+from web.html import LABELS, badge, card, dur, el, empty, kpi, link, md, table, ts
 from web.views.goals import status_badge, task_badge
 
 TITLE = "Tasks"
@@ -341,7 +342,9 @@ def _detail_data(ctx, id=None, **params):
             "created": t["created"], "merged": bool(merged_ev), "ci": label, "ci_checks": checks,
             "rejections": cyc["rejections"], "retries": cyc["retries"], "attempts": cyc["attempts"], "reopens": cyc["reopens"],
             "total_s": total, "steps": steps, "cost": _cost_data(ctx, t),
-            "lifecycle": queries.task_lifecycle(con, id, ctx.now), "flow": queries.task_flow(con, id, ctx.now),
+            "lifecycle": queries.task_lifecycle(con, id, ctx.now),
+            "flow": queries.task_flow(con, id, ctx.now, show_text=getattr(ctx, "show_text", False)),
+            "show_text": bool(getattr(ctx, "show_text", False)),
             "usage": _usage_data(ctx, id), "incidents": _incident_causes(con, id)}
 
 
@@ -600,11 +603,17 @@ def _flow_section(d):
     fl = d.get("flow")
     if not fl:
         return None
+    def note(n):
+        if not n.get("body"):   # bodies are only present when show_text is on (queries.task_flow)
+            return el("span", n["text"], class_="flow-note")
+        return el("details", el("summary", n["text"]), el("div", md(n["body"]), class_="flow-text"), class_="flow-note")
+
     rows = [[st["label"], st["state"], (dur(st["seconds"]), "num"),
-             el("span", *[el("span", n["text"], class_="flow-note") for n in st["notes"]],
-                f"+{st['more']} more" if st["more"] else None)]
+             el("span", f"+{st['more']} earlier" if st["more"] else None, *[note(n) for n in st["notes"]])]
             for st in fl["stages"]]
-    head = el("p", f"Total {dur(fl['total_s'])}" + (" so far" if fl["open"] else "") + " · hover or focus a stage for its notes",
+    hint = ("open a message to read the instructions (Markdown)" if d.get("show_text")
+            else "instruction text is hidden: the owner can turn it on with serve_show_text on a 127.0.0.1 server")
+    head = el("p", f"Total {dur(fl['total_s'])}" + (" so far" if fl["open"] else "") + f" · hover a stage for its notes · {hint}",
               class_="muted")
     return section("Flow", head, charts.flow_diagram(fl), table(["Stage", "State", "Time", "Notes"], rows))
 

@@ -34,6 +34,7 @@ REQUEST_TIMEOUT_S = 10
 _ID_RE = re.compile(r"^/(goal|task)/([A-Z]-\d+)$")
 _STATIC_NAME_RE = re.compile(r"^(?:fonts/)?[\w][\w.-]*$")  # one level: static/fonts/
 RELOAD_INTERVAL_S = 60     # FACTORY_SERVE_RELOAD_INTERVAL overrides it (tests)
+SHOW_TEXT_KEY = "serve_show_text"   # config key (bin/factory_cli.py DEFAULT_CONFIG), read per request
 ROOT = Path(__file__).resolve().parent.parent
 # callables a view may append at import; each runs once in a daemon thread when the server starts
 background = []
@@ -42,10 +43,21 @@ background = []
 class Ctx:
     """What a view gets: a per-request read-only connection plus injected helpers."""
 
-    def __init__(self, db, tokens, usage_fn, mem_fn, defaults, now, factory_home=None, query=None):
+    def __init__(self, db, tokens, usage_fn, mem_fn, defaults, now, factory_home=None, query=None, show_text=False):
         self.db, self.tokens, self.usage_fn, self.mem_fn = db, tokens, usage_fn, mem_fn
         self.defaults, self.now, self.factory_home = defaults, now, factory_home
         self.query = query or {}    # str -> first value of the query string; views validate what they use
+        self.show_text = show_text  # DVDG-544: instruction text may be shown (see show_text_allowed)
+
+
+def show_text_allowed(bind, setting):
+    """Instruction text (message bodies, spec, acceptance, verdict summaries) is shown only when the owner set
+    serve_show_text=1 AND the server listens on a loopback address: an unauthenticated UI must not serve it on a LAN."""
+    try:
+        loopback = ipaddress.ip_address(bind).is_loopback
+    except ValueError:
+        loopback = False
+    return loopback and (setting or "").strip() == "1"
 
 
 def _refuse(msg):
@@ -177,8 +189,9 @@ class Handler(BaseHTTPRequestHandler):
     def _view(self, view, active, params, as_json=False):
         app = self.server.app
         with wdb.reader(app.current_db()) as con:
+            setting = con.execute("SELECT value FROM config WHERE key=?", (SHOW_TEXT_KEY,)).fetchone()
             ctx = Ctx(con, app.tokens, app.usage_fn, app.mem_fn, app.defaults, dt.datetime.now().astimezone(), app.factory_home,
-                      getattr(self, "query", {}))
+                      getattr(self, "query", {}), show_text=show_text_allowed(app.bind, setting[0] if setting else None))
             data = view.data(ctx, **params)
             if as_json:
                 body, ctype = json.dumps(data, default=str), "application/json"
@@ -210,7 +223,7 @@ class Handler(BaseHTTPRequestHandler):
 class _App:
     def __init__(self, db_path, bind, port, hostnames, tokens, usage_fn, mem_fn, defaults, factory_home):
         self.db_path, self.tokens, self.usage_fn, self.mem_fn = db_path, tokens, usage_fn, mem_fn
-        self.defaults, self.factory_home = defaults, factory_home
+        self.defaults, self.factory_home, self.bind = defaults, factory_home, bind
         self.hosts = _host_allowed(bind, port, hostnames)
         self.sem = threading.BoundedSemaphore(MAX_CONCURRENT)
 

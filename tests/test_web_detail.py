@@ -325,7 +325,8 @@ class TestFlow(DetailCase):
     def test_flow_marks_passed_current_and_pending(self):
         self.seed_flow()
         states = self.states(self.page("/task/T-80"))
-        self.assertEqual(states, {"Planned": "done", "Coding": "done", "Review / QA": "done", "Judge": "current", "Merged": "pending"})
+        self.assertEqual(states, {"Goal (HQ)": "done", "Planned": "done", "Coding": "done", "Review / QA": "done", "Judge": "current",
+                                  "Merged": "pending"})
         self.assertIn('aria-label="Task flow, now at: Judge"', self.page("/task/T-80"))
 
     def test_flow_shows_rejection_loop_and_time_per_stage(self):
@@ -368,3 +369,67 @@ class TestFlow(DetailCase):
         self.assertNotIn("<script", sec)
         used = {c for m in re.findall(r'class="([^"]*)"', page) for c in m.split()}
         self.assertEqual(used - wh.CLASSES, set())
+
+    def seed_hq_chain(self):
+        x = self.con.execute
+        x(M_INS, ("boss", "director", "request", "new goal G-80", "## Goal\n- build **the flow**\n`code here`\n<script>x</script>",
+                  "G-80", None, ts(8, 10)))
+        x(M_INS, ("director", "lead-g-80-a", "request", "brief G-80", "Plan it with a pm.", "G-80", None, ts(8, 20)))
+        x(M_INS, ("lead-g-80-a", "director", "report", "late goal report", "AFTER-TASK", "G-80", None, ts(11, 0)))
+
+    def test_goal_stage_holds_the_hq_chain_before_the_task(self):
+        self.seed_flow()
+        self.seed_hq_chain()
+        page = self.page("/task/T-80")
+        self.assertIn("boss → director (request): new goal G-80", page)
+        self.assertIn("director → lead-g-80-a (request): brief G-80", page)
+        self.assertNotIn("late goal report", page)           # goal-level messages after the task was created are not its chain
+        self.assertNotIn("build", page)                      # text stays hidden while serve_show_text is off
+
+    def test_show_text_renders_instructions_as_markdown(self):
+        self.seed_flow()
+        self.seed_hq_chain()
+        self.con.execute("INSERT INTO config(key,value) VALUES('serve_show_text','1')")
+        page = self.page("/task/T-80")                        # the test server binds 127.0.0.1 (loopback)
+        self.assertIn("<h5>Goal</h5>", page)
+        self.assertIn("<li>build <strong>the flow</strong></li>", page)
+        self.assertIn("<code>code here</code>", page)
+        self.assertIn("&lt;script&gt;x&lt;/script&gt;", page)
+        self.assertIn("SPEC-SECRET", page)                   # the task's spec: the plan's instructions to the worker
+        self.assertIn("SUMMARY-SECRET", page)                # verdict summaries
+        self.assertIn("BODY-SECRET", page)
+        sec = page[page.index("<h2>Flow"):page.index("<h2>Verdicts")]
+        self.assertNotIn("<script", sec)
+        self.assertNotIn("style=", sec)
+
+    def test_show_text_needs_loopback(self):
+        from web import server
+        self.assertTrue(server.show_text_allowed("127.0.0.1", "1"))
+        self.assertTrue(server.show_text_allowed("::1", "1"))
+        self.assertFalse(server.show_text_allowed("127.0.0.1", "0"))
+        self.assertFalse(server.show_text_allowed("127.0.0.1", None))
+        self.assertFalse(server.show_text_allowed("203.0.113.5", "1"))   # a non-loopback bind never shows text
+        self.assertFalse(server.show_text_allowed("not-an-ip", "1"))
+
+
+class TestMarkdown(unittest.TestCase):
+    """web/html.md: the small Markdown renderer for instruction text (DVDG-544)."""
+
+    def test_blocks_and_inline(self):
+        out = str(wh.md("# Title\n\n1. one\n2. two\n\n> quoted\n\n```\nx < y\n```\n\n| a | b |\n|---|---|\n| 1 | *i* |\n\nsee [docs](https://example.com/x)"))
+        self.assertIn("<h4>Title</h4>", out)
+        self.assertIn("<ol><li>one</li><li>two</li></ol>", out)
+        self.assertIn("<blockquote>quoted</blockquote>", out)
+        self.assertIn("<pre><code>x &lt; y</code></pre>", out)
+        self.assertIn("<th>a</th>", out)
+        self.assertIn("<td><em>i</em></td>", out)
+        self.assertIn('<a href="https://example.com/x" rel="noopener noreferrer">docs</a>', out)
+
+    def test_never_emits_raw_html_or_unsafe_links(self):
+        out = str(wh.md('<img src=x onerror=alert(1)> [x](javascript:alert(1)) <b>bold</b> "q"'))
+        self.assertNotIn("<img", out)
+        self.assertNotIn("<b>", out)
+        self.assertNotIn('href="javascript', out)
+        self.assertIn("&lt;img", out)
+        self.assertNotIn(" style=", out)
+        self.assertNotIn(" class=", out)

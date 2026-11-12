@@ -749,6 +749,15 @@
    "doc": ""
   },
   {
+   "key": "serve_show_text",
+   "kind": "flag",
+   "default": "0",
+   "summary": "1 = the /task Flow section shows instruction text (message bodies, spec, acceptance, verdict summaries) as Markdown; only on a loopback bind",
+   "goal": "",
+   "doc": "docs/web-ui.md",
+   "state": "off"
+  },
+  {
    "key": "skilleval_keep_failed_h",
    "kind": "setting",
    "default": "48",
