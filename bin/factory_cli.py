@@ -9248,14 +9248,27 @@ def reset_pooled_worktree(con, repo, wt, branch, start):
         _pool_drop(con, repo, wt, task, reason)
         return False
 
-    gd = git_run(wt, "rev-parse", "--git-dir")
     cd = git_run(repo, "rev-parse", "--git-common-dir")
-    if gd.returncode != 0 or cd.returncode != 0:
-        return fail(f"rev-parse: {(gd.stderr + cd.stderr).strip()}")
-    gitdir = Path(wt, gd.stdout.strip()).resolve()
+    if cd.returncode != 0:
+        return fail(f"rev-parse: {cd.stderr.strip()}")
     wtroot = Path(repo, cd.stdout.strip()).resolve() / "worktrees"
-    if gitdir.parent != wtroot:
-        return fail(f"git dir {gitdir} is not under {wtroot}")
+    # The worktree is worker-writable, so wt/.git is untrusted: it must be a regular file whose gitdir line names a
+    # git dir under <common>/worktrees that points back at this very wt/.git (no redirect to a sibling task).
+    dotgit = wt / ".git"
+    try:
+        if dotgit.is_symlink() or not dotgit.is_file():
+            return fail(f"{dotgit} is not a regular file")
+        line = dotgit.read_text().strip()
+        if not line.startswith("gitdir:"):
+            return fail(f"{dotgit} has no gitdir line")
+        gitdir = (wt / line[len("gitdir:"):].strip()).resolve()
+        if gitdir.parent != wtroot:
+            return fail(f"git dir {gitdir} is not under {wtroot}")
+        back = gitdir / "gitdir"
+        if back.is_symlink() or not back.is_file() or (gitdir / back.read_text().strip()).resolve() != dotgit.resolve():
+            return fail(f"{gitdir}/gitdir does not point back at {dotgit}")
+    except (OSError, UnicodeDecodeError) as e:
+        return fail(f"cannot verify git dir of {wt}: {e}")
     try:
         for name in ("config.worktree", "MERGE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD"):
             (gitdir / name).unlink(missing_ok=True)
@@ -9264,7 +9277,7 @@ def reset_pooled_worktree(con, repo, wt, branch, start):
                 shutil.rmtree(f)
             else:
                 f.unlink()
-        for d in ("rebase-merge", "rebase-apply"):
+        for d in ("rebase-merge", "rebase-apply", "sequencer"):
             if (gitdir / d).is_dir():
                 shutil.rmtree(gitdir / d)
         for pat in ("refs/worktree", "refs/bisect"):
@@ -9283,7 +9296,7 @@ def reset_pooled_worktree(con, repo, wt, branch, start):
             _pool_release_claim(con, wt, task)
         con.commit()
         die(f"spawn refused: git config in {wt} would run code: {why}", 4)
-    for args in (("checkout", "-q", "-f", "-B", branch, start), ("reset", "-q", "--hard", start), ("clean", "-f", "-d", "-q")):
+    for args in (("checkout", "-q", "-f", "-B", branch, start), ("reset", "-q", "--hard", start), ("clean", "-f", "-f", "-d", "-q")):
         p = git_run(wt, *args)
         if p.returncode != 0:
             return fail(f"git {args[0]}: {p.stderr.strip()}")

@@ -133,7 +133,7 @@ class Reuse(ReuseBase):
         for n in ("MERGE_HEAD", "BISECT_LOG", "rebase-merge"):
             self.assertFalse((gd / n).exists(), n)
         self.assertEqual(git("for-each-ref", "refs/bisect", "refs/worktree", cwd=P), "")
-        hook = Path(git("rev-parse", "--git-common-dir", cwd=P) if False else self.h / ".git" / "hooks" / "pre-push")
+        hook = self.h / ".git" / "hooks" / "pre-push"
         self.assertIn(MARK, hook.read_text())
 
     def test_branch_already_exists_is_reset(self):  # acceptance 12
@@ -159,6 +159,43 @@ class Reuse(ReuseBase):
         self.spawn_ok()
         self.assertEqual(self.task()["worktree"], self.fresh())
         self.assertEqual(self.pool(), [])
+        ev = self.events("worktree-reuse-failed")
+        self.assertEqual(len(ev), 1)
+        self.assertEqual(json.loads(ev[0]["detail"])["path"], str(P))
+
+    def test_nested_repo_and_sequencer_leftovers_removed(self):  # acceptance 17
+        P = self.make_pooled()
+        gd = self.gitdir(P)
+        (P / "sub").mkdir()
+        git("init", "-q", str(P / "sub"), cwd=P)
+        (P / "sub" / "f.txt").write_text("x\n")
+        (gd / "sequencer").mkdir()
+        (gd / "sequencer" / "todo").write_text("pick abc\n")
+        self.spawn_ok()
+        self.assertEqual(self.task()["worktree"], str(P))
+        self.assertFalse((P / "sub").exists())
+        self.assertFalse((gd / "sequencer").exists())
+        self.assertEqual(git("status", "--porcelain", "--untracked-files=all", cwd=P), "")
+        self.assertTrue((P / "node_modules" / "x.js").exists())
+
+    def test_gitdir_redirect_to_a_sibling_is_refused(self):  # acceptance 16 (reviewer B1)
+        S = self.make_pooled("T-0003", state="claimed")  # a live worktree of another task
+        P = self.make_pooled("T-0001")
+        self.env.sql("UPDATE worktree_pool SET task_id='T-0003', reset_ok=1 WHERE path=?", (str(S),))
+        sgd = self.gitdir(S)
+        (sgd / "MERGE_HEAD").write_text(git("rev-parse", "HEAD", cwd=S) + "\n")
+        (S / "wip.txt").write_text("live work\n")
+
+        def snap():
+            files = {str(f.relative_to(sgd)): f.read_bytes() for f in sorted(sgd.rglob("*")) if f.is_file()}
+            return (git("rev-parse", "HEAD", cwd=S), git("status", "--porcelain", cwd=S), files)
+
+        before = snap()
+        (P / ".git").write_text(f"gitdir: {sgd}\n")
+        self.spawn_ok()
+        self.assertEqual(self.task()["worktree"], self.fresh())
+        self.assertEqual(snap(), before)
+        self.assertTrue((S / "wip.txt").exists())
         ev = self.events("worktree-reuse-failed")
         self.assertEqual(len(ev), 1)
         self.assertEqual(json.loads(ev[0]["detail"])["path"], str(P))
@@ -278,7 +315,6 @@ class Claim(ReuseBase):
             for t, p in out.items():
                 self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
             paths = sorted(self.task(t)["worktree"] for t in ("T-0002", "T-0003"))
-            self.assertEqual(sorted(paths), sorted([str(P), next(x for x in paths if x != str(P))]))
             self.assertEqual(paths.count(str(P)), 1)
             self.assertEqual(len([r for r in self.pool() if r["state"] == "claimed"]), 1)
 
