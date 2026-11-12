@@ -298,6 +298,17 @@ class Crash(ReuseBase):
         self.assertEqual(git("rev-parse", "HEAD", cwd=P), git("rev-parse", "origin/main", cwd=self.h))
         self.assertEqual(self.pool()[0]["reset_ok"], 1)
 
+    def test_crash_recovery_refuses_a_planted_repo_config_before_fetching(self):  # self-review: guard before fetch
+        P = self.make_pooled(state="claimed", task="T-0002")
+        self.env.sql("UPDATE tasks SET worktree=?, branch='factory/t-0002' WHERE id='T-0002'", (str(P),))
+        (P / "stray.txt").write_text("x\n")
+        git("config", "core.fsmonitor", "/bin/true", cwd=self.h)
+        p = self.spawn()
+        self.assertEqual(p.returncode, 4, p.stdout + p.stderr)
+        self.assertIn("spawn refused: git config in", p.stderr)
+        self.assertTrue((P / "stray.txt").exists())
+        self.assertEqual(self.pool()[0]["reset_ok"], 0)
+
     def test_finished_reset_keeps_the_coders_commit(self):  # acceptance 10b
         P = self.make_pooled()
         self.spawn_ok()

@@ -9307,6 +9307,9 @@ def prepare_worktree(con, task, role):
             pool = con.execute("SELECT 1 FROM worktree_pool WHERE path=? AND task_id=? AND reset_ok=0",
                                (t["worktree"], task)).fetchone()
             if pool:  # D7: claimed, then the spawn died before the reset finished; the coder has no work here yet
+                if not git_config_guard(con, t["repo_path"]):  # before the fetch: it runs through the repo config
+                    con.commit()
+                    die(f"spawn refused: git config in {t['repo_path']} would run code: {', '.join(git_config_refusal(t['repo_path']))}", 4)
                 git_run(t["repo_path"], "fetch", "-q", "origin", text=False)
                 base = t["base_branch"] or "main"
                 has_remote = git_run(t["repo_path"], "rev-parse", "--verify", "-q", f"origin/{base}", text=False).returncode == 0
