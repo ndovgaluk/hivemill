@@ -300,7 +300,7 @@ class WorktreeReuseCleanTests(FactoryTestCase):
         w, _ = self.task(1)
         (w / ".git").unlink()
         p = self.clean()
-        self.assertRegex(p.stdout, r"T-0001\s.*not a git worktree")
+        self.assertRegex(p.stdout, r"(?m)T-0001\s.*\bskip\s+not a git worktree\s*$")  # action and reason columns, both pinned
         self.assertNotIn("gitdir mismatch", p.stdout)
         self.assertTrue(w.exists())
         self.assertEqual(self.pool(), [])
@@ -584,6 +584,83 @@ class WorktreeReuseCleanTests(FactoryTestCase):
         self.assertFalse(wt.exists())
         self.assertEqual(self.pool(), [])
         self.assertEqual(self.env.sql("SELECT * FROM messages WHERE subject LIKE '%forged .git pointer%'"), [])
+
+    # T-0007 item 1 (M143): the same no-.git dir reached through a symlinked path is not a forged .git either
+    def test_symlinked_path_without_dotgit_is_not_a_worktree_no_alert(self):
+        link = self.env.home / "wlink"
+        link.symlink_to(self.env.home_dir / "worktrees")
+        w, _ = self.task(1)
+        (w / ".git").unlink()
+        self.env.sql("UPDATE tasks SET worktree=? WHERE id='T-0001'", (str(link / w.name),))
+        for reuse in ("0", "1"):
+            self.cfg_sql("worktree_reuse", reuse)
+            p = self.clean()
+            self.assertRegex(p.stdout, r"(?m)T-0001\s.*\bskip\s+not a git worktree\s*$", reuse)
+            self.assertNotIn("gitdir mismatch", p.stdout)
+            self.assertEqual(self.events("worktree-gitdir-mismatch"), [])
+            self.assertEqual(self.env.sql("SELECT * FROM messages WHERE kind='alert'"), [])
+
+    # T-0007 item 2: the alert re-arms when the reason changes or the dir is removed and recreated, and only then
+    def test_alert_rearms_on_changed_reason_or_recreated_dir(self):
+        w, _ = self.task(1)
+        s, _ = self.task(2, status="in_progress", with_pr=False)
+
+        def alerts():
+            return len(self.env.sql("SELECT * FROM messages WHERE subject LIKE '%forged .git pointer%'"))
+        (w / ".git").write_text(f"gitdir: {self.repo}/.git/worktrees/{s.name}\n")
+        for _ in (1, 2):
+            self.clean()
+        self.assertEqual((alerts(), len(self.events("worktree-gitdir-mismatch"))), (1, 1))
+        (w / ".git").write_text(f"gitdir: {self.env.home}/nowhere\n")  # a different reason for the same path
+        self.clean()
+        self.assertEqual((alerts(), len(self.events("worktree-gitdir-mismatch"))), (2, 2))
+        self.clean()
+        self.assertEqual(alerts(), 2)  # no change: quiet again
+        old = self.env.home / "old-copy"  # removed and recreated: the old dir lives on, so the new inode is certainly different
+        w.rename(old)
+        w.mkdir()
+        (w / ".git").write_text(f"gitdir: {self.env.home}/nowhere\n")
+        self.clean()
+        self.assertEqual(alerts(), 3)
+        self.clean()
+        self.assertEqual(alerts(), 3)
+
+    # T-0007 item 3: a missing .git and a forged .git read differently
+    def test_alert_text_differs_for_missing_and_forged_dotgit(self):
+        w, _ = self.task(1)
+        s, _ = self.task(2, status="in_progress", with_pr=False)
+        (w / ".git").write_text(f"gitdir: {self.repo}/.git/worktrees/{s.name}\n")
+        nogit = self.env.home_dir / "worktrees" / "nogit"
+        nogit.mkdir()
+        self.env.seed_task("T-0006", status="done")
+        self.seed_claim(nogit, "T-0006")
+        self.clean()
+        forged = self.env.sql("SELECT * FROM messages WHERE subject LIKE ?", (f"%{w.resolve()}%",))
+        missing = self.env.sql("SELECT * FROM messages WHERE subject LIKE ?", (f"%{nogit}%",))
+        self.assertEqual((len(forged), len(missing)), (1, 1))
+        self.assertEqual(forged[0]["subject"], f"worktree {w.resolve()} has a forged .git pointer")
+        self.assertIn("does not point at its own admin dir", forged[0]["body"])
+        self.assertEqual(missing[0]["subject"], f"worktree {nogit} has no .git")
+        self.assertIn("has no .git (reason:", missing[0]["body"])
+        self.assertNotIn("forged", missing[0]["subject"] + missing[0]["body"])
+        self.assertNotIn("has no .git", forged[0]["subject"] + forged[0]["body"])
+
+    # T-0007 item 5: cmd_clean dispatches on a structured code, never on wording
+    def test_reason_dispatch_uses_a_code_not_wording(self):
+        src = (Path(__file__).resolve().parent.parent / "bin" / "factory_cli.py").read_text()
+        self.assertNotRegex(src, r"str\(e\)\s*==|==\s*CLONE_SYMLINK_WHY|\"kept: gitdir mismatch\"\s*==|==\s*\"kept: gitdir mismatch")
+        self.assertIn("e.code == CODE_CLONE_SYMLINK", src)
+
+    def test_symlinked_clone_keeps_its_reason_suffix_via_the_code(self):
+        wt = self.env.home_dir / "worktrees" / "G-001-T-0001"
+        real = self.env.home / "real-clone"
+        git("-c", "protocol.file.allow=always", "clone", "-q", "--shared", str(self.repo), str(real), cwd=self.env.home)
+        wt.symlink_to(real)
+        self.env.seed_task("T-0001", status="done", pr_url=URL % 1)
+        self.env.sql("UPDATE tasks SET worktree=?, branch='factory/t-0001' WHERE id='T-0001'", (str(wt),))
+        p = self.clean()
+        self.assertRegex(p.stdout, r"T-0001\s.*\bskip\s+kept: gitdir mismatch: ")
+        self.assertTrue(real.exists())
 
 
 if __name__ == "__main__":
