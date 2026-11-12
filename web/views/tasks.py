@@ -2,7 +2,7 @@
 import re
 from types import SimpleNamespace
 
-from web import ci, queries
+from web import charts, ci, queries
 from web.queries import parse_ts
 from web.components import (data_table, disclosure, empty_state, filter_bar, ago, chips, ctx_org, href, org_badge, org_href, pr_label, row_status,
                             GROUP_ORDER, COLLAPSED)
@@ -341,8 +341,8 @@ def _detail_data(ctx, id=None, **params):
             "created": t["created"], "merged": bool(merged_ev), "ci": label, "ci_checks": checks,
             "rejections": cyc["rejections"], "retries": cyc["retries"], "attempts": cyc["attempts"], "reopens": cyc["reopens"],
             "total_s": total, "steps": steps, "cost": _cost_data(ctx, t),
-            "lifecycle": queries.task_lifecycle(con, id, ctx.now), "usage": _usage_data(ctx, id),
-            "incidents": _incident_causes(con, id)}
+            "lifecycle": queries.task_lifecycle(con, id, ctx.now), "flow": queries.task_flow(con, id, ctx.now),
+            "usage": _usage_data(ctx, id), "incidents": _incident_causes(con, id)}
 
 
 def _usage_data(ctx, task_id):
@@ -595,6 +595,20 @@ def _usage_section(d):
                    note, el("p", _rework_line(d), class_="muted"))
 
 
+def _flow_section(d):
+    """DVDG-544: the stage diagram plus the same facts as a table (touch and screen readers get no hover tooltip)."""
+    fl = d.get("flow")
+    if not fl:
+        return None
+    rows = [[st["label"], st["state"], (dur(st["seconds"]), "num"),
+             el("span", *[el("span", n["text"], class_="flow-note") for n in st["notes"]],
+                f"+{st['more']} more" if st["more"] else None)]
+            for st in fl["stages"]]
+    head = el("p", f"Total {dur(fl['total_s'])}" + (" so far" if fl["open"] else "") + " · hover or focus a stage for its notes",
+              class_="muted")
+    return section("Flow", head, charts.flow_diagram(fl), table(["Stage", "State", "Time", "Notes"], rows))
+
+
 def _detail_render(ctx, d):
     crumb = crumbs(("/tasks", "Tasks"), (f"/task/{d.get('id')}", d.get("id") or "?"))
     if not d.get("found"):
@@ -603,7 +617,8 @@ def _detail_render(ctx, d):
                class_="tiles")
     blocks = _attempt_blocks(d["steps"])
     cycle = ([_attempt(n, b, n == len(blocks), ctx.now) for n, b in enumerate(blocks, 1)] if blocks else [empty_state("No events yet.")])
-    parts = [el("div", crumb, _meta(d), el("p", _cost_line(d["cost"]), class_="muted"), class_="tblock tblock--wide"), section("Verdicts", _verdict_summary(d) or empty_state("No verdicts yet.")), tiles,
+    parts = [el("div", crumb, _meta(d), el("p", _cost_line(d["cost"]), class_="muted"), class_="tblock tblock--wide"), _flow_section(d),
+             section("Verdicts", _verdict_summary(d) or empty_state("No verdicts yet.")), tiles,
              _lifecycle_section(d), _usage_section(d), section("PR cycle", *cycle)]
     fu = [el("span", link(f"/task/{f['id']}", f["id"]), " ", f["title"], " ", task_badge(f["status"], f["waits"]), " ") for f in d["follow_ups"]]
     if d["follow_up_of"]:

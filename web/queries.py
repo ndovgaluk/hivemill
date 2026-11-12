@@ -580,6 +580,102 @@ def task_lifecycle(con, tid, now=None):
     return {"task_id": tid, "stages": stages, "waits": waits, "waits_total": sums, "total": total, "gaps_s": gaps}
 
 
+# ───────────────────── task flow (DVDG-544): stages, where the task is now, time per stage ─────────────────────
+
+FLOW_STAGES = (("planned", "Planned"), ("coding", "Coding"), ("review", "Review / QA"), ("judge", "Judge"), ("merged", "Merged"))
+
+
+class FlowState:
+    DONE, CURRENT, PENDING, SKIPPED = "done", "current", "pending", "skipped"
+
+
+_LC_TO_FLOW = {"spec": "planned", "queued": "planned", "coding": "coding", "review": "review", "judge": "judge"}
+_ROLE_TO_FLOW = {"pm": "planned", "lead": "planned", "coder": "coding", "reviewer": "review", "qa": "review", "judge": "judge"}
+_EVENT_TO_FLOW = {"add": "planned", "task-auto-start": "coding", "stop-requested": "coding", "judge-reject": "judge", "merged": "merged"}
+_STATUS_TO_FLOW = {"todo": "planned", "in_progress": "coding", "in_review": "review", "done": "merged"}
+_REJECT_VERDICTS = ("fail", "reject")
+_TERMINAL = ("done", "cancelled")
+FLOW_NOTES_MAX = 5
+FLOW_NOTE_CHARS = 120
+_SHA_ONLY_RE = re.compile(r"^@?([0-9a-f]{7,40})$")
+
+
+def task_flow(con, tid, now=None):
+    """The /task diagram data (read-only): per stage of FLOW_STAGES its state, seconds spent (an open stage counts until
+    `now`; None = unknown) and up to FLOW_NOTES_MAX notes, newest first. Notes are who/when/what facts only (actor,
+    action, verdict kind, head sha, rejection cause, message subject): never specs, acceptance, note text, verdict
+    summaries or message bodies, the UI's privacy rule. None for an unknown task."""
+    lc = task_lifecycle(con, tid, now)
+    t = con.execute("SELECT status, attempts FROM tasks WHERE id=?", (tid,)).fetchone()
+    if lc is None or t is None:
+        return None
+    now_e = _now(now).timestamp()
+    keys = [k for k, _ in FLOW_STAGES]
+    secs, starts = dict.fromkeys(keys), {}
+    for st in lc["stages"]:
+        k, s, start = _LC_TO_FLOW[st["stage"]], st["seconds"], _epoch(st["start"])
+        if s is None and start is not None and st["end"] is None:
+            s = round(now_e - start)  # still in this stage: time so far
+        if s is not None:
+            secs[k] = (secs[k] or 0) + s
+        if start is not None:
+            starts[k] = max(starts.get(k, start), start)  # latest start (the current review round)
+    merged = con.execute("SELECT 1 FROM events WHERE entity='task' AND entity_id=? AND action='merged' LIMIT 1",
+                         (tid,)).fetchone() is not None
+    reached = {"planned": True, "coding": "coding" in starts, "review": "review" in starts,
+               "judge": "judge" in starts and starts["judge"] >= starts.get("review", 0), "merged": merged}
+    status = t["status"]
+    if merged or status in _TERMINAL:
+        current = None
+    elif status == "in_review":
+        current = "judge" if reached["judge"] else "review"
+    else:
+        current = _STATUS_TO_FLOW.get(status) or max((k for k in keys[:-1] if reached[k]), key=keys.index)
+    notes = {k: [] for k in keys}
+    last_reached = current or max((k for k in keys if reached[k]), key=keys.index)
+
+    def note(k, ts, text):
+        notes[k].append((_epoch(ts) or 0, ts, text[:FLOW_NOTE_CHARS]))
+
+    roles = {r["name"]: r["role"] for r in con.execute("SELECT name, role FROM agents")}
+    for e in con.execute("SELECT ts, actor, action, detail FROM events WHERE entity='task' AND entity_id=? ORDER BY id", (tid,)):
+        m = re.search(r"\bstatus=(\w+)", e["detail"] or "") if e["action"] == "update" else None
+        if m:
+            note(_STATUS_TO_FLOW.get(m.group(1), last_reached), e["ts"], f"{e['actor']}: status {m.group(1)}")
+        elif e["action"] in _EVENT_TO_FLOW:
+            sha = _SHA_ONLY_RE.match(e["detail"] or "") if e["action"] == "merged" else None
+            note(_EVENT_TO_FLOW[e["action"]], e["ts"], f"{e['actor']}: {e['action']}" + (f" @{sha.group(1)[:8]}" if sha else ""))
+    rejections = 0
+    for v in con.execute("SELECT role, verdict, head_sha, created FROM verdicts WHERE task_id=? ORDER BY id", (tid,)):
+        rejections += v["verdict"] in _REJECT_VERDICTS
+        sha = f" @{v['head_sha'][:8]}" if v["head_sha"] else ""
+        note(_ROLE_TO_FLOW.get(v["role"], "review"), v["created"], f"{v['role']} {v['verdict'].upper()}{sha}")
+    if has_column(con, "rejection_incidents", "created"):
+        for r in con.execute("SELECT cause, kind, created FROM rejection_incidents WHERE task_id=?", (tid,)):
+            note(_ROLE_TO_FLOW.get(r["kind"], "review"), r["created"], f"rejected: {r['cause']}")
+    live = None
+    for a in con.execute("SELECT name, role, status, started, ended FROM agents WHERE task_id=? ORDER BY started", (tid,)):
+        k = _ROLE_TO_FLOW.get(a["role"], "planned")
+        note(k, a["started"], f"{a['name']} started")
+        if a["ended"]:
+            note(k, a["ended"], f"{a['name']} ended")
+        if a["status"] == "live":
+            live = {"name": a["name"], "role": a["role"]}
+    for msg in con.execute("SELECT sender, recipient, kind, subject, created FROM messages WHERE task_id=? ORDER BY id", (tid,)):
+        k = _ROLE_TO_FLOW.get(roles.get(msg["sender"]), last_reached)
+        note(k, msg["created"], f"{msg['sender']} → {msg['recipient']} ({msg['kind']}): {msg['subject']}")
+    stages = []
+    for k, label in FLOW_STAGES:
+        state = (FlowState.CURRENT if k == current else FlowState.DONE if reached[k]
+                 else FlowState.SKIPPED if merged or status in _TERMINAL else FlowState.PENDING)
+        ordered = sorted(notes[k], key=lambda n: n[0], reverse=True)
+        stages.append({"key": k, "label": label, "state": state, "seconds": secs[k],
+                       "notes": [{"ts": ts, "text": text} for _e, ts, text in ordered[:FLOW_NOTES_MAX]],
+                       "more": max(0, len(ordered) - FLOW_NOTES_MAX)})
+    return {"task_id": tid, "stages": stages, "current": current, "rejections": rejections, "attempts": t["attempts"] or 0,
+            "live": live if current else None, "total_s": lc["total"]["seconds"], "open": lc["total"]["open"]}
+
+
 def _task_goals(con):
     return {r[0]: r[1] for r in con.execute("SELECT id, goal_id FROM tasks")}
 

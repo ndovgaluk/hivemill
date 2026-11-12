@@ -677,3 +677,29 @@ th[aria-sort=descending] .sortlink::after { content: " \2193"; }
   .ins-row { grid-template-columns: minmax(0, 1fr); gap: var(--s1); }
   .ins-check .gz { margin-left: 0; }
 }
+
+/* DVDG-544 task flow diagram: stage states, time per stage, the current stage pulsing while an agent works on it.
+   Tokens only (this is inside the B5 section); the global prefers-reduced-motion rule turns the animations off. */
+.flow { overflow-x: auto; margin-bottom: var(--s2); }
+.flow-svg { display: block; width: 100%; max-width: 820px; height: auto; }
+.flow-box { fill: var(--surface-2); stroke: var(--border); stroke-width: 1.5; }
+.flow-label { fill: var(--text-1); font: 600 13px var(--font); }
+.flow-time { fill: var(--text-2); font: 12px var(--font); font-variant-numeric: tabular-nums; }
+.flow-badge { fill: var(--info-fg); font: 600 11px var(--font); }
+.flow-node { cursor: default; }
+.flow-node:focus { outline: none; }
+.flow-node:focus .flow-box { stroke: var(--accent-solid); stroke-width: 3; }
+.flow-node--done .flow-box { fill: var(--success-bg); stroke: var(--success-solid); }
+.flow-node--current .flow-box { fill: var(--info-bg); stroke: var(--info-solid); stroke-width: 3; }
+.flow-node--pending .flow-label, .flow-node--skipped .flow-label { fill: var(--text-3); }
+.flow-node--skipped .flow-box { stroke-dasharray: 4 3; }
+.flow-node--live .flow-box { animation: flow-pulse 1.6s ease-in-out infinite; }
+.flow-edge { stroke: var(--border); stroke-width: 2; }
+.flow-edge--done { stroke: var(--success-solid); }
+.flow-edge--active { stroke: var(--info-solid); stroke-dasharray: 6 4; animation: flow-dash 0.8s linear infinite; }
+.flow-arrow { fill: var(--border); }
+.flow-loop { fill: none; stroke: var(--danger-solid); stroke-width: 1.5; stroke-dasharray: 3 3; }
+.flow-loop-label { fill: var(--danger-fg); font: 11px var(--font); }
+.flow-note { display: block; color: var(--text-2); }
+@keyframes flow-pulse { 0%, 100% { stroke-width: 3; } 50% { stroke-width: 6; } }
+@keyframes flow-dash { to { stroke-dashoffset: -20; } }

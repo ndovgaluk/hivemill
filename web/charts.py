@@ -14,7 +14,8 @@ B5 and B6 import from here; keep the signatures stable:
 `points` are (day "YYYY-MM-DD", number) pairs, oldest first.
 """
 from web.components import empty_state
-from web.html import Safe, el, h
+from web.html import Safe, dur, el, h
+from web.queries import FlowState
 
 TONES = ("success", "warning", "danger", "neutral")
 SPARK_W, SPARK_H, SPARK_PAD = 120, 24, 3
@@ -172,3 +173,56 @@ def columns(points, label, height=96, unit="day"):
     svg = _svg([*bars, *texts], f"0 0 {int(vb_w)} {height}", height=height, role="img", focusable="false",
                preserveAspectRatio="xMidYMin meet", **{"aria-label": _summary(points, label, unit)}, **{"class": "cols"})
     return el("div", svg, _data_table(points, label, f"{label.capitalize()} per {unit}, last {n} {unit}s", unit), class_="cols-wrap")
+
+
+# ───────────── task flow diagram (DVDG-544) ─────────────
+FLOW_W, FLOW_H, FLOW_GAP, FLOW_TOP, FLOW_PAD = 132, 62, 34, 12, 8
+FLOW_LOOP_DROP = 34   # how far the rejection loop dips below the boxes
+FLOW_LOOP_FROM, FLOW_LOOP_TO = "review", "coding"   # stage keys of queries.FLOW_STAGES: a rejection sends work back to coding
+
+
+def _flow_node(i, st, live):
+    x = FLOW_PAD + i * (FLOW_W + FLOW_GAP)
+    cls = f"flow-node flow-node--{st['state']}" + (" flow-node--live" if live else "")
+    tip = [f"{st['label']}: {st['state']}, {dur(st['seconds'])}"] + [f"{n['ts'] or '?'}  {n['text']}" for n in st["notes"]]
+    if st["more"]:
+        tip.append(f"+{st['more']} more")
+    kids = [el("title", "\n".join(tip)),
+            el("rect", class_="flow-box", x=x, y=FLOW_TOP, width=FLOW_W, height=FLOW_H, rx=8),
+            el("text", st["label"], class_="flow-label", x=x + 10, y=FLOW_TOP + 22),
+            el("text", dur(st["seconds"]) if st["seconds"] is not None else "", class_="flow-time", x=x + 10, y=FLOW_TOP + 40)]
+    if live:
+        kids.append(el("text", f"● {live['role']} working", class_="flow-badge", x=x + 10, y=FLOW_TOP + 55))
+    return el("g", *kids, class_=cls, tabindex=0)
+
+
+def flow_diagram(flow):
+    """DVDG-544: the task's stages left to right, the current one highlighted (and animated while an agent works on it),
+    time spent under each label, the rejection loop back to Coding, notes in each node's <title> tooltip. A table below
+    repeats everything for keyboard, screen-reader and touch users (no hover there). No JS, no inline style (CSP)."""
+    stages = flow["stages"]
+    live = flow.get("live")
+    nodes, edges = [], []
+    for i, st in enumerate(stages):
+        nodes.append(_flow_node(i, st, live if st["state"] == FlowState.CURRENT else None))
+        if i:
+            x1, x2, y = FLOW_PAD + i * (FLOW_W + FLOW_GAP) - FLOW_GAP, FLOW_PAD + i * (FLOW_W + FLOW_GAP) - 4, FLOW_TOP + FLOW_H / 2
+            cls = "flow-edge" + (" flow-edge--active" if live and st["state"] == FlowState.CURRENT
+                                 else " flow-edge--done" if st["state"] in (FlowState.DONE, FlowState.CURRENT) else "")
+            edges.append(Safe(f'<line class="{cls}" x1="{x1}" y1="{y}" x2="{x2}" y2="{y}"/>'))
+            edges.append(el("polygon", class_="flow-arrow", points=f"{x2},{y} {x2 - 7},{y - 4} {x2 - 7},{y + 4}"))
+    keys = [s["key"] for s in stages]
+    if flow["rejections"] and FLOW_LOOP_FROM in keys and FLOW_LOOP_TO in keys:
+        cx = FLOW_PAD + keys.index(FLOW_LOOP_TO) * (FLOW_W + FLOW_GAP) + FLOW_W / 2
+        rx = FLOW_PAD + keys.index(FLOW_LOOP_FROM) * (FLOW_W + FLOW_GAP) + FLOW_W / 2
+        y0, y1 = FLOW_TOP + FLOW_H, FLOW_TOP + FLOW_H + FLOW_LOOP_DROP
+        edges.append(el("path", class_="flow-loop", d=f"M{rx},{y0} C{rx},{y1} {cx},{y1} {cx},{y0}"))
+        n = flow["rejections"]
+        edges.append(el("text", f"rejected {n}× · {flow['attempts']} attempts", class_="flow-loop-label",
+                        x=(cx + rx) / 2, y=y1 + 4, text_anchor="middle"))
+    width = FLOW_PAD * 2 + len(stages) * FLOW_W + (len(stages) - 1) * FLOW_GAP
+    height = FLOW_TOP + FLOW_H + FLOW_LOOP_DROP + 12
+    where = next((s["label"] for s in stages if s["state"] == FlowState.CURRENT), "finished")
+    svg = _svg([*edges, *nodes], f"0 0 {width} {height}", role="img", focusable="false",
+               **{"aria-label": f"Task flow, now at: {where}", "class": "flow-svg"})
+    return el("div", svg, class_="flow")

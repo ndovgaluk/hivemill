@@ -41,6 +41,10 @@ CLASSES = frozenset({
     *(f"status--{s}" for s in _STATUSES),
     *(f"{p}-{o}" for p in ("org", "org-dot", "lane-") for o in _orgs.NAMES),
     *(f"bar--{n}" for n in range(0, 101, 5)),
+    # DVDG-544 task flow diagram (web/charts.flow_diagram)
+    "flow", "flow-svg", "flow-node", "flow-node--live", "flow-box", "flow-label", "flow-time", "flow-badge", "flow-edge",
+    "flow-edge--done", "flow-edge--active", "flow-arrow", "flow-loop", "flow-loop-label", "flow-note",
+    *(f"flow-node--{s}" for s in ("done", "current", "pending", "skipped")),
 })
 
 # nav groups (note 4): (group label, ((path, label, icon), ...)); a flat NAV keeps the old (path, label) shape

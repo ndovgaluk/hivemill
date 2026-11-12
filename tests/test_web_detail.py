@@ -290,3 +290,81 @@ class TestSpeed(DetailCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+M_INS = "INSERT INTO messages(sender,recipient,kind,subject,body,goal_id,task_id,created,read_at) VALUES(?,?,?,?,?,?,?,?,NULL)"
+
+
+class TestFlow(DetailCase):
+    """DVDG-544: the task flow diagram on /task/<id> (web/charts.flow_diagram, queries.task_flow)."""
+
+    def seed_flow(self, live_judge=False, merged=False):
+        x = self.con.execute
+        x("INSERT INTO goals VALUES('G-80','p1','Flow goal','intent','1. a','active',2,'owner',NULL,?,?)", (ts(8, 0), ts(8, 0)))
+        x(T_INS, ("T-80", "G-80", "g-80-a", "Flow task", "SPEC-SECRET", "ACC-SECRET", "coder",
+                  "done" if merged else "in_review", "coder-80", "https://github.com/o/r/pull/80", 2, ts(9, 0), ts(10, 40)))
+        x(A_INS, ("coder-80", "coder", "G-80", "g-80-a", "T-80", "done", "m", ts(9, 10), ts(9, 40)))
+        x(E_INS, (ts(9, 40), "coder-80", "task", "T-80", "update", "status=in_review pr=https://github.com/o/r/pull/80"))
+        x(M_INS, ("coder-80", "lead-g-80-a", "report", "blocked: git identity", "BODY-SECRET", "G-80", "T-80", ts(9, 30)))
+        x(V_INS, ("T-80", "u", "aaaaaaaa11", "reviewer", "fail", "SUMMARY-SECRET", "reviewer-80", ts(9, 50)))
+        x(E_INS, (ts(10, 0), "lead-g-80-a", "task", "T-80", "update", "status=in_progress"))
+        x(A_INS, ("coder-80b", "coder", "G-80", "g-80-a", "T-80", "done", "m", ts(10, 0), ts(10, 20)))
+        x(E_INS, (ts(10, 20), "coder-80b", "task", "T-80", "update", "status=in_review"))
+        x(V_INS, ("T-80", "u", "bbbbbbbb22", "reviewer", "pass", "SUMMARY-SECRET", "reviewer-80b", ts(10, 30)))
+        x(V_INS, ("T-80", "u", "bbbbbbbb22", "qa", "pass", "SUMMARY-SECRET", "qa-80", ts(10, 35)))
+        if live_judge:
+            x(A_INS, ("judge-80", "judge", "G-80", "g-80-a", "T-80", "live", "m", ts(10, 40), None))
+        if merged:
+            x(V_INS, ("T-80", "u", "bbbbbbbb22", "judge", "merge", "SUMMARY-SECRET", "judge", ts(10, 50)))
+            x(E_INS, (ts(10, 50), "judge", "task", "T-80", "merged", "@cafebabe"))
+
+    def states(self, page):
+        """{stage label: state} from each node's class and the start of its <title>."""
+        return {label: state for state, label in re.findall(r'flow-node--(\w+)[^"]*" tabindex="0"><title>([^:<]+):', page)}
+
+    def test_flow_marks_passed_current_and_pending(self):
+        self.seed_flow()
+        states = self.states(self.page("/task/T-80"))
+        self.assertEqual(states, {"Planned": "done", "Coding": "done", "Review / QA": "done", "Judge": "current", "Merged": "pending"})
+        self.assertIn('aria-label="Task flow, now at: Judge"', self.page("/task/T-80"))
+
+    def test_flow_shows_rejection_loop_and_time_per_stage(self):
+        self.seed_flow()
+        page = self.page("/task/T-80")
+        self.assertIn("rejected 1× · 2 attempts", page)
+        self.assertRegex(page, r'class="flow-time"[^>]*>\d')    # a duration under at least one stage
+
+    def test_flow_tooltips_hold_facts_but_never_private_text(self):
+        self.seed_flow()
+        page = self.page("/task/T-80")
+        self.assertIn("reviewer FAIL @aaaaaaaa", page)
+        self.assertIn("coder-80 → lead-g-80-a (report): blocked: git identity", page)
+        for secret in ("SUMMARY-SECRET", "BODY-SECRET", "SPEC-SECRET", "ACC-SECRET"):
+            self.assertNotIn(secret, page)
+
+    def test_flow_animates_only_with_a_live_agent(self):
+        self.seed_flow()
+        page = self.page("/task/T-80")
+        self.assertNotIn("flow-node--live", page)
+        self.assertNotIn("flow-edge--active", page)
+        self.con.execute(A_INS, ("judge-80", "judge", "G-80", "g-80-a", "T-80", "live", "m", ts(10, 40), None))
+        page = self.page("/task/T-80")
+        self.assertIn("flow-node--current flow-node--live", page)
+        self.assertIn("flow-edge--active", page)
+        self.assertIn("● judge working", page)
+
+    def test_merged_task_is_finished_and_not_animated(self):
+        self.seed_flow(live_judge=False, merged=True)
+        page = self.page("/task/T-80")
+        self.assertIn('aria-label="Task flow, now at: finished"', page)
+        self.assertNotIn("flow-node--current", page)
+        self.assertIn("judge: merged @cafebabe", page)
+
+    def test_flow_has_no_inline_style_or_script_and_known_classes(self):
+        self.seed_flow(live_judge=True)
+        page = self.page("/task/T-80")
+        sec = page[page.index("<h2>Flow"):page.index("<h2>Verdicts")]
+        self.assertNotIn("style=", sec)
+        self.assertNotIn("<script", sec)
+        used = {c for m in re.findall(r'class="([^"]*)"', page) for c in m.split()}
+        self.assertEqual(used - wh.CLASSES, set())
