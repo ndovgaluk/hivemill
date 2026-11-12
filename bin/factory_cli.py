@@ -234,6 +234,8 @@ DEFAULT_CONFIG = {
     "serve_bind": "",            # `factory serve`: LAN address to listen on; empty = source address of the default route
     "serve_port": "8765",        # `factory serve`: TCP port
     "serve_hostnames": "",       # `factory serve`: extra Host names accepted besides the bind IP (comma-separated); empty = the bind IP only
+    "worktree_reuse": "0",       # 1 = a new coder task reuses a free pooled worktree of its project (docs/worktree-reuse.md); 0 = off
+    "worktree_pool_max": "2",    # free pooled worktrees `factory clean` keeps per project when worktree_reuse=1
     "task_clones": "0",          # 1 = a new coder task gets a standalone `git clone --shared` instead of a `git worktree add` (docs/git-hardening.md); 0 = off
     "factory_remote_url": "",    # the one origin URL the git guard allows for the factory checkout; empty = learned once from the live checkout (docs/git-hardening.md)
     # reasoning effort for Opus agents (`claude --effort`, owner M2741); "" = leave Claude's default. Sonnet is never touched.
@@ -438,6 +440,8 @@ CREATE TABLE IF NOT EXISTS events (
   entity_id TEXT, action TEXT NOT NULL, detail TEXT);
 CREATE INDEX IF NOT EXISTS idx_msg_rcpt ON messages(recipient, read_at);
 CREATE INDEX IF NOT EXISTS idx_tasks_goal ON tasks(goal_id, status);
+CREATE TABLE IF NOT EXISTS worktree_pool (path TEXT PRIMARY KEY, project_id TEXT NOT NULL, state TEXT NOT NULL CHECK(state IN ('free','claimed')), task_id TEXT, reset_ok INTEGER NOT NULL DEFAULT 0, claimed_at TEXT, released_at TEXT);
+CREATE INDEX IF NOT EXISTS worktree_pool_proj ON worktree_pool(project_id, state);
 """ + GATE_RUNS_DDL + LESSONS_DDL + REJECTION_INCIDENTS_DDL + RETRO_DDL
 
 
@@ -553,6 +557,8 @@ def migrate(con):
                 if col not in {r["name"] for r in con.execute("PRAGMA table_info(projects)")}:
                     raise
     con.execute("CREATE TABLE IF NOT EXISTS throttle (key TEXT PRIMARY KEY, ts TEXT NOT NULL)")
+    con.execute("CREATE TABLE IF NOT EXISTS worktree_pool (path TEXT PRIMARY KEY, project_id TEXT NOT NULL, state TEXT NOT NULL CHECK(state IN ('free','claimed')), task_id TEXT, reset_ok INTEGER NOT NULL DEFAULT 0, claimed_at TEXT, released_at TEXT)")
+    con.execute("CREATE INDEX IF NOT EXISTS worktree_pool_proj ON worktree_pool(project_id, state)")
     con.executescript(GATE_RUNS_DDL)
     for col in ("task_ids", "tip_sha", "tree"):  # train runs (T-0522) on a DB created before the columns existed
         if col not in {r["name"] for r in con.execute("PRAGMA table_info(gate_runs)")}:
@@ -2748,6 +2754,14 @@ def _config_value_rules(key, value):
         a.value = a.value.strip()
         if a.value not in ("0", "1"):
             die(f"task_clones must be 0 or 1, not {a.value!r}", 2)
+    if a.key == "worktree_reuse":
+        a.value = a.value.strip()
+        if a.value not in ("0", "1"):
+            die(f"worktree_reuse must be 0 or 1, not {a.value!r}", 2)
+    if a.key == "worktree_pool_max":
+        a.value = a.value.strip()
+        if not (a.value.isascii() and a.value.isdigit() and int(a.value) <= 50):
+            die(f"worktree_pool_max must be an integer 0..50, not {a.value!r}", 2)
     if a.key == "terminal_backend":
         v = a.value.strip().lower()
         if v not in ("auto", "herdr", "hc"):
