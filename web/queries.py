@@ -596,6 +596,7 @@ _ROLE_TO_FLOW = {"boss": "goal", "director": "goal", "pm": "planned", "lead": "p
 _EVENT_TO_FLOW = {"add": "planned", "task-auto-start": "coding", "stop-requested": "coding", "judge-reject": "judge", "merged": "merged"}
 _STATUS_TO_FLOW = {"todo": "planned", "in_progress": "coding", "in_review": "review", "done": "merged"}
 _REJECT_VERDICTS = ("fail", "reject")
+_INSTRUCTION_KINDS = ("request", "decision")   # message kinds that tell the recipient what to do
 _TERMINAL = ("done", "cancelled")
 FLOW_NOTES_MAX = 12      # per stage, the latest ones, shown oldest first so a chain of instructions reads top to bottom
 FLOW_NOTE_CHARS = 140
@@ -644,17 +645,20 @@ def task_flow(con, tid, now=None, show_text=False):
     notes = {k: [] for k in keys}
     last_reached = current or max((k for k in keys if reached[k]), key=keys.index)
 
-    def note(k, ts, text, body=None):
-        notes[k].append((_epoch(ts) or 0, ts, text[:FLOW_NOTE_CHARS], (body or "")[:FLOW_BODY_CHARS] if show_text else None))
+    def note(k, ts, text, body=None, incoming=False):
+        """incoming = an instruction this stage's worker received (the arrow into the stage highlights these)."""
+        notes[k].append((_epoch(ts) or 0, ts, text[:FLOW_NOTE_CHARS], (body or "")[:FLOW_BODY_CHARS] if show_text else None,
+                         incoming))
 
     roles = {r["name"]: r["role"] for r in con.execute("SELECT name, role FROM agents")}
     if t["goal_id"]:   # the HQ chain before the task existed: owner/boss → director → lead (kickoff) …
         for msg in con.execute("SELECT sender, recipient, kind, subject, body, created FROM messages WHERE goal_id=? "
                                "AND task_id IS NULL AND created<=? ORDER BY id", (t["goal_id"], t["created"])):
-            note("goal", msg["created"], f"{msg['sender']} → {msg['recipient']} ({msg['kind']}): {msg['subject']}", msg["body"])
+            note("goal", msg["created"], f"{msg['sender']} → {msg['recipient']} ({msg['kind']}): {msg['subject']}", msg["body"],
+                 incoming=msg["kind"] in _INSTRUCTION_KINDS)
     if show_text and (t["spec"] or t["acceptance"]):
-        note("planned", t["created"], "task spec and acceptance (the plan's instructions to the worker)",
-             f"{t['spec'] or ''}\n\n## Acceptance\n\n{t['acceptance'] or ''}")
+        note("coding", t["created"], "task spec and acceptance (the plan's instructions to the worker)",
+             f"{t['spec'] or ''}\n\n## Acceptance\n\n{t['acceptance'] or ''}", incoming=True)
     for e in con.execute("SELECT ts, actor, action, detail FROM events WHERE entity='task' AND entity_id=? ORDER BY id", (tid,)):
         m = re.search(r"\bstatus=(\w+)", e["detail"] or "") if e["action"] == "update" else None
         if m:
@@ -680,19 +684,79 @@ def task_flow(con, tid, now=None, show_text=False):
             live = {"name": a["name"], "role": a["role"]}
     for msg in con.execute("SELECT sender, recipient, kind, subject, body, created FROM messages WHERE task_id=? ORDER BY id", (tid,)):
         # a message is about the work its recipient does next (kickoff → that worker's stage); else its sender's stage
-        k = (_ROLE_TO_FLOW.get(roles.get(msg["recipient"])) if msg["kind"] in ("request", "decision") else None) \
-            or _ROLE_TO_FLOW.get(roles.get(msg["sender"]), last_reached)
-        note(k, msg["created"], f"{msg['sender']} → {msg['recipient']} ({msg['kind']}): {msg['subject']}", msg["body"])
+        to = _ROLE_TO_FLOW.get(roles.get(msg["recipient"])) if msg["kind"] in _INSTRUCTION_KINDS else None
+        k = to or _ROLE_TO_FLOW.get(roles.get(msg["sender"]), last_reached)
+        note(k, msg["created"], f"{msg['sender']} → {msg['recipient']} ({msg['kind']}): {msg['subject']}", msg["body"],
+             incoming=bool(to))
     stages = []
     for k, label in FLOW_STAGES:
         state = (FlowState.CURRENT if k == current else FlowState.DONE if reached[k]
                  else FlowState.SKIPPED if merged or status in _TERMINAL else FlowState.PENDING)
         ordered = sorted(notes[k], key=lambda n: n[0])[-FLOW_NOTES_MAX:]
         stages.append({"key": k, "label": label, "state": state, "seconds": secs[k],
-                       "notes": [{"ts": ts, "text": text, "body": body} for _e, ts, text, body in ordered],
+                       "notes": [{"ts": ts, "text": text, "body": body, "incoming": inc} for _e, ts, text, body, inc in ordered],
                        "more": max(0, len(notes[k]) - FLOW_NOTES_MAX)})
     return {"task_id": tid, "stages": stages, "current": current, "rejections": rejections, "attempts": t["attempts"] or 0,
             "live": live if current else None, "total_s": lc["total"]["seconds"], "open": lc["total"]["open"]}
+
+
+# ───────────────────── goal flow (DVDG-544): who instructed whom on a goal ─────────────────────
+
+GOAL_ROLES = (("owner", "Owner"), ("boss", "Boss"), ("director", "Director"), ("system", "System"), ("lead", "Lead"),
+              ("pm", "PM"), ("coder", "Coders"), ("reviewer", "Reviewer"), ("qa", "QA"), ("judge", "Judge"), ("cleaner", "Cleaner"))
+_SYSTEM_SENDERS = ("factory", "tick")   # the CLI itself: kickoffs, force-stop notices
+GOAL_NOTES_MAX = 40                      # messages listed per link
+
+
+def goal_flow(con, gid, now=None, show_text=False):
+    """The /goal diagram data (read-only): one node per role that worked on the goal (its agents, time alive, live or
+    not) and one link per pair of roles that messaged each other (counts both ways and the messages, oldest first).
+    Message bodies and agent summaries (an agent's own account of its work) are read only when `show_text`
+    (web/server.show_text_allowed); otherwise only who/when/kind/subject. None for an unknown goal."""
+    if con.execute("SELECT 1 FROM goals WHERE id=?", (gid,)).fetchone() is None:
+        return None
+    now_e = _now(now).timestamp()
+    order = [k for k, _ in GOAL_ROLES]
+    roles = {r["name"]: r["role"] for r in con.execute("SELECT name, role FROM agents")}
+
+    def role_of(name):
+        if name in _SYSTEM_SENDERS:
+            return "system"
+        r = roles.get(name, name)
+        return r if r in order else None
+
+    nodes = {}
+    for a in con.execute("SELECT name, role, status, started, ended, summary FROM agents WHERE goal_id=? "
+                         "OR task_id IN (SELECT id FROM tasks WHERE goal_id=?) ORDER BY started", (gid, gid)):
+        if a["role"] not in order:
+            continue
+        s, e = _epoch(a["started"]), _epoch(a["ended"])
+        sec = round((e if e is not None else now_e) - s) if s is not None and (e is None or e >= s) else None
+        n = nodes.setdefault(a["role"], {"agents": [], "seconds": 0, "live": False})
+        n["agents"].append({"name": a["name"], "status": a["status"], "started": a["started"], "seconds": sec,
+                            "summary": a["summary"] if show_text else None})
+        n["seconds"] += sec or 0
+        n["live"] = n["live"] or a["status"] == "live"
+    links = {}
+    for m in con.execute("SELECT sender, recipient, kind, subject, body, created FROM messages WHERE goal_id=? "
+                         "OR task_id IN (SELECT id FROM tasks WHERE goal_id=?) ORDER BY id", (gid, gid)):
+        a, b = role_of(m["sender"]), role_of(m["recipient"])
+        if a is None or b is None or a == b:
+            continue
+        for r in (a, b):
+            nodes.setdefault(r, {"agents": [], "seconds": 0, "live": False})
+        lo, hi = sorted((a, b), key=order.index)
+        link = links.setdefault((lo, hi), {"a": lo, "b": hi, "ab": 0, "ba": 0, "messages": []})
+        link["ab" if a == lo else "ba"] += 1
+        link["messages"].append({"from": m["sender"], "to": m["recipient"], "kind": m["kind"], "subject": m["subject"],
+                                 "ts": m["created"], "body": m["body"] if show_text else None})
+    for link in links.values():
+        link["more"] = max(0, len(link["messages"]) - GOAL_NOTES_MAX)
+        link["messages"] = link["messages"][-GOAL_NOTES_MAX:]
+    label = dict(GOAL_ROLES)
+    return {"goal_id": gid,
+            "nodes": [{"key": k, "label": label[k], **nodes[k]} for k in order if k in nodes],
+            "links": sorted(links.values(), key=lambda l: (order.index(l["a"]), order.index(l["b"])))}
 
 
 def _task_goals(con):

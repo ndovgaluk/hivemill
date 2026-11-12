@@ -598,24 +598,39 @@ def _usage_section(d):
                    note, el("p", _rework_line(d), class_="muted"))
 
 
+def flow_note(text, body):
+    """One note line; with instruction text (only present when show_text is on) it opens to the Markdown."""
+    if not body:
+        return el("span", text, class_="flow-note")
+    return el("details", el("summary", text), el("div", md(body), class_="flow-text"), class_="flow-note")
+
+
+def flow_hint(show_text):
+    return ("click a box, an arrow or the loop to highlight it below · open a message to read it (Markdown)" if show_text
+            else "click a box, an arrow or the loop to highlight it below · instruction text is hidden: the owner can turn it "
+                 "on with serve_show_text on a 127.0.0.1 server")
+
+
 def _flow_section(d):
-    """DVDG-544: the stage diagram plus the same facts as a table (touch and screen readers get no hover tooltip)."""
+    """DVDG-544: the stage diagram plus one block per stage (anchors the diagram links to; CSS :target highlights the
+    clicked one). Touch and screen readers get the same facts as text here."""
     fl = d.get("flow")
     if not fl:
         return None
-    def note(n):
-        if not n.get("body"):   # bodies are only present when show_text is on (queries.task_flow)
-            return el("span", n["text"], class_="flow-note")
-        return el("details", el("summary", n["text"]), el("div", md(n["body"]), class_="flow-text"), class_="flow-note")
-
-    rows = [[st["label"], st["state"], (dur(st["seconds"]), "num"),
-             el("span", f"+{st['more']} earlier" if st["more"] else None, *[note(n) for n in st["notes"]])]
-            for st in fl["stages"]]
-    hint = ("open a message to read the instructions (Markdown)" if d.get("show_text")
-            else "instruction text is hidden: the owner can turn it on with serve_show_text on a 127.0.0.1 server")
-    head = el("p", f"Total {dur(fl['total_s'])}" + (" so far" if fl["open"] else "") + f" · hover a stage for its notes · {hint}",
+    blocks = []
+    for st in fl["stages"]:
+        inc = [n for n in st["notes"] if n.get("incoming")]
+        rest = [n for n in st["notes"] if not n.get("incoming")]
+        blocks.append(el("div",
+                         el("h4", f"{st['label']} · {st['state']} · {dur(st['seconds'])}"),
+                         el("div", el("strong", "Instructions received"), *[flow_note(n["text"], n["body"]) for n in inc],
+                            id=charts.flow_in_id(st["key"]), class_="flow-in") if inc else None,
+                         el("span", f"+{st['more']} earlier", class_="flow-note") if st["more"] else None,
+                         *[flow_note(n["text"], n["body"]) for n in rest],
+                         id=charts.flow_stage_id(st["key"]), class_="flow-stage"))
+    head = el("p", f"Total {dur(fl['total_s'])}" + (" so far" if fl["open"] else "") + f" · {flow_hint(d.get('show_text'))}",
               class_="muted")
-    return section("Flow", head, charts.flow_diagram(fl), table(["Stage", "State", "Time", "Notes"], rows))
+    return section("Flow", head, charts.flow_diagram(fl), el("div", *blocks, class_="flow-blocks"))
 
 
 def _detail_render(ctx, d):

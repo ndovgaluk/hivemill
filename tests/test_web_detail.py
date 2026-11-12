@@ -308,6 +308,8 @@ class TestFlow(DetailCase):
         x(M_INS, ("coder-80", "lead-g-80-a", "report", "blocked: git identity", "BODY-SECRET", "G-80", "T-80", ts(9, 30)))
         x(V_INS, ("T-80", "u", "aaaaaaaa11", "reviewer", "fail", "SUMMARY-SECRET", "reviewer-80", ts(9, 50)))
         x(E_INS, (ts(10, 0), "lead-g-80-a", "task", "T-80", "update", "status=in_progress"))
+        x(A_INS, ("lead-g-80-a", "lead", "G-80", "g-80-a", None, "live", "m", ts(8, 30), None))
+        x(M_INS, ("lead-g-80-a", "coder-80b", "decision", "fix the review findings", "FIX-BODY", "G-80", "T-80", ts(9, 55)))
         x(A_INS, ("coder-80b", "coder", "G-80", "g-80-a", "T-80", "done", "m", ts(10, 0), ts(10, 20)))
         x(E_INS, (ts(10, 20), "coder-80b", "task", "T-80", "update", "status=in_review"))
         x(V_INS, ("T-80", "u", "bbbbbbbb22", "reviewer", "pass", "SUMMARY-SECRET", "reviewer-80b", ts(10, 30)))
@@ -320,7 +322,38 @@ class TestFlow(DetailCase):
 
     def states(self, page):
         """{stage label: state} from each node's class and the start of its <title>."""
-        return {label: state for state, label in re.findall(r'flow-node--(\w+)[^"]*" tabindex="0"><title>([^:<]+):', page)}
+        return {label: state for state, label in re.findall(r'class="flow-node flow-node--(\w+)[^"]*"><title>([^:<]+):', page)}
+
+    def test_task_diagram_links_highlight_blocks(self):
+        self.seed_flow()
+        page = self.page("/task/T-80")
+        for anchor in ("flow-s-goal", "flow-s-coding", "flow-in-coding", "flow-s-review"):
+            self.assertIn(f'href="#{anchor}"', page)             # a node, the arrow into Coding, the rejection loop
+            self.assertIn(f'id="{anchor}"', page)               # the block the click highlights (CSS :target)
+        block = page[page.index('id="flow-in-coding"'):]
+        self.assertIn("lead-g-80-a → coder-80b (decision): fix the review findings", block[:400])
+        self.assertNotIn("FIX-BODY", page)                     # text stays hidden without serve_show_text
+
+    def test_goal_page_shows_who_instructed_whom(self):
+        self.seed_flow()
+        self.seed_hq_chain()
+        page = self.page("/goal/G-80")
+        self.assertIn("<h2>Flow", page)
+        for anchor in ("gf-e-boss-director", "gf-e-director-lead", "gf-e-lead-coder", "gf-n-coder", "gf-n-lead"):
+            self.assertIn(f'href="#{anchor}"', page)
+            self.assertIn(f'id="{anchor}"', page)
+        self.assertIn("Boss ⇄ Director", page)
+        self.assertIn("Coders · 2 agent(s)", page)
+        self.assertIn("flow-node--current flow-node--live", page)   # the lead is live: its box pulses
+        for secret in ("FIX-BODY", "BODY-SECRET", "Plan it with a pm."):
+            self.assertNotIn(secret, page)
+        self.con.execute("INSERT INTO config(key,value) VALUES('serve_show_text','1')")
+        self.assertIn("Plan it with a pm.", self.page("/goal/G-80"))
+
+    def test_current_step_pulses_always_and_clicks_highlight(self):
+        css = (ROOT / "web/static/app.css").read_text()
+        self.assertIn(".flow-node--current .flow-box { animation: flow-pulse-soft", css)
+        self.assertIn(".flow-stage:target", css)
 
     def test_flow_marks_passed_current_and_pending(self):
         self.seed_flow()

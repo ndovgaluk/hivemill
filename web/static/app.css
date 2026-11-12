@@ -693,7 +693,8 @@ th[aria-sort=descending] .sortlink::after { content: " \2193"; }
 .flow-node--current .flow-box { fill: var(--info-bg); stroke: var(--info-solid); stroke-width: 3; }
 .flow-node--pending .flow-label, .flow-node--skipped .flow-label { fill: var(--text-3); }
 .flow-node--skipped .flow-box { stroke-dasharray: 4 3; }
-.flow-node--live .flow-box { animation: flow-pulse 1.6s ease-in-out infinite; }
+.flow-node--current .flow-box { animation: flow-pulse-soft 2.4s ease-in-out infinite; }
+.flow-node--live .flow-box { animation: flow-pulse 1.4s ease-in-out infinite; }
 .flow-edge { stroke: var(--border); stroke-width: 2; }
 .flow-edge--done { stroke: var(--success-solid); }
 .flow-edge--active { stroke: var(--info-solid); stroke-dasharray: 6 4; animation: flow-dash 0.8s linear infinite; }
@@ -717,3 +718,17 @@ details.flow-note[open] > summary { color: var(--text-1); }
 .flow-text table { border-collapse: collapse; }
 .flow-text th, .flow-text td { border: 1px solid var(--hairline); padding: 2px 6px; text-align: left; }
 .flow-text a { color: var(--accent); }
+/* DVDG-544 click-to-highlight: diagram nodes, arrows and arcs are links to the blocks below; :target marks the clicked one */
+@keyframes flow-pulse-soft { 0%, 100% { stroke-width: 3; } 50% { stroke-width: 4.5; } }
+.flow-link { cursor: pointer; }
+.flow-link:hover .flow-box, .flow-link:focus .flow-box { stroke: var(--accent-solid); }
+.flow-link:hover .flow-edge, .flow-link:hover .flow-loop, .flow-link:hover .gflow-arc { stroke: var(--accent-solid); }
+.flow-link:focus { outline: none; }
+.flow-hit { stroke: var(--fill); stroke-opacity: 0; stroke-width: 14; fill: none; }
+.gflow-arc { fill: none; stroke: var(--info-solid); stroke-width: 1.5; }
+.gflow-count { fill: var(--text-2); font: 600 11px var(--font); }
+.flow-blocks { display: grid; gap: var(--s2); margin-top: var(--s2); }
+.flow-stage { padding: var(--s2); border: 1px solid var(--hairline); border-radius: var(--r-sm); scroll-margin-top: var(--s4); }
+.flow-stage > h4 { font: 600 13px/18px var(--font); margin: 0 0 var(--s1); }
+.flow-in { margin: 0 0 var(--s1); padding: var(--s1) var(--s2); border-left: 3px solid var(--info-solid); scroll-margin-top: var(--s4); }
+.flow-stage:target, .flow-in:target { background: var(--info-bg); border-color: var(--info-solid); box-shadow: var(--e2); }
