@@ -294,6 +294,25 @@ class WorktreeReuseCleanTests(FactoryTestCase):
     def test_forged_gitdir_kept_flag_off(self):
         self._forged_gitdir_case("0")
 
+    # 21 a task dir with no .git at all keeps today's "not a git worktree", no alert, flag on and off
+    def _no_git_case(self, reuse):
+        self.cfg_sql("worktree_reuse", reuse)
+        w, _ = self.task(1)
+        (w / ".git").unlink()
+        p = self.clean()
+        self.assertRegex(p.stdout, r"T-0001\s.*not a git worktree")
+        self.assertNotIn("gitdir mismatch", p.stdout)
+        self.assertTrue(w.exists())
+        self.assertEqual(self.pool(), [])
+        self.assertEqual(self.events("worktree-gitdir-mismatch"), [])
+        self.assertEqual(self.env.sql("SELECT * FROM messages WHERE subject LIKE '%forged .git pointer%'"), [])
+
+    def test_no_git_dir_keeps_not_a_git_worktree_flag_on(self):
+        self._no_git_case("1")
+
+    def test_no_git_dir_keeps_not_a_git_worktree_flag_off(self):
+        self._no_git_case("0")
+
     def test_forged_gitdir_claimed_stale_row_kept(self):
         s, _ = self.task(2, status="in_progress", with_pr=False)
         before = self._admin_state(s)

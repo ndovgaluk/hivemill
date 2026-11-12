@@ -12223,6 +12223,8 @@ def clean_verdict(con, t, repo, base, panes=(), listed=None):
                     return "outside worktrees/ (clone must be a direct, non-symlink child)", None, tip is not None
                 if not git_config_guard(con, wt, always_event=True):  # before any git call in the clone: its config is worker-writable
                     return "git config refused", None, tip is not None
+            if not clone and not os.path.lexists(gitp):
+                return "not a git worktree", None, tip is not None  # today's check, before any ownership check or git call
             top = wgit("rev-parse", "--show-toplevel")
             if top.returncode != 0 or Path(top.stdout.strip()).resolve() != wt:
                 return "not a git worktree", None, tip is not None
@@ -12652,7 +12654,7 @@ def cmd_clean(a):
                 # once, before ANY git call inside the worktree (clean_verdict runs several): a forged pointer would aim them at a
                 # sibling. A per-task clone (.git a real directory) has no pointer: its own checks stay in clean_verdict.
                 gp = twt / ".git"
-                if (gp.is_symlink() or not gp.is_dir()) and _within(Path(os.path.abspath(twt)), Path(os.path.realpath(WORKTREES))):
+                if os.path.lexists(gp) and (gp.is_symlink() or not gp.is_dir()) and _within(Path(os.path.abspath(twt)), Path(os.path.realpath(WORKTREES))):
                     # (a path outside worktrees/ is refused by clean_verdict before any git call: "outside worktrees/")
                     admin, why = worktree_owns_gitdir(repo, twt)
                     if admin is None:
