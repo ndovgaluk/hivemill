@@ -446,3 +446,83 @@ class Crash(ReuseBase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class Lifecycle(ReuseBase):
+    """G-001 SC2/SC5/SC6: the whole reuse lifecycle through the real `factory spawn` / `factory clean` CLI and real git."""
+
+    def setUp(self):
+        super().setUp()
+        e = self.env
+        (self.h / ".gitignore").write_text("node_modules/\n")
+        git("add", ".gitignore", cwd=self.h)
+        git("commit", "-q", "-m", "ignore node_modules", cwd=self.h)
+        git("push", "-q", "origin", "main", cwd=self.h)
+        e.seed_task(tid="T-0004", goal="G-001", status="in_progress", team="g-001-a", pr_url=None)
+        e.seed_agent("zz-test-cleaner", "cleaner", goal="G-001")
+
+    def free_count(self):
+        return self.env.sql("SELECT count(*) AS n FROM worktree_pool WHERE state='free'")[0]["n"]
+
+    def finish(self, task, wt, merged_file):
+        """The worker commits and pushes, the PR is merged into the bare origin's main, the task is done."""
+        tid = task.lower()
+        (wt / merged_file).write_text(f"{task}\n")
+        git("add", merged_file, cwd=wt)
+        git("commit", "-q", "-m", f"work {task}", cwd=wt)
+        git("push", "-q", "origin", f"HEAD:refs/heads/factory/{tid}", cwd=wt)
+        sha = git("rev-parse", "HEAD", cwd=wt)
+        git("fetch", "-q", "origin", cwd=self.h)
+        git("merge", "-q", "--no-ff", "-m", f"merge {task}", f"origin/factory/{tid}", cwd=self.h)
+        git("push", "-q", "origin", "main", cwd=self.h)
+        url = f"https://github.com/zz-test/repo/pull/{int(task[2:])}"
+        self.env.seed_pr(url, sha=sha, state="MERGED")
+        self.env.sql("UPDATE tasks SET status='done', pr_url=? WHERE id=?", (url, task))
+        self.env.sql("UPDATE agents SET status='exited' WHERE name=?", (f"zz-coder-{tid}",))  # the worker pane is gone
+
+    def test_lifecycle(self):
+        # a. flag on, cap 1 (setUp turned the flag on; set the cap)
+        self.ok("config", "worktree_reuse", "1", agent="zz-director")
+        self.ok("config", "worktree_pool_max", "1", agent="zz-director")
+        # b. fresh worktree P1 with an ignored dependency
+        self.spawn_ok("T-0001")
+        P1 = Path(self.task("T-0001")["worktree"])
+        self.assertEqual(str(P1), self.fresh("T-0001"))
+        (P1 / "node_modules").mkdir()
+        (P1 / "node_modules" / "dep.js").write_text("module.exports = 1;\n")
+        self.finish("T-0001", P1, "one.txt")
+        # c. clean pools it
+        self.ok("clean", agent="zz-test-cleaner")
+        self.assertEqual([(r["path"], r["state"]) for r in self.pool()], [(str(P1.resolve()), "free")])
+        self.assertTrue(P1.exists())
+        # d. the next task gets P1 back, on its own branch at the new origin/main
+        self.spawn_ok("T-0002")
+        self.assertEqual(Path(self.task("T-0002")["worktree"]).resolve(), P1.resolve())
+        self.assertEqual(git("rev-parse", "--abbrev-ref", "HEAD", cwd=P1), "factory/t-0002")
+        git("fetch", "-q", "origin", cwd=self.h)
+        self.assertEqual(git("rev-parse", "HEAD", cwd=P1), git("rev-parse", "origin/main", cwd=self.h))
+        self.assertTrue((P1 / "node_modules" / "dep.js").exists())
+        self.assertEqual(git("status", "--porcelain", "--untracked-files=all", cwd=P1), "")
+        # e. P1 is claimed, so a concurrent task gets a fresh worktree
+        self.spawn_ok("T-0003")
+        P3 = Path(self.task("T-0003")["worktree"])
+        self.assertNotEqual(P3.resolve(), P1.resolve())
+        self.assertEqual(str(P3), self.fresh("T-0003"))
+        # f. both finish; clean keeps exactly one free worktree, removes the other, and no claimed row is lost
+        self.finish("T-0002", P1, "two.txt")
+        self.finish("T-0003", P3, "three.txt")
+        self.ok("clean", agent="zz-test-cleaner")
+        self.assertEqual(self.free_count(), 1)
+        self.assertEqual(len(self.pool()), 1)
+        self.assertEqual(self.env.sql("SELECT count(*) AS n FROM worktree_pool WHERE state='claimed'")[0]["n"], 0)
+        self.assertEqual(sum(p.exists() for p in (P1, P3)), 1)
+        # g. flag off: clean empties the pool; the next spawn is a fresh worktree
+        self.ok("config", "worktree_reuse", "0", agent="zz-director")
+        self.ok("clean", agent="zz-test-cleaner")
+        self.assertEqual(self.free_count(), 0)
+        self.assertEqual(self.pool(), [])
+        self.assertFalse(P1.exists() or P3.exists())
+        self.spawn_ok("T-0004")
+        self.assertTrue(self.task("T-0004")["worktree"].endswith("/worktrees/G-001-T-0004"))
+        self.assertTrue(Path(self.task("T-0004")["worktree"]).is_dir())
+
