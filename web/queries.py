@@ -609,6 +609,7 @@ _SHA_ONLY_RE = re.compile(r"^@?([0-9a-f]{7,40})$")
 
 _JUDGE_EVENT_PREFIX = "judge-"   # judge-blocked, judge-reject, judge-hold, … : the judge acted on the task
 _PASS_VERDICT = "pass"
+_STATUS_PREFIX = "status="   # events.detail of a status change: "status=todo — reason", "status=in_review pr=…"
 
 
 def _judge_reached(con, tid):
@@ -647,10 +648,17 @@ def task_flow(con, tid, now=None, show_text=False):
     te = min((e for e in [_epoch(st["start"]) for st in lc["stages"]] + [_epoch(t["created"])] if e is not None), default=None)
     if ge is not None and te is not None and te >= ge:
         secs["goal"] = round(te - ge)
+    moves = [(_epoch(e["ts"]), _STATUS_TO_FLOW.get(e["detail"].split()[0][len(_STATUS_PREFIX):]))
+             for e in con.execute("SELECT ts, detail FROM events WHERE entity='task' AND entity_id=? AND action='update' "
+                                  "AND detail LIKE ? ORDER BY id", (tid, _STATUS_PREFIX + "%"))]
     for st in lc["stages"]:
         k, s, start = _LC_TO_FLOW[st["stage"]], st["seconds"], _epoch(st["start"])
         if s is None and start is not None and st["end"] is None:
-            s = round(now_e - start)  # still in this stage: time so far
+            if _STATUS_TO_FLOW.get(t["status"]) == k:
+                s = round(now_e - start)  # still in this stage: time so far
+            else:   # the task left it without the event that closes it (e.g. sent back to todo mid-review)
+                left = next((ts for ts, to in moves if ts is not None and ts > start and to != k), None)
+                s = round(left - start) if left is not None else None
         if s is not None:
             secs[k] = (secs[k] or 0) + s
         if start is not None:

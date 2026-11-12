@@ -511,3 +511,14 @@ class TestFlowTimes(DetailCase):
         page = self.page("/task/T-81")
         self.assertEqual(self.node_time(page, "Goal (HQ)"), "50m 00s")   # 08:00 goal -> 08:50 PM starts the spec
         self.assertEqual(self.node_time(page, "Planned"), "20m 00s")     # spec 08:50-09:00 + queued 09:00-09:10
+
+    def test_stage_left_without_a_verdict_stops_counting(self):
+        self.seed_rework()
+        x = self.con.execute
+        x(E_INS, (ts(11, 0), "coder-t-81", "task", "T-81", "update", "status=in_review pr=https://github.com/o/r/pull/81"))
+        x(E_INS, (ts(11, 15), "lead-g-81-a", "task", "T-81", "update", "status=todo — wait for the shared helper"))
+        x("UPDATE tasks SET status='todo' WHERE id='T-81'")
+        page = self.page("/task/T-81")
+        states = {label: state for state, label in re.findall(r'class="flow-node flow-node--(\w+)[^"]*"><title>([^:<]+):', page)}
+        self.assertEqual(states["Planned"], "current")
+        self.assertEqual(self.node_time(page, "Review / QA"), "1h 17m")   # 09:40-10:42 + 11:00-11:15, not "until now"
