@@ -9177,6 +9177,123 @@ def trust_task_clone(con, task, wt, add=True):
     return res
 
 
+def _claim_row(con, path, task, branch):
+    """Claim one free pool row for `task`; the rowcount (1 = won, 0 = another spawn or a release got there first)."""
+    return con.execute("UPDATE worktree_pool SET state='claimed', task_id=?, reset_ok=0, claimed_at=? WHERE path=? AND state='free'",
+                       (task, now(), str(path))).rowcount
+
+
+def claim_pooled_worktree(con, project_id, task, branch):
+    """Atomically take the oldest free pooled worktree of `project_id` for `task` (worktree_reuse=1) and record it in
+    tasks.worktree/branch; the path, or None when no usable free row is left. BEGIN IMMEDIATE takes the write lock
+    before the SELECT, so two spawns cannot read the same free row. A row whose directory is gone or is not a direct
+    child of WORKTREES is deleted (worktree-reuse-failed) and the next row is tried."""
+    if con.in_transaction:
+        die("claim inside an open transaction", 1)
+    claimed, failed = None, []
+    con.execute("BEGIN IMMEDIATE")
+    try:
+        while claimed is None:
+            row = con.execute("SELECT path FROM worktree_pool WHERE project_id=? AND state='free' "
+                              "ORDER BY released_at, path LIMIT 1", (project_id,)).fetchone()
+            if row is None:
+                break
+            p = Path(row["path"])
+            if p.parent != WORKTREES or not p.is_dir():
+                con.execute("DELETE FROM worktree_pool WHERE path=?", (row["path"],))
+                failed.append({"path": row["path"], "reason": "not a directory under worktrees/"})
+                continue
+            if _claim_row(con, row["path"], task, branch) != 1:
+                break
+            con.execute("UPDATE tasks SET worktree=?, branch=? WHERE id=?", (row["path"], branch, task))
+            claimed = row["path"]
+        con.execute("COMMIT")
+    except BaseException:
+        if con.in_transaction:
+            con.execute("ROLLBACK")
+        raise
+    for f in failed:
+        event(con, "task", task, "worktree-reuse-failed", f)
+    if claimed:
+        event(con, "task", task, "worktree-claimed", {"path": claimed})
+    return claimed
+
+
+def _pool_release_claim(con, path, task):
+    """Undo a claim: row back to free, the task has no worktree/branch."""
+    con.execute("UPDATE worktree_pool SET state='free', task_id=NULL, reset_ok=0, claimed_at=NULL WHERE path=?", (str(path),))
+    con.execute("UPDATE tasks SET worktree=NULL, branch=NULL WHERE id=?", (task,))
+
+
+def _pool_drop(con, repo, wt, task, reason):
+    """A pooled worktree that cannot be reset: remove it, drop its row and the task's pointer, record why."""
+    git_run(repo, "worktree", "remove", "--force", str(wt), text=False)
+    git_run(repo, "worktree", "prune", text=False)
+    shutil.rmtree(wt, ignore_errors=True)
+    con.execute("DELETE FROM worktree_pool WHERE path=?", (str(wt),))
+    con.execute("UPDATE tasks SET worktree=NULL WHERE id=?", (task,))
+    event(con, "task", task, "worktree-reuse-failed", {"path": str(wt), "reason": reason})
+
+
+def reset_pooled_worktree(con, repo, wt, branch, start):
+    """Make a pooled (or crash-claimed) worktree look like a fresh `worktree add`: per-worktree leftovers gone, git
+    config guard re-run, `branch` reset to `start`, tracked changes and untracked non-ignored files removed (ignored
+    files such as node_modules stay). True when reset; False after dropping an unusable worktree (caller goes fresh).
+    A refused guard rolls the claim back and dies with exit 4."""
+    wt = Path(wt)
+    row = con.execute("SELECT task_id FROM worktree_pool WHERE path=?", (str(wt),)).fetchone()
+    task = row["task_id"] if row else None
+
+    def fail(reason):
+        _pool_drop(con, repo, wt, task, reason)
+        return False
+
+    gd = git_run(wt, "rev-parse", "--git-dir")
+    cd = git_run(repo, "rev-parse", "--git-common-dir")
+    if gd.returncode != 0 or cd.returncode != 0:
+        return fail(f"rev-parse: {(gd.stderr + cd.stderr).strip()}")
+    gitdir = Path(wt, gd.stdout.strip()).resolve()
+    wtroot = Path(repo, cd.stdout.strip()).resolve() / "worktrees"
+    if gitdir.parent != wtroot:
+        return fail(f"git dir {gitdir} is not under {wtroot}")
+    try:
+        for name in ("config.worktree", "MERGE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD"):
+            (gitdir / name).unlink(missing_ok=True)
+        for f in gitdir.glob("BISECT_*"):
+            if f.is_dir() and not f.is_symlink():
+                shutil.rmtree(f)
+            else:
+                f.unlink()
+        for d in ("rebase-merge", "rebase-apply"):
+            if (gitdir / d).is_dir():
+                shutil.rmtree(gitdir / d)
+        for pat in ("refs/worktree", "refs/bisect"):
+            refs = git_run(wt, "for-each-ref", "--format=%(refname)", pat)
+            if refs.returncode != 0:
+                return fail(f"for-each-ref {pat}: {refs.stderr.strip()}")
+            for ref in refs.stdout.split():
+                u = git_run(wt, "update-ref", "-d", ref)
+                if u.returncode != 0:
+                    return fail(f"update-ref -d {ref}: {u.stderr.strip()}")
+    except OSError as e:
+        return fail(f"cleanup of {gitdir}: {e}")
+    if not git_config_guard(con, wt):
+        why = ", ".join(git_config_refusal(wt))
+        if task:
+            _pool_release_claim(con, wt, task)
+        con.commit()
+        die(f"spawn refused: git config in {wt} would run code: {why}", 4)
+    for args in (("checkout", "-q", "-f", "-B", branch, start), ("reset", "-q", "--hard", start), ("clean", "-f", "-d", "-q")):
+        p = git_run(wt, *args)
+        if p.returncode != 0:
+            return fail(f"git {args[0]}: {p.stderr.strip()}")
+    install_pre_push_hook(wt)
+    prev = con.execute("SELECT released_at FROM worktree_pool WHERE path=?", (str(wt),)).fetchone()
+    con.execute("UPDATE worktree_pool SET reset_ok=1 WHERE path=?", (str(wt),))
+    event(con, "task", task or "-", "worktree-reused", {"path": str(wt), "prev_released_at": prev["released_at"] if prev else None})
+    return True
+
+
 def prepare_worktree(con, task, role):
     """Coder gets a fresh worktree on factory/<task> from origin/<base>; QA/reviewer reuse it read-only."""
     if not task:
@@ -9187,6 +9304,15 @@ def prepare_worktree(con, task, role):
         return None
     if t["worktree"] and Path(t["worktree"]).exists():
         if role == "coder" and t["branch"]:
+            pool = con.execute("SELECT 1 FROM worktree_pool WHERE path=? AND task_id=? AND reset_ok=0",
+                               (t["worktree"], task)).fetchone()
+            if pool:  # D7: claimed, then the spawn died before the reset finished; the coder has no work here yet
+                git_run(t["repo_path"], "fetch", "-q", "origin", text=False)
+                base = t["base_branch"] or "main"
+                has_remote = git_run(t["repo_path"], "rev-parse", "--verify", "-q", f"origin/{base}", text=False).returncode == 0
+                if not reset_pooled_worktree(con, t["repo_path"], t["worktree"], t["branch"], f"origin/{base}" if has_remote else base):
+                    return prepare_worktree(con, task, role)  # dropped: claim another or make a fresh one
+                return t["worktree"]
             if not git_config_guard(con, t["worktree"]):
                 con.commit()
                 die(f"spawn refused: git config in {t['worktree']} would run code: {', '.join(git_config_refusal(t['worktree']))}", 4)
@@ -9210,6 +9336,14 @@ def prepare_worktree(con, task, role):
         install_pre_push_hook(wt)
         con.execute("UPDATE tasks SET worktree=?, branch=? WHERE id=?", (str(wt), branch, task))
         return str(wt)
+    if role == "coder" and cfg(con, "worktree_reuse") == "1":
+        proj = con.execute("SELECT project_id FROM goals WHERE id=?", (t["goal_id"],)).fetchone()["project_id"]
+        while True:
+            got = claim_pooled_worktree(con, proj, task, branch)
+            if got is None:
+                break
+            if reset_pooled_worktree(con, repo, got, branch, start):
+                return got
     branch_existed = git_run(repo, "rev-parse", "--verify", "-q", f"refs/heads/{branch}", text=False).returncode == 0
     p = git_run(repo, "worktree", "add", "--no-checkout", "-q", "-B", branch, str(wt), start)
     if p.returncode != 0:
