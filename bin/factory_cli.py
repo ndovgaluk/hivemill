@@ -12216,6 +12216,8 @@ def clean_verdict(con, t, repo, base, panes=(), listed=None):
                 return "outside worktrees/", None, tip is not None
             gitp = wt / ".git"
             clone = gitp.is_dir() and not gitp.is_symlink()
+            if not clone and not os.path.lexists(gitp):
+                return "not a git worktree", None, tip is not None  # no .git is no forged pointer (M143): today's verdict, whatever the path shape
             if not clone and os.path.abspath(str(p)) != str(wt):
                 raise GitdirMismatch("symlink in path")  # a linked worktree is judged by its lexical path, never the symlink target
             if clone:  # a per-task clone (task_clones=1): same rules as a worktree, stricter path and config checks
@@ -12223,8 +12225,6 @@ def clean_verdict(con, t, repo, base, panes=(), listed=None):
                     return "outside worktrees/ (clone must be a direct, non-symlink child)", None, tip is not None
                 if not git_config_guard(con, wt, always_event=True):  # before any git call in the clone: its config is worker-writable
                     return "git config refused", None, tip is not None
-            if not clone and not os.path.lexists(gitp):
-                return "not a git worktree", None, tip is not None  # today's check, before any ownership check or git call
             top = wgit("rev-parse", "--show-toplevel")
             if top.returncode != 0 or Path(top.stdout.strip()).resolve() != wt:
                 return "not a git worktree", None, tip is not None
@@ -12333,7 +12333,17 @@ def clean_sandbox_dirs(con, pane_cwds, dry_run, root=None):
 
 
 class GitdirMismatch(Exception):
-    """A pool/clean worktree whose `.git` is not its own (forged, symlinked or unreadable). Callers keep the dir and alert."""
+    """A pool/clean worktree whose `.git` is not its own (forged, symlinked or unreadable). Callers keep the dir and alert.
+    `code` is the structured reason callers dispatch on (never the wording): CODE_CLONE_SYMLINK keeps the long-standing
+    suffix of a symlinked clone dir; None is any other mismatch."""
+
+    def __init__(self, why="", code=None):
+        super().__init__(why)
+        self.why = why
+        self.code = code
+
+
+CODE_CLONE_SYMLINK = "clone-symlink"
 
 
 def _read_nofollow(path, limit=4096):
@@ -12463,16 +12473,42 @@ def clone_owns_gitdir(wt):
         return False, f"unreadable: {type(e).__name__}"
 
 
-def _gitdir_mismatch_alert(con, t_id, path):
-    """One event and one director message per path (deduped on an existing event for that path)."""
+def _dir_ident(path):
+    """Identity of the directory at `path` (device:inode), so a removed-and-recreated dir differs; "" when it is gone."""
+    try:
+        st = os.lstat(path)
+    except OSError:
+        return ""
+    return f"{st.st_dev}:{st.st_ino}"
+
+
+def _gitdir_mismatch_alert(con, t_id, path, why=""):
+    """One event and one director message per (path, mismatch kind, reason, directory identity): a repeat run stays quiet,
+    a changed reason or a removed-and-recreated directory alerts again. A missing .git and a forged one read differently."""
     path = str(path)
-    if con.execute("SELECT 1 FROM events WHERE action='worktree-gitdir-mismatch' AND entity_id=?", (path,)).fetchone():
+    kind = "missing" if not os.path.lexists(os.path.join(path, ".git")) else "forged"
+    ident = _dir_ident(path)
+    last = con.execute("SELECT detail FROM events WHERE action='worktree-gitdir-mismatch' AND entity_id=? ORDER BY id DESC LIMIT 1",
+                       (path,)).fetchone()
+    if last is not None:
+        try:
+            d = json.loads(last["detail"] or "{}")
+        except (ValueError, TypeError):
+            d = {}
+        if isinstance(d, dict) and (d.get("kind"), d.get("reason"), d.get("ident")) == (kind, why, ident):
+            return
+    event(con, "worktree", path, "worktree-gitdir-mismatch", {"path": path, "task": t_id, "kind": kind, "reason": why, "ident": ident})
+    task = t_id if t_id and t_id != "-" else None
+    if kind == "missing":
+        send(con, "director", f"worktree {path} has no .git",
+             f"`factory clean` found that {path} has no .git (reason: {why or 'unknown'}; task {t_id}). It ran no git command there "
+             "and kept the directory. Find out who removed .git, then restore or remove the directory by hand.",
+             "alert", task=task, sender="cleaner")
         return
-    event(con, "worktree", path, "worktree-gitdir-mismatch", {"path": path, "task": t_id})
     send(con, "director", f"worktree {path} has a forged .git pointer",
          f"`factory clean` found that {path}/.git does not point at its own admin dir under the project's .git/worktrees/ "
-         f"(task {t_id}). It ran no git command there and kept the directory. Find who wrote the pointer, then fix or "
-         "remove the directory by hand.", "alert", task=t_id if t_id and t_id != "-" else None, sender="cleaner")
+         f"(task {t_id}; reason: {why or 'unknown'}). It ran no git command there and kept the directory. Find who wrote the "
+         "pointer, then fix or remove the directory by hand.", "alert", task=task, sender="cleaner")
 
 
 def _pool_settings(con):
@@ -12567,10 +12603,10 @@ def _clean_stale_claims(con, a, panes, pane_cwds, listed, rows):
                 row["reason"] = "stale claim kept: dirty"
                 continue
             un = _wt_git(repo, wt, "ls-files", "--others", "--exclude-standard")
-        except GitdirMismatch:
+        except GitdirMismatch as e:
             row["reason"] = "kept: gitdir mismatch"
             if not a.dry_run:
-                _gitdir_mismatch_alert(con, pr["task_id"] or "-", wt)
+                _gitdir_mismatch_alert(con, pr["task_id"] or "-", wt, e.why)
             continue
         stray = [f for f in un.stdout.splitlines() if "__pycache__" not in Path(f).parts]
         if un.returncode != 0 or stray:
@@ -12622,9 +12658,9 @@ def _clean_pool_trim(con, a, panes, pane_cwds, listed, rows, cap):
             if wt.exists() or wt.is_symlink():
                 try:
                     r = _wt_remove(repo, wt)
-                except GitdirMismatch:
+                except GitdirMismatch as e:
                     row["reason"] = "kept: gitdir mismatch"
-                    _gitdir_mismatch_alert(con, "-", wt)
+                    _gitdir_mismatch_alert(con, "-", wt, e.why)
                     continue
                 if r.returncode != 0:
                     row["reason"] = "pool trim failed: " + r.stderr.strip()[:80]
@@ -12681,7 +12717,9 @@ def cmd_clean(a):
                 # once, before ANY git call inside the worktree (clean_verdict runs several): a forged pointer would aim them at a
                 # sibling. A per-task clone (.git a real directory) has no pointer: its own checks stay in clean_verdict.
                 gp = twt / ".git"
-                if os.path.lexists(gp) and (gp.is_symlink() or not gp.is_dir()) and _within(Path(os.path.abspath(twt)), Path(os.path.realpath(WORKTREES))):
+                if not os.path.lexists(gp):
+                    pass  # no .git is no forged pointer (M143): clean_verdict says "not a git worktree", whatever the path shape
+                elif (gp.is_symlink() or not gp.is_dir()) and _within(Path(os.path.abspath(twt)), Path(os.path.realpath(WORKTREES))):
                     # (a path outside worktrees/ is refused by clean_verdict before any git call: "outside worktrees/")
                     admin, why = worktree_owns_gitdir(repo, twt)
                     if admin is None:
@@ -12689,7 +12727,8 @@ def cmd_clean(a):
                 elif twt.is_symlink() or (gp.is_dir() and not gp.is_symlink()):  # per-task clone (T-0006): .git must be its own plain dir
                     ok, why = clone_owns_gitdir(twt)
                     if not ok:
-                        raise GitdirMismatch(CLONE_SYMLINK_WHY if twt.is_symlink() else why)
+                        raise GitdirMismatch(CLONE_SYMLINK_WHY if twt.is_symlink() else why,
+                                             CODE_CLONE_SYMLINK if twt.is_symlink() else None)
             why, wt, has_branch = clean_verdict(con, t, repo, base, panes, listed)
             if why:
                 row["reason"] = why
@@ -12746,10 +12785,10 @@ def cmd_clean(a):
                                                     "branch": t["branch"] if "branch" in gone else None})
         except GitdirMismatch as e:
             row["action"], row["reason"] = "skip", "kept: gitdir mismatch"
-            if str(e) == CLONE_SYMLINK_WHY:  # keeps the long-standing reason text of a symlinked clone dir (test_clean_clones)
+            if e.code == CODE_CLONE_SYMLINK:  # keeps the long-standing reason text of a symlinked clone dir (test_clean_clones)
                 row["reason"] += ": " + CLONE_SYMLINK_WHY
             if not a.dry_run:
-                _gitdir_mismatch_alert(con, t["id"], os.path.abspath(t["worktree"]))
+                _gitdir_mismatch_alert(con, t["id"], os.path.abspath(t["worktree"]), e.why)
             continue
     if not a.dry_run:
         for repo in repos:
