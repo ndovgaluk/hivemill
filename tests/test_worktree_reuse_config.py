@@ -1,7 +1,7 @@
 import sqlite3
 import unittest
 
-from harness import FactoryTestCase
+from harness import FactoryTestCase, git
 
 COLUMNS = ["path", "project_id", "state", "task_id", "reset_ok", "claimed_at", "released_at"]
 
@@ -9,8 +9,12 @@ COLUMNS = ["path", "project_id", "state", "task_id", "reset_ok", "claimed_at", "
 class WorktreeReuseConfigTests(FactoryTestCase):
     """worktree_reuse / worktree_pool_max config keys and the worktree_pool table (no reader yet)."""
 
+    def setUp(self):
+        super().setUp()
+        self.env.seed_agent("zz-test-director", "director")
+
     def cfg(self, *args, code=0):
-        p = self.env.run("config", *args, agent="claude-director")
+        p = self.env.run("config", *args, agent="zz-test-director")
         self.assertEqual(p.returncode, code, f"{args}: rc={p.returncode}\n{p.stdout}\n{p.stderr}")
         return p
 
@@ -60,8 +64,13 @@ class WorktreeReuseConfigTests(FactoryTestCase):
         self.assertIn("worktree_pool_proj", idx)
 
     def test_state_dump_includes_table(self):
+        e = self.env
+        e.seed_project()
+        bare = e.home / "origin.git"
+        git("init", "-q", "--bare", "-b", "main", str(bare), cwd=e.home)
+        git("remote", "add", "origin", str(bare), cwd=e.home_dir)
         self.ok("export", "--no-push")
-        dump = (self.env.home / "state" / "factory.sql").read_text()
+        dump = (e.home_dir / "state" / "factory.sql").read_text()
         self.assertIn("CREATE TABLE worktree_pool", dump)
 
 
