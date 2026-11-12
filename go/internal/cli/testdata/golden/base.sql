@@ -69,6 +69,7 @@ CREATE TABLE signoffs (
 CREATE TABLE events (
   id INTEGER PRIMARY KEY AUTOINCREMENT, ts TEXT NOT NULL, actor TEXT, entity TEXT,
   entity_id TEXT, action TEXT NOT NULL, detail TEXT);
+CREATE TABLE worktree_pool (path TEXT PRIMARY KEY, project_id TEXT NOT NULL, state TEXT NOT NULL, task_id TEXT, reset_ok INTEGER NOT NULL DEFAULT 0, claimed_at TEXT, released_at TEXT);
 CREATE TABLE gate_runs (
   id INTEGER PRIMARY KEY AUTOINCREMENT, project_id TEXT NOT NULL, task_id TEXT, pr_url TEXT,
   kind TEXT NOT NULL,  -- pr | main | train
@@ -230,6 +231,8 @@ INSERT INTO "config"("key","value") VALUES('worker_gh_repos','');
 INSERT INTO "config"("key","value") VALUES('serve_bind','');
 INSERT INTO "config"("key","value") VALUES('serve_port','8765');
 INSERT INTO "config"("key","value") VALUES('serve_hostnames','');
+INSERT INTO "config"("key","value") VALUES('worktree_reuse','0');
+INSERT INTO "config"("key","value") VALUES('worktree_pool_max','2');
 INSERT INTO "config"("key","value") VALUES('task_clones','0');
 INSERT INTO "config"("key","value") VALUES('factory_remote_url','');
 INSERT INTO "config"("key","value") VALUES('opus_effort','medium');
@@ -268,6 +271,7 @@ CREATE INDEX idx_util_samples_ts ON util_samples(ts);
 CREATE UNIQUE INDEX idx_owner_alert_open ON owner_alert_feed(kind, ref) WHERE closed IS NULL;
 CREATE INDEX idx_msg_rcpt ON messages(recipient, read_at);
 CREATE INDEX idx_tasks_goal ON tasks(goal_id, status);
+CREATE INDEX worktree_pool_proj ON worktree_pool(project_id, state);
 CREATE INDEX idx_gate_runs_head ON gate_runs(project_id, head_sha);
 CREATE INDEX idx_lesson_links ON lesson_links(lesson_id);
 CREATE INDEX idx_rejection_incidents_cause ON rejection_incidents(cause);
