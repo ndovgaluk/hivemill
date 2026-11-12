@@ -1,7 +1,11 @@
 """G-001 T-0003: `factory spawn coder` with worktree_reuse=1 claims and resets a pooled worktree.
 Real CLI (harness herdr stub), real git repos (bare origin + home checkout), temp FACTORY_HOME. A "freed" worktree is
 made by make_pooled(): real `git worktree add`, then a worktree_pool row (the real release path is a later task)."""
+import ast
+import hashlib
 import json
+import os
+import re
 import shutil
 import sqlite3
 import subprocess
@@ -178,7 +182,8 @@ class Reuse(ReuseBase):
         self.assertEqual(git("status", "--porcelain", "--untracked-files=all", cwd=P), "")
         self.assertTrue((P / "node_modules" / "x.js").exists())
 
-    def test_gitdir_redirect_to_a_sibling_is_refused(self):  # acceptance 16 (reviewer B1)
+    # acceptance 16 (reviewer B1, M125/M128): every forged pool row is refused by the shared helper, sibling S stays intact
+    def forge_case(self, forge):
         S = self.make_pooled("T-0003", state="claimed")  # a live worktree of another task
         P = self.make_pooled("T-0001")
         self.env.sql("UPDATE worktree_pool SET task_id='T-0003', reset_ok=1 WHERE path=?", (str(S),))
@@ -187,18 +192,67 @@ class Reuse(ReuseBase):
         (S / "wip.txt").write_text("live work\n")
 
         def snap():
-            files = {str(f.relative_to(sgd)): f.read_bytes() for f in sorted(sgd.rglob("*")) if f.is_file()}
-            return (git("rev-parse", "HEAD", cwd=S), git("status", "--porcelain", cwd=S), files)
+            h = lambda n: hashlib.sha256((sgd / n).read_bytes()).hexdigest()
+            return (h("index"), h("HEAD"), git("status", "--porcelain", cwd=S), (sgd / "MERGE_HEAD").exists())
 
         before = snap()
-        (P / ".git").write_text(f"gitdir: {sgd}\n")
-        self.spawn_ok()
-        self.assertEqual(self.task()["worktree"], self.fresh())
+        path = forge(P, S, sgd)
+        p = self.spawn_ok()
+        self.assertEqual(self.task()["worktree"], self.fresh(), p.stdout)
         self.assertEqual(snap(), before)
-        self.assertTrue((S / "wip.txt").exists())
-        ev = self.events("worktree-reuse-failed")
-        self.assertEqual(len(ev), 1)
-        self.assertEqual(json.loads(ev[0]["detail"])["path"], str(P))
+        self.assertTrue((S / "wip.txt").exists() and sgd.is_dir())
+        self.assertTrue(os.path.lexists(path), "the pooled dir must be kept")
+        row = [r for r in self.pool() if r["path"] == str(path)]
+        self.assertEqual([(r["state"], r["task_id"]) for r in row], [("free", None)])
+        self.assertEqual(len(self.events("worktree-gitdir-mismatch")), 1)
+        self.assertEqual(len(self.env.sql("SELECT * FROM messages WHERE subject LIKE '%forged .git pointer%'")), 1)
+
+    def test_a_gitdir_redirect_to_a_sibling_is_refused(self):
+        def forge(P, S, sgd):
+            (P / ".git").write_text(f"gitdir: {sgd}\n")
+            return P
+        self.forge_case(forge)
+
+    def test_b_symlink_to_a_sibling_is_refused(self):
+        def forge(P, S, sgd):
+            shutil.move(str(P), str(self.h / "elsewhere"))
+            P.symlink_to(S)
+            return P
+        self.forge_case(forge)
+
+    def test_c_symlinked_parent_is_refused(self):
+        def forge(P, S, sgd):
+            real = self.h / "realdir"
+            real.mkdir()
+            (self.h / "worktrees" / "linkdir").symlink_to(real)
+            moved = real / P.name
+            shutil.move(str(P), str(moved))
+            q = self.h / "worktrees" / "linkdir" / P.name
+            self.env.sql("UPDATE worktree_pool SET path=? WHERE path=?", (str(q), str(P)))
+            return q
+        self.forge_case(forge)
+
+    def test_d_dotgit_symlink_is_refused(self):
+        def forge(P, S, sgd):
+            (P / ".git").unlink()
+            (P / ".git").symlink_to(S / ".git")
+            return P
+        self.forge_case(forge)
+
+    def test_pool_functions_touch_worktrees_only_through_the_choke_point(self):  # acceptance 19 / spec 6 (T12 scope)
+        src = (Path(__file__).resolve().parent.parent / "bin" / "factory_cli.py").read_text()
+        text = src.splitlines()
+        scoped = {"claim_pooled_worktree", "reset_pooled_worktree", "_pool_drop", "_pool_release_claim"}
+        bad = re.compile(r"\b(git_run|_git|cgit)\(\s*t?(wt|p)\b|\"worktree\",\s*\"remove\"|rmtree\(wt")
+        seen = set()
+        for node in ast.walk(ast.parse(src)):
+            if isinstance(node, ast.FunctionDef) and node.name in scoped:
+                seen.add(node.name)
+                for ln in sorted({n.lineno for n in ast.walk(node) if hasattr(n, "lineno")}):
+                    self.assertIsNone(bad.search(text[ln - 1]), f"{node.name}:{ln} touches a worktree outside _wt_git/_wt_remove")
+        self.assertEqual(seen, scoped)
+        self.assertEqual(src.count("def worktree_owns_gitdir"), 1)
+        self.assertEqual(src.count("def _wt_git"), 1)
 
     def test_consumers_see_the_claimed_path(self):  # acceptance 9
         P = self.make_pooled()

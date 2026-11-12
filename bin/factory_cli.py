@@ -9190,23 +9190,31 @@ def claim_pooled_worktree(con, project_id, task, branch):
     child of WORKTREES is deleted (worktree-reuse-failed) and the next row is tried."""
     if con.in_transaction:
         die("claim inside an open transaction", 1)
-    claimed, failed = None, []
+    prow = con.execute("SELECT repo_path FROM projects WHERE id=?", (project_id,)).fetchone()
+    repo = prow["repo_path"] if prow else None
+    claimed, failed, refused, skip = None, [], [], []
     con.execute("BEGIN IMMEDIATE")
     try:
         while claimed is None:
+            marks = ",".join("?" * len(skip)) or "''"
             row = con.execute("SELECT path FROM worktree_pool WHERE project_id=? AND state='free' "
-                              "ORDER BY released_at, path LIMIT 1", (project_id,)).fetchone()
+                              f"AND path NOT IN ({marks}) ORDER BY released_at, path LIMIT 1", (project_id, *skip)).fetchone()
             if row is None:
                 break
-            p = Path(row["path"])
-            if p.parent != WORKTREES or not p.is_dir():
-                con.execute("DELETE FROM worktree_pool WHERE path=?", (row["path"],))
-                failed.append({"path": row["path"], "reason": "not a directory under worktrees/"})
+            p = row["path"]
+            if not os.path.exists(p):  # gone (a dangling symlink counts as gone); nothing of ours to keep
+                con.execute("DELETE FROM worktree_pool WHERE path=?", (p,))
+                failed.append({"path": p, "reason": "directory is gone"})
                 continue
-            if _claim_row(con, row["path"], task, branch) != 1:
+            admin, why = worktree_owns_gitdir(repo, p) if repo else (None, "project has no repo")
+            if admin is None:  # the shared helper refuses: keep the row and the directory, alert, try the next row
+                skip.append(p)
+                refused.append((p, why))
+                continue
+            if _claim_row(con, p, task, branch) != 1:
                 break
-            con.execute("UPDATE tasks SET worktree=?, branch=? WHERE id=?", (row["path"], branch, task))
-            claimed = row["path"]
+            con.execute("UPDATE tasks SET worktree=?, branch=? WHERE id=?", (p, branch, task))
+            claimed = p
         con.execute("COMMIT")
     except BaseException:
         if con.in_transaction:
@@ -9214,6 +9222,9 @@ def claim_pooled_worktree(con, project_id, task, branch):
         raise
     for f in failed:
         event(con, "task", task, "worktree-reuse-failed", f)
+    for p, why in refused:
+        event(con, "task", task, "worktree-reuse-refused", {"path": p, "reason": why})
+        _gitdir_mismatch_alert(con, task, p)
     if claimed:
         event(con, "task", task, "worktree-claimed", {"path": claimed})
     return claimed
@@ -9226,40 +9237,22 @@ def _pool_release_claim(con, path, task):
 
 
 def _pool_drop(con, repo, wt, task, reason):
-    """A pooled worktree that cannot be reset: remove it, drop its row and the task's pointer, record why."""
-    git_run(repo, "worktree", "remove", "--force", str(wt), text=False)
+    """A pooled worktree that cannot be reset. Only one the shared helper vouches for is removed (_wt_remove); on an
+    ownership mismatch the directory is KEPT, the claim released and the director alerted."""
+    try:
+        r = _wt_remove(repo, wt)
+    except GitdirMismatch as e:
+        if task:
+            _pool_release_claim(con, wt, task)
+        event(con, "task", task or "-", "worktree-reuse-failed", {"path": str(wt), "reason": f"kept: {e}"})
+        _gitdir_mismatch_alert(con, task or "-", wt)
+        return
     git_run(repo, "worktree", "prune", text=False)
-    shutil.rmtree(wt, ignore_errors=True)
+    if r.returncode != 0:
+        reason = f"{reason}; worktree remove failed: {r.stderr.strip()[:200]}"
     con.execute("DELETE FROM worktree_pool WHERE path=?", (str(wt),))
     con.execute("UPDATE tasks SET worktree=NULL WHERE id=?", (task,))
     event(con, "task", task, "worktree-reuse-failed", {"path": str(wt), "reason": reason})
-
-
-def worktree_owns_gitdir(repo, wt):
-    """(gitdir, "") when `wt` really is a linked worktree of `repo`, else (None, reason). wt/.git is worker-writable and
-    untrusted: it must be a regular file whose gitdir line names a dir directly under <common>/worktrees that points
-    back at this very wt/.git (a planted redirect to another task's git dir is refused)."""
-    wt = Path(wt)
-    cd = git_run(repo, "rev-parse", "--git-common-dir")
-    if cd.returncode != 0:
-        return None, f"rev-parse: {cd.stderr.strip()}"
-    wtroot = Path(repo, cd.stdout.strip()).resolve() / "worktrees"
-    dotgit = wt / ".git"
-    try:
-        if dotgit.is_symlink() or not dotgit.is_file():
-            return None, f"{dotgit} is not a regular file"
-        line = dotgit.read_text().strip()
-        if not line.startswith("gitdir:"):
-            return None, f"{dotgit} has no gitdir line"
-        gitdir = (wt / line[len("gitdir:"):].strip()).resolve()
-        if gitdir.parent != wtroot:
-            return None, f"git dir {gitdir} is not under {wtroot}"
-        back = gitdir / "gitdir"
-        if back.is_symlink() or not back.is_file() or (gitdir / back.read_text().strip()).resolve() != dotgit.resolve():
-            return None, f"{gitdir}/gitdir does not point back at {dotgit}"
-    except (OSError, UnicodeDecodeError) as e:
-        return None, f"cannot verify git dir of {wt}: {e}"
-    return gitdir, ""
 
 
 def reset_pooled_worktree(con, repo, wt, branch, start):
@@ -9267,7 +9260,7 @@ def reset_pooled_worktree(con, repo, wt, branch, start):
     config guard re-run, `branch` reset to `start`, tracked changes and untracked non-ignored files removed (ignored
     files such as node_modules stay). True when reset; False after dropping an unusable worktree (caller goes fresh).
     A refused guard rolls the claim back and dies with exit 4."""
-    wt = Path(wt)
+    wt = Path(os.path.abspath(str(wt)))
     row = con.execute("SELECT task_id FROM worktree_pool WHERE path=?", (str(wt),)).fetchone()
     task = row["task_id"] if row else None
 
@@ -9278,6 +9271,7 @@ def reset_pooled_worktree(con, repo, wt, branch, start):
     gitdir, why = worktree_owns_gitdir(repo, wt)
     if gitdir is None:
         return fail(why)
+    gitdir = Path(gitdir)
     try:
         for name in ("config.worktree", "MERGE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD"):
             (gitdir / name).unlink(missing_ok=True)
@@ -9290,13 +9284,15 @@ def reset_pooled_worktree(con, repo, wt, branch, start):
             if (gitdir / d).is_dir():
                 shutil.rmtree(gitdir / d)
         for pat in ("refs/worktree", "refs/bisect"):
-            refs = git_run(wt, "for-each-ref", "--format=%(refname)", pat)
+            refs = _wt_git(repo, wt, "for-each-ref", "--format=%(refname)", pat)
             if refs.returncode != 0:
                 return fail(f"for-each-ref {pat}: {refs.stderr.strip()}")
             for ref in refs.stdout.split():
-                u = git_run(wt, "update-ref", "-d", ref)
+                u = _wt_git(repo, wt, "update-ref", "-d", ref)
                 if u.returncode != 0:
                     return fail(f"update-ref -d {ref}: {u.stderr.strip()}")
+    except GitdirMismatch as e:
+        return fail(str(e))
     except OSError as e:
         return fail(f"cleanup of {gitdir}: {e}")
     if not git_config_guard(con, wt):
@@ -9306,7 +9302,10 @@ def reset_pooled_worktree(con, repo, wt, branch, start):
         con.commit()
         die(f"spawn refused: git config in {wt} would run code: {why}", 4)
     for args in (("checkout", "-q", "-f", "-B", branch, start), ("reset", "-q", "--hard", start), ("clean", "-f", "-f", "-d", "-q")):
-        p = git_run(wt, *args)
+        try:
+            p = _wt_git(repo, wt, *args)
+        except GitdirMismatch as e:
+            return fail(str(e))
         if p.returncode != 0:
             return fail(f"git {args[0]}: {p.stderr.strip()}")
     install_pre_push_hook(wt)
@@ -9350,7 +9349,7 @@ def prepare_worktree(con, task, role):
     if not git_config_guard(con, repo):  # worktree add checks out and runs smudge filters
         con.commit()
         die(f"spawn refused: git config in {repo} would run code: {', '.join(git_config_refusal(repo))}", 4)
-    wt = WORKTREES / f"{t['goal_id']}-{task}"
+    wt = Path(os.path.realpath(WORKTREES)) / f"{t['goal_id']}-{task}"  # realpath: the ownership helper compares lexical paths
     branch = t["branch"] or f"factory/{task.lower()}"
     git_run(repo, "fetch", "-q", "origin", text=False)
     has_remote = git_run(repo, "rev-parse", "--verify", "-q", f"origin/{base}", text=False).returncode == 0
