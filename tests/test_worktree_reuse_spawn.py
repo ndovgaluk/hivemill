@@ -9,8 +9,11 @@ import re
 import shutil
 import sqlite3
 import subprocess
+import sys
+import signal
 import threading
 import unittest
+from unittest import mock
 from pathlib import Path
 
 from harness import FactoryTestCase, git
@@ -444,10 +447,6 @@ class Crash(ReuseBase):
         self.assertTrue((P / "u.txt").exists())
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class Lifecycle(ReuseBase):
     """G-001 SC2/SC5/SC6: the whole reuse lifecycle through the real `factory spawn` / `factory clean` CLI and real git."""
 
@@ -509,11 +508,20 @@ class Lifecycle(ReuseBase):
         self.assertNotEqual(P3.resolve(), P1.resolve())
         self.assertEqual(str(P3), self.fresh("T-0003"))
         # f. both finish; clean keeps exactly one free worktree, removes the other, and no claimed row is lost
+        # f0. while T-0002 is live, clean over a pool cap of 0 must keep its claimed row and directory (trim never removes claimed)
+        claimed_before = [(r["path"], r["task_id"]) for r in self.pool() if r["state"] == "claimed"]
+        self.assertEqual(claimed_before, [(str(P1.resolve()), "T-0002")])
+        self.ok("config", "worktree_pool_max", "0", agent="zz-director")
+        self.ok("clean", agent="zz-test-cleaner")
+        self.assertEqual([(r["path"], r["task_id"]) for r in self.pool() if r["state"] == "claimed"], claimed_before)
+        self.assertTrue(P1.exists())
+        self.ok("config", "worktree_pool_max", "1", agent="zz-director")
         self.finish("T-0002", P1, "two.txt")
         self.finish("T-0003", P3, "three.txt")
         self.ok("clean", agent="zz-test-cleaner")
         self.assertEqual(self.free_count(), 1)
         self.assertEqual(len(self.pool()), 1)
+        # the finished task's claim was released to the pool, not deleted: every remaining row is free and no live task lost one
         self.assertEqual(self.env.sql("SELECT count(*) AS n FROM worktree_pool WHERE state='claimed'")[0]["n"], 0)
         self.assertEqual(sum(p.exists() for p in (P1, P3)), 1)
         # g. flag off: clean empties the pool; the next spawn is a fresh worktree
@@ -526,3 +534,82 @@ class Lifecycle(ReuseBase):
         self.assertTrue(self.task("T-0004")["worktree"].endswith("/worktrees/G-001-T-0004"))
         self.assertTrue(Path(self.task("T-0004")["worktree"]).is_dir())
 
+
+class CapAndRealpath(ReuseBase):
+    """T-0008: WORKTREES is resolved the same way everywhere, and the pool claim loop is bounded."""
+
+    def test_symlinked_worktrees_agree_everywhere(self):  # acceptance 1
+        self.ok("config", "worktree_reuse", "0", agent="zz-director")
+        real = (self.h / "worktrees")
+        real.mkdir(exist_ok=True)
+        link = self.env.home / "wt-link"
+        link.symlink_to(real)
+        proc = self.env.home / "fakeproc-t8"
+        d = proc / "4242"
+        d.mkdir(parents=True)
+        (d / "cmdline").write_bytes(b"python3\0srv.py\0")
+        (d / "environ").write_bytes(b"FACTORY_AGENT=zz-coder-t-0002\0")
+        (d / "stat").write_text("4242 (x) S 1 1 1 0 -1 0 0 0 0 0 0 0 0 0 20 0 1 0 1000\n")
+        self.env.seed_agent("zz-coder-t-0002", "coder", "G-001", None, "T-0002", status="exited")
+        tmp = self.env.home / "faketmp-t8"
+        env = {"FACTORY_SERVE_PROC_DIR": str(proc), "FACTORY_TMP_DIR": str(tmp), "FACTORY_SERVE_MAINPID": ""}
+        for symlinked in (True, False):
+            with self.subTest(symlinked=symlinked), mock.patch.dict(os.environ, env), self.env.load_factory() as mod:
+                os.environ.update(env)
+                mod.WORKTREES = link if symlinked else real
+                want = str(real.resolve() / "G-001-T-0002")
+                if not symlinked:
+                    self.assertEqual(want, str(mod.WORKTREES / "G-001-T-0002"))  # the pre-change formula: byte-identical
+                con = mod.db()
+                self.assertEqual(mod.prepare_worktree(con, "T-0002", "coder"), want)
+                con.commit()
+                self.assertTrue(Path(want).is_dir())
+                (d / "cwd").unlink(missing_ok=True)
+                os.symlink(want, d / "cwd")
+                judged = mod._orphan_judge(con, 4242, set())
+                self.assertIsNotNone(judged)
+                self.assertEqual(judged["worktree"], want)
+                slug = re.sub(r"[^A-Za-z0-9]", "-", want)
+                pad = tmp / f"claude-{os.getuid()}" / slug / "sess" / "scratchpad"
+                pad.mkdir(parents=True, exist_ok=True)
+                self.assertEqual(mod._serve_pad(pad)[1], "T-0002")
+                git("worktree", "remove", "--force", want, cwd=self.h)
+                git("branch", "-D", "factory/t-0002", cwd=self.h)
+                shutil.rmtree(tmp, ignore_errors=True)
+                self.env.sql("UPDATE tasks SET worktree=NULL, branch=NULL WHERE id='T-0002'")
+
+    def test_flipping_ownership_answer_is_capped(self):  # acceptance 2
+        P = self.make_pooled()
+        calls = []
+        with self.env.load_factory() as mod:
+            real = mod.worktree_owns_gitdir
+
+            def flip(repo, wt):  # the claim's answer is fine, every later answer (reset, drop) is a refusal
+                calls.append(wt)
+                if sys._getframe(1).f_code.co_name == "claim_pooled_worktree":
+                    return real(repo, wt)
+                return None, "flipped"
+
+            def timeout(*_a):
+                raise AssertionError("claim loop did not stop")
+            old = signal.signal(signal.SIGALRM, timeout)
+            signal.alarm(30)
+            try:
+                with mock.patch.object(mod, "worktree_owns_gitdir", flip):
+                    con = mod.db()
+                    got = mod.prepare_worktree(con, "T-0002", "coder")
+                    con.commit()
+            finally:
+                signal.alarm(0)
+                signal.signal(signal.SIGALRM, old)
+        self.assertEqual(got, self.fresh())
+        self.assertEqual(self.task()["worktree"], self.fresh())
+        self.assertTrue(Path(self.fresh()).is_dir())
+        self.assertTrue(P.exists(), "the pooled directory is kept")
+        self.assertEqual([(r["path"], r["state"], r["task_id"]) for r in self.pool()], [(str(P), "free", None)])
+        caps = [e for e in self.events("worktree-reuse-failed") if "cap" in json.loads(e["detail"]).get("reason", "")]
+        self.assertEqual(len(caps), 1)
+
+
+if __name__ == "__main__":
+    unittest.main()
