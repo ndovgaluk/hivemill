@@ -69,7 +69,7 @@ CREATE TABLE signoffs (
 CREATE TABLE events (
   id INTEGER PRIMARY KEY AUTOINCREMENT, ts TEXT NOT NULL, actor TEXT, entity TEXT,
   entity_id TEXT, action TEXT NOT NULL, detail TEXT);
-CREATE TABLE worktree_pool (path TEXT PRIMARY KEY, project_id TEXT NOT NULL, state TEXT NOT NULL CHECK(state IN ('free','claimed')), task_id TEXT, reset_ok INTEGER NOT NULL DEFAULT 0, claimed_at TEXT, released_at TEXT);
+CREATE TABLE worktree_pool (path TEXT PRIMARY KEY, project_id TEXT NOT NULL, state TEXT NOT NULL, task_id TEXT, reset_ok INTEGER NOT NULL DEFAULT 0, claimed_at TEXT, released_at TEXT);
 CREATE TABLE gate_runs (
   id INTEGER PRIMARY KEY AUTOINCREMENT, project_id TEXT NOT NULL, task_id TEXT, pr_url TEXT,
   kind TEXT NOT NULL,  -- pr | main | train

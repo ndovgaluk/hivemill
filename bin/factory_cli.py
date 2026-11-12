@@ -383,6 +383,8 @@ CREATE TABLE IF NOT EXISTS gate_runs (
 CREATE INDEX IF NOT EXISTS idx_gate_runs_head ON gate_runs(project_id, head_sha);
 """
 
+WORKTREE_POOL_STATES = ("free", "claimed")  # worktree_pool.state; enforced in code, no CHECK (schema convention)
+
 SCHEMA = f"""
 CREATE TABLE IF NOT EXISTS config (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS projects (
@@ -440,7 +442,7 @@ CREATE TABLE IF NOT EXISTS events (
   entity_id TEXT, action TEXT NOT NULL, detail TEXT);
 CREATE INDEX IF NOT EXISTS idx_msg_rcpt ON messages(recipient, read_at);
 CREATE INDEX IF NOT EXISTS idx_tasks_goal ON tasks(goal_id, status);
-CREATE TABLE IF NOT EXISTS worktree_pool (path TEXT PRIMARY KEY, project_id TEXT NOT NULL, state TEXT NOT NULL CHECK(state IN ('free','claimed')), task_id TEXT, reset_ok INTEGER NOT NULL DEFAULT 0, claimed_at TEXT, released_at TEXT);
+CREATE TABLE IF NOT EXISTS worktree_pool (path TEXT PRIMARY KEY, project_id TEXT NOT NULL, state TEXT NOT NULL, task_id TEXT, reset_ok INTEGER NOT NULL DEFAULT 0, claimed_at TEXT, released_at TEXT);
 CREATE INDEX IF NOT EXISTS worktree_pool_proj ON worktree_pool(project_id, state);
 """ + GATE_RUNS_DDL + LESSONS_DDL + REJECTION_INCIDENTS_DDL + RETRO_DDL
 
@@ -557,7 +559,7 @@ def migrate(con):
                 if col not in {r["name"] for r in con.execute("PRAGMA table_info(projects)")}:
                     raise
     con.execute("CREATE TABLE IF NOT EXISTS throttle (key TEXT PRIMARY KEY, ts TEXT NOT NULL)")
-    con.execute("CREATE TABLE IF NOT EXISTS worktree_pool (path TEXT PRIMARY KEY, project_id TEXT NOT NULL, state TEXT NOT NULL CHECK(state IN ('free','claimed')), task_id TEXT, reset_ok INTEGER NOT NULL DEFAULT 0, claimed_at TEXT, released_at TEXT)")
+    con.execute("CREATE TABLE IF NOT EXISTS worktree_pool (path TEXT PRIMARY KEY, project_id TEXT NOT NULL, state TEXT NOT NULL, task_id TEXT, reset_ok INTEGER NOT NULL DEFAULT 0, claimed_at TEXT, released_at TEXT)")
     con.execute("CREATE INDEX IF NOT EXISTS worktree_pool_proj ON worktree_pool(project_id, state)")
     con.executescript(GATE_RUNS_DDL)
     for col in ("task_ids", "tip_sha", "tree"):  # train runs (T-0522) on a DB created before the columns existed

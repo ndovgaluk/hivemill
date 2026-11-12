@@ -1,7 +1,24 @@
-import sqlite3
+import importlib.machinery
+import importlib.util
+import os
 import unittest
 
-from harness import FactoryTestCase, git
+from harness import FACTORY_SRC, FactoryTestCase, git
+
+
+def load_factory(home):
+    old = os.environ.get("FACTORY_HOME")
+    os.environ["FACTORY_HOME"] = str(home)
+    try:
+        loader = importlib.machinery.SourceFileLoader("factory_pool_states_test", str(FACTORY_SRC))
+        mod = importlib.util.module_from_spec(importlib.util.spec_from_loader(loader.name, loader))
+        loader.exec_module(mod)
+        return mod
+    finally:
+        if old is None:
+            os.environ.pop("FACTORY_HOME", None)
+        else:
+            os.environ["FACTORY_HOME"] = old
 
 COLUMNS = ["path", "project_id", "state", "task_id", "reset_ok", "claimed_at", "released_at"]
 
@@ -45,8 +62,9 @@ class WorktreeReuseConfigTests(FactoryTestCase):
         try:
             cols = [r["name"] for r in con.execute("PRAGMA table_info(worktree_pool)")]
             self.assertEqual(cols, COLUMNS)
-            with self.assertRaises(sqlite3.IntegrityError):
-                con.execute("INSERT INTO worktree_pool(path, project_id, state) VALUES('/p','x','busy')")
+            sql = con.execute("SELECT sql FROM sqlite_master WHERE name='worktree_pool'").fetchone()[0]
+            self.assertNotIn("CHECK", sql.upper())
+            self.assertEqual(load_factory(self.env.home_dir).WORKTREE_POOL_STATES, ("free", "claimed"))
             con.execute("INSERT INTO worktree_pool(path, project_id, state) VALUES('/p','x','free')")
             self.assertEqual(con.execute("SELECT reset_ok FROM worktree_pool").fetchone()[0], 0)
         finally:
