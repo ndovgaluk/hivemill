@@ -56,6 +56,11 @@ ROLES_DIR = HOME / "roles"
 GOAL_PLUGINS = ROLES_DIR / "plugins" / "goals"
 EXPORTS = HOME / "exports"
 WORKTREES = HOME / "worktrees"
+
+
+def worktrees_real():
+    """WORKTREES with symlinks resolved, read at call time: what spawn gives a fresh worktree and what a process's cwd and the Claude project slug show."""
+    return os.path.realpath(WORKTREES)
 RUN = HOME / "run"
 USAGE_FILE = Path.home() / ".claude" / "usage-limits.json"
 
@@ -7295,7 +7300,7 @@ def _sweep_candidates(con, t):
     root = root.resolve()
     found = []
     base = root / f"claude-{os.getuid()}"
-    slug = re.compile(re.escape(re.sub(r"[^A-Za-z0-9]", "-", str(WORKTREES)) + "-") + r"G-\d+-(T-\d+)$")
+    slug = re.compile(re.escape(re.sub(r"[^A-Za-z0-9]", "-", worktrees_real()) + "-") + r"G-\d+-(T-\d+)$")
     if base.is_dir() and not base.is_symlink():
         for d in sorted(base.iterdir()):
             m = slug.match(d.name)
@@ -7490,7 +7495,7 @@ def tmp_clean(con):
         if not base.is_dir() or base.is_symlink():
             return
         root = base.resolve()
-        slug = re.compile(re.escape(re.sub(r"[^A-Za-z0-9]", "-", str(WORKTREES)) + "-") + r"(G-\d+)-(T-\d+)")
+        slug = re.compile(re.escape(re.sub(r"[^A-Za-z0-9]", "-", worktrees_real()) + "-") + r"(G-\d+)-(T-\d+)")
         for d in sorted(base.iterdir()):
             m = slug.fullmatch(d.name)
             if not m or d.is_symlink() or not d.is_dir() or d.resolve().parent != root:
@@ -7690,7 +7695,7 @@ def _serve_pad(path):
     if not parts:
         return None
     if parts[0] == f"claude-{os.getuid()}":
-        slug = re.compile(re.escape(re.sub(r"[^A-Za-z0-9]", "-", str(WORKTREES)) + "-") + r"(G-\d+)-(T-\d+)$")
+        slug = re.compile(re.escape(re.sub(r"[^A-Za-z0-9]", "-", worktrees_real()) + "-") + r"(G-\d+)-(T-\d+)$")
         m = slug.match(parts[1]) if len(parts) > 1 else None
         return (tmp / parts[0] / parts[1], m.group(2)) if m else None
     m = re.search(r"(?<![A-Za-z0-9])[Tt]-(\d+)(?![0-9])", parts[0])
@@ -7942,7 +7947,7 @@ def _orphan_judge(con, pid, skip):
                 return None
         cur = (_orphan_stat(cur) or (None,))[0]
     return {"pid": pid, "agent": agent, "task": task, "argv": argv, "ident": ident, "cwd": cwd, "home": home,
-            "worktree": str(WORKTREES / f"{goal}-{task}"), "by": by}
+            "worktree": str(Path(worktrees_real()) / f"{goal}-{task}"), "by": by}
 
 
 def _orphan_skip(main_pid):
@@ -8387,7 +8392,7 @@ def _test_judge(con, pid, skip, row):
         cur = (_orphan_stat(cur) or (None,))[0]
     (goal, task), by = att
     return {"pid": pid, "agent": row["name"], "task": task, "argv": ident[0], "ident": ident, "cwd": cwd,
-            "worktree": str(WORKTREES / f"{goal}-{task}"), "by": by}
+            "worktree": str(Path(worktrees_real()) / f"{goal}-{task}"), "by": by}
 
 
 def _agent_tests_failed(con, name, e):
@@ -9349,7 +9354,7 @@ def prepare_worktree(con, task, role):
     if not git_config_guard(con, repo):  # worktree add checks out and runs smudge filters
         con.commit()
         die(f"spawn refused: git config in {repo} would run code: {', '.join(git_config_refusal(repo))}", 4)
-    wt = Path(os.path.realpath(WORKTREES)) / f"{t['goal_id']}-{task}"  # realpath: the ownership helper compares lexical paths
+    wt = Path(worktrees_real()) / f"{t['goal_id']}-{task}"  # realpath: the ownership helper compares lexical paths
     branch = t["branch"] or f"factory/{task.lower()}"
     git_run(repo, "fetch", "-q", "origin", text=False)
     has_remote = git_run(repo, "rev-parse", "--verify", "-q", f"origin/{base}", text=False).returncode == 0
@@ -9362,12 +9367,18 @@ def prepare_worktree(con, task, role):
         return str(wt)
     if role == "coder" and cfg(con, "worktree_reuse") == "1":
         proj = con.execute("SELECT project_id FROM goals WHERE id=?", (t["goal_id"],)).fetchone()["project_id"]
-        while True:
+        cap = con.execute("SELECT count(*) AS n FROM worktree_pool WHERE project_id=?", (proj,)).fetchone()["n"] + 1
+        for _ in range(cap):  # each pass claims a row and resets or drops it; bounded in case the ownership answer flips
             got = claim_pooled_worktree(con, proj, task, branch)
             if got is None:
                 break
             if reset_pooled_worktree(con, repo, got, branch, start):
                 return got
+        else:
+            held = con.execute("SELECT path FROM worktree_pool WHERE task_id=? AND state='claimed'", (task,)).fetchone()
+            if held:  # hand a still-held claim back before going fresh
+                _pool_release_claim(con, held["path"], task)
+            event(con, "task", task, "worktree-reuse-failed", {"reason": f"claim loop hit its cap of {cap}; creating a fresh worktree"})
     branch_existed = git_run(repo, "rev-parse", "--verify", "-q", f"refs/heads/{branch}", text=False).returncode == 0
     p = git_run(repo, "worktree", "add", "--no-checkout", "-q", "-B", branch, str(wt), start)
     if p.returncode != 0:
