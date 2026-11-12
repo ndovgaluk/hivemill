@@ -239,6 +239,39 @@ class Reuse(ReuseBase):
             return P
         self.forge_case(forge)
 
+    # acceptance 16 / C4: _pool_drop itself on a mismatch (crash-recovery path: claimed row, reset_ok=0, then P is forged)
+    def drop_case(self, forge):
+        S = self.make_pooled("T-0003", state="claimed")
+        P = self.make_pooled("T-0001", state="claimed")
+        self.env.sql("UPDATE worktree_pool SET task_id='T-0002', reset_ok=0 WHERE path=?", (str(P),))
+        self.env.sql("UPDATE worktree_pool SET task_id='T-0003', reset_ok=1 WHERE path=?", (str(S),))
+        self.env.sql("UPDATE tasks SET worktree=?, branch='factory/t-0002' WHERE id='T-0002'", (str(P),))
+        sgd = self.gitdir(S)
+        (S / "wip.txt").write_text("live work\n")
+        h = lambda n: hashlib.sha256((sgd / n).read_bytes()).hexdigest()
+        before = (h("index"), h("HEAD"), git("status", "--porcelain", cwd=S))
+        forge(P, S, sgd)
+        self.spawn_ok()
+        self.assertEqual(self.task()["worktree"], self.fresh())
+        self.assertEqual((h("index"), h("HEAD"), git("status", "--porcelain", cwd=S)), before)
+        self.assertTrue((S / "wip.txt").exists() and sgd.is_dir())
+        self.assertTrue(os.path.lexists(P), "the pooled dir must be kept")
+        self.assertEqual([(r["state"], r["task_id"]) for r in self.pool() if r["path"] == str(P)], [("free", None)])
+        self.assertTrue([e for e in self.events("worktree-reuse-failed") if "kept:" in e["detail"]], "_pool_drop must have run")
+        self.assertGreaterEqual(len(self.events("worktree-gitdir-mismatch")), 1)
+        self.assertEqual(len(self.env.sql("SELECT * FROM messages WHERE subject LIKE '%forged .git pointer%'")), 1)
+
+    def test_drop_keeps_a_redirected_worktree(self):
+        def forge(P, S, sgd):
+            (P / ".git").write_text(f"gitdir: {sgd}\n")
+        self.drop_case(forge)
+
+    def test_drop_keeps_a_symlinked_worktree(self):
+        def forge(P, S, sgd):
+            shutil.move(str(P), str(self.h / "elsewhere"))
+            P.symlink_to(S)
+        self.drop_case(forge)
+
     def test_pool_functions_touch_worktrees_only_through_the_choke_point(self):  # acceptance 19 / spec 6 (T12 scope)
         src = (Path(__file__).resolve().parent.parent / "bin" / "factory_cli.py").read_text()
         text = src.splitlines()
