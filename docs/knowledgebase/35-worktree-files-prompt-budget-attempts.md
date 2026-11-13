@@ -50,22 +50,43 @@ Still open:
 
 ## Q: Where does the 12k limit on role prompts come from?
 
-From the project itself, enforced by `tests/test_repo_hygiene.py`:
+It is a rule the Hivemill project set for itself, enforced by a test. It is not a limit of Claude Code or of the model.
 
-- `ROLE_PROMPT_BUDGET_BYTES = 12000`: hard budget for `_common.md` plus any one role file.
-- `ROLE_PROMPT_TARGET_BYTES = 11410`: a tighter fail-fast target, and the one that actually bites. `_common.md` + `coder.md` are at exactly 11410.
+- **Where it lives:** `tests/test_repo_hygiene.py`, as two constants near the top.
+  - `ROLE_PROMPT_BUDGET_BYTES = 12000` is the hard budget for `_common.md` plus any one role file.
+  - `ROLE_PROMPT_TARGET_BYTES = 11410` is a tighter "fail-fast" target, meant to catch a prompt drifting upward before it reaches the budget. This is the one that actually bites: `_common.md` + `coder.md` are at exactly 11410.
+- **Why it exists, per the comment next to it:** role prompts are loaded into every agent of that role on every start. The project wants detail moved into a per-role skill under `roles/plugins/<role>/`, which is read only when needed, instead of growing the always-loaded prompt.
+- **How it can change:** the comment says "Raising this is its own PR". The target was last moved by factory task T-1207, to fit one extra row in `_common.md`.
+- **Planning rule P8** (`docs/planning-rules.md`): a task adding role-prompt text states the byte delta and headroom, moves the text into a skill when headroom < delta + 200 B, and never compresses existing wording.
 
-Reason given in the code: role prompts are loaded by every agent of that role on every start, so detail belongs in a per-role skill under `roles/plugins/<role>/`. Raising the number "is its own PR". The code does not say why 12000 was chosen. Planning rule P8: a task adding role-prompt text states the byte delta and headroom, moves the text into a skill when headroom < delta + 200 B, and never compresses existing wording.
+The code does not say why 12,000 was chosen over another number. The git history and the factory's lessons were not searched for the original decision.
+
+For the coder prompt that leaves two ways to add more later: move a block of `coder.md` into a coder skill and leave a one-line pointer, or raise the target in a separate change.
 
 ## Q: Is there a limit on round trips between reviewer and coder for one factory task?
 
-Yes, as a rule for the lead, not as a check in the code: three coder attempts on one factory task without a merge, then the lead stops and escalates to the director (`roles/lead.md`, the lead's `fix-loop` skill, `docs/planning-rules.md` L1 to L4).
+Yes, but it is a rule in the lead's instructions, not a hard stop in the code: three coder attempts on one factory task without a merge, then the lead must stop and escalate to the director. Sources: `roles/lead.md`, the lead's `fix-loop` skill (`roles/plugins/lead/factory-lead/skills/fix-loop/SKILL.md`), `docs/planning-rules.md` L1 to L4. Not tested.
 
-- Retry briefs say "attempt N of 3" and list every open blocking finding.
-- Before the third attempt the lead asks the staff-engineer for one remedy: continue, restructure or stop.
-- After a third failure the director decides and can grant more attempts (it did on G-001's T-0004).
-- Not counted as attempts: a coder that produced nothing, nit-only findings (the same verifier re-verdicts), evidence-only judge rejects, stale-base and merge-conflict handling.
-- The CLI only increments `tasks.attempts`; no refusal on a high count was found (searched by name only). There is no config key for the number 3.
+### How the limit works
+
+- **Attempts 1 and 2:** after a reviewer, QA or judge rejection, the lead respawns the coder with a brief that says "attempt N of 3" and lists every open blocking finding.
+- **Before attempt 3:** the lead asks the staff-engineer why the attempts are not converging and gets one remedy: continue, restructure or stop. The third brief must differ from the second.
+- **After a third failure (or a "stop" remedy):** the lead escalates to the director with the task history. The director can grant more attempts, which is what happened on G-001's T-0004.
+
+### What does not count as an attempt
+
+- A coder that was lost or stopped having produced nothing.
+- Findings that are only nits: the lead respawns the same reviewer or QA to re-verdict, with no coder round.
+- Judge rejects that are about evidence only.
+- Stale-base and merge-conflict handling (a refresh or a merge-only coder).
+
+### What the code does
+
+The CLI only counts: it increments `tasks.attempts` when a factory task starts or is resumed. No place was found where it refuses a spawn because the count is too high (searched for the obvious names only, so a check under another name is possible). There is no configuration key for the number 3; it is written in the lead's prompt and skill.
+
+So the cap holds only as long as the lead follows its prompt and the director does not keep granting attempts. There is no separate limit on reviewer rounds: a reviewer runs once per coder attempt, plus the nit-only re-verdicts above.
+
+How many extra attempts the director grants: file 36, "How many extra tries does the director allocate?". Planned change: TSR story HM-2 (limits by cost-effectiveness) and DVDG-565 (lean workflow, "max 5 tries").
 
 ## Q: In the flow debugger, what are "Elapsed" 356h and the lead's 279h 21m?
 
