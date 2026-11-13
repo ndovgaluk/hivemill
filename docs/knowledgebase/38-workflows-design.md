@@ -255,3 +255,98 @@ Found in the Taskosaur code while writing TSK-595 (branch master at 84b5450), an
 - So Hivemill needs its own agent user with the MANAGER role and a personal access token, or narrower endpoints in Taskosaur. The agent check marks are not affected: they only need an agent user.
 
 Do the five Taskosaur tasks for the marks (TSK-590 and children, TSK-591) need changes for estimation? No. Estimation uses its own fields and its own task.
+
+## Q: Owner decisions of 2026-11-13 on the open questions
+
+| Question | Decision |
+|---|---|
+| Limits by cost or by convergence (8) | **Convergence.** At most 5 fix rounds per child; the architect is called after 2 rounds on the same kind of finding. Cost is shown, never a stop. TSR story HM-2 loses its price ranges and cost stop |
+| Hivemill's Taskosaur account | **One manager-level agent user**, with a personal access token. No narrower endpoints in Taskosaur |
+| What "enriched" means (3) | "written description, acceptance criteria and e2e tests. Whether it was passed through the architect agent and filled with details." A task is enriched when those three are written; for a story, every child |
+| What each workflow contains, which fields pick one (1, 2) | Open; explained to the owner, answer pending |
+
+Proposed detail on "enriched", not confirmed: a task with nothing to test end to end says so in its tests field, so the field is never empty and the test stays mechanical.
+
+## Q: Owner decision: the selection rule and the content of the three workflows are accepted
+
+"Yes, I agree with your separation" (2026-11-13). The table in section 3 is decided: size XS or S with complexity 1 or 2 → simple; size M or complexity 3 → medium; size L or XL, complexity 4 or 5, or existing children → huge; the larger result wins. Simple and medium have no separate QA; huge has QA at the end.
+
+## Q: What does the Hivemill code already provide at the five hand-over points? (read 2026-11-13, `~/factory` on main at a617aa4, `bin/factory_cli.py`, 19,982 lines)
+
+### Upstream has already built most of the lean path, and it is switched off here
+
+| Switch | Value on this factory | What it does (from the docs page of the same name) |
+|---|---|---|
+| `lead_parking` | 0 | a lead with nothing to do closes its pane; mail wakes a fresh lead |
+| `lead_less_dispatch` | 0 | the tick starts workers for ready factory tasks of a parked team (`dispatch_tick`, tick step 2b) |
+| `review_autospawn` | off | the tick starts reviewer and QA when a PR opens; one combined agent for the low risk tiers; re-runs per new PR head (`review_autospawn_tick`, `review_rerun_tick`) |
+| `coder_ci_handoff` | off | `resume` mode: the tick restarts the same coder session on red CI (`coder_ci_resume_tick`) |
+| `mech_merge` | off | the tick merges tier T0 to T2 PRs without a judge agent, through the judge's own gate function `judge_gate_and_merge` |
+| `risk_tiers` | off | classifies a PR's risk tier; the mechanical merger and the combined reviewer need it |
+
+There is also a merge train (`judge_train`, `docs/judge-train.md`). G-001 ran with every one of these off: the lead relayed everything by hand, a judge agent merged each PR.
+
+Consequence: a much leaner run of the current workflow is available by configuration alone, with no code change and no divergence from upstream. It should be measured on the reference goal before anything is built.
+
+### The five hand-over points
+
+| Point | Where | What was found |
+|---|---|---|
+| Goal creation | `cmd_goal`, action `new` | one `INSERT INTO goals` with a fixed column list; only the boss or the owner may create a goal. A workflow name and a Taskosaur key need a new argument and columns: a few lines |
+| The tick | `cmd_tick` | a sequence of steps, each in its own `try/except` that records an error event and never stops the tick. One more step in that pattern is a four-line block |
+| Spawn | `spawn`, `_spawn_start`, `role_prompt_text`, `role_model` | the prompt is `roles/_common.md` plus `roles/<role>.md`; the model comes from `role_model`; `spawn()` already accepts `resume` and passes `--resume`. A per-workflow prompt and model need a hook in `role_prompt_text` and `role_model` |
+| Merge gate | `judge_gate_and_merge` | one function shared by `factory judge --merge` and the mechanical merger. A rule for a combined verdict has a single place to go |
+| Commands | `main()` | subcommands are added with `sp.add_parser`; a new command group is a registration line plus its handler in another module |
+
+So the five points exist as single places. That each change is literally one line was not shown; "a few lines each" is what the code supports.
+
+### Three unknowns, answered
+
+- **Skills for a factory agent.** `_spawn_start` passes `--plugin-dir roles/plugins/<role>` (text-only skills, the agent's own role only). Coders additionally get `roles/plugins/goals/<goal id>` when it exists. So skills are attached per role, and for coders per goal.
+- **No MCP for factory agents.** Every agent except the boss is started with `--strict-mcp-config` and an empty server list. A factory agent cannot use the Taskosaur MCP server, which confirms the choice of REST calls through the factory CLI. The `working-with-taskosaur` skill names MCP tools, so the architect needs a version of it that names `factory tsr` commands.
+- **The staff-engineer as architect.** Its permissions allow `factory` commands and read-only `gh` and `git`, which is what an architect writing tasks through `factory tsr` needs. But its prompt says "You advise and never decide", and it is one fixed on-demand agent for the whole factory (`ON_DEMAND`), woken by a message and reaped after `factory done`. An architect per goal that owns the plan does not fit that as it is; it needs its own prompt and its own naming.
+
+### Not read yet
+
+Whether the factory starts and ticks with no director (`cmd_up`, the director's part in the dequeue), `dispatch_tick`, `review_rerun_tick` and `coder_ci_resume_tick` in full, and how a factory task maps to a PR when a whole story is one PR.
+
+### What this changes in the plan
+
+1. First, with no code: turn the existing switches on (in shadow mode where one exists) and run the reference goal. That gives a second measured data point, and shows how much of the 253 messages they already remove.
+2. Then build only what the switches do not give: the Taskosaur record and breakdown, the architect with design before code and the frozen spec, one builder across a whole story with one PR, review per child, convergence limits, estimation.
+3. A candidate mapping that keeps the change small: one Taskosaur story is one factory task with one PR. The builder is then one session for the whole story without any resume between children, and the reviewer re-runs per new head, which `review_rerun_tick` already does. To be checked against the code before it is proposed as the design.
+
+## Q: Do we need to change Go files to complete the workflows story?
+
+Yes, in two different ways. One is small and mechanical; the other is a decision about the language of the new code.
+
+Read on 2026-11-13 in `~/factory` on main at a617aa4.
+
+### 1. Mirrors of the Python CLI: yes, whenever config keys or the schema change
+
+- `go/internal/cli/defaults_gen.go` is generated from the `DEFAULT_CONFIG` literal of `bin/factory_cli.py` (`go generate`, `go/internal/cli/gen`). A new config key means regenerating it.
+- The Go CLI port has golden test data that mirrors the config list, the flags file and the base schema (`go/internal/cli/testdata/golden/...`). G-001's first factory task had to update `defaults_gen.go`, a golden `base.sql`, and golden outputs of `config` and `flags` for its two new keys and one new table ("Go parity").
+- So every new config key, flag entry or table of the workflows story brings the same regenerated and golden files. No Go logic, but the Go checks fail without them.
+
+### 2. Upstream's language policy: new code is Go, not Python
+
+`docs/adr/0001-language-policy.md`, amended 2026-11-11 (goal G-041): the upstream owner decided that all code is to be written in Go. The CLI, the tick, `serve`, scout and the CI scripts are being ported to Go in stages; Python stays the default until each stage flips.
+
+- "No new Python files after 2026-11-11", checked by the command `go/cmd/no-new-python`, which fails when a diff adds a Python file. New tests for still-Python code go into existing test modules. Where that check is wired into CI was not found in a quick search of `.github`, `ci` and `tests`.
+- `bin/factory` can already hand a subcommand to the Go binary `factory-go` (`cli_impl`, `cli_go_cmds`, `docs/cli-go.md`); stage S1 covers `whoami`, `flags`, `agents`, `config`.
+- The coder's prompt carries the rule too: "No new .py files (G-041 SC4) … new code is Go."
+
+This conflicts with the layout proposed earlier in this file (section 10: "a new package, loaded lazily like the `scout/` modules"), which would add new Python files. It also means Python hooks placed in `bin/factory_cli.py` will be left behind as upstream moves each command to Go.
+
+Work already done on the fork added Python files after that date (`web/views/settings.py`, `web/flow.py`, `web/flowcost.py`, `web/flow_findings.py`, `web/flowbundle.py`), which upstream's check would refuse.
+
+### What follows for the design
+
+Two ways to go, to be decided by the owner:
+
+- **Follow upstream: write the workflow engine in Go.** A separate Go command under `go/cmd/` with its own package, reading the same SQLite database (`go/internal/factorydb` exists), called from the Python CLI at the hand-over points the way the worker guard and `factory-go` are. This matches where upstream is heading, keeps the new code out of the file upstream is dismantling, and satisfies the no-new-Python rule. The hand-over points in Python still have to be edited, and will move to Go with upstream's port.
+- **Stay in Python on the fork.** Faster to write against the existing helpers, but it breaks upstream's rule, and each upstream stage that flips a command to Go leaves the Python hook dead until it is re-done in Go.
+
+Recommendation: Go, for the reason the owner gave for the whole approach: extend so that upstream changes affect the extensions as little as possible.
+
+Not needed for the next steps: the Settings page change (HM-7) added no file, and reference run 2 changes no code.
