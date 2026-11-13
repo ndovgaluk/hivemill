@@ -14,6 +14,7 @@ MARKERS = {
         "R6": "in a task whose spec does not ask for it",
         "R7": "copied verbatim from a third-party repo",
         "S1": "Stale base (S1)",
+        "R8": "rework brief (R8, skill `rework-brief`)",
     },
     "qa.md": {
         "Q1": "0 tests ran",
@@ -57,6 +58,15 @@ class PromptRulesReview(unittest.TestCase):
 
     def test_reviewer(self):
         self._check("reviewer.md")
+
+    def test_rework_brief_skill_names_every_part(self):
+        # R8: the FAIL summary is the coder's rework request; the skill holds its format
+        skill = ROLES / "plugins" / "reviewer" / "reviewer-skills" / "skills" / "rework-brief" / "SKILL.md"
+        text = skill.read_text()
+        self.assertTrue(text.startswith("---\nname: rework-brief\n"), "rework-brief: front matter name missing")
+        for part in ("**Where:**", "**What breaks:**", "**What correct looks like:**", "**Proof:**",
+                     "RESOLVED, OPEN or DECLINED", "PR comment URL"):
+            self.assertIn(part, text, f"rework-brief: part {part!r} missing")
 
     def test_qa(self):
         self._check("qa.md")
