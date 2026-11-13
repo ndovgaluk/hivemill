@@ -24,6 +24,13 @@ Add entries with `/engineering-insights`
 
 ## What Doesn't Work
 
+### 2026-11-14 · mistake · Writing a file into the installed factory checkout raises an owner alert within a minute
+Symptom: "Needs you" showed an escalation "unknown writer rebuilt flow bundle in live ~/factory" during a running goal.
+Cause: the tick runs `git status` on the installed checkout each minute and mails the director any modified tracked path; the session had copied three bundle files there to show a UI change.
+Rule: never write into `~/factory`. Check which checkout serves the port first (`ps` on `factory serve`): the owner's dashboard on 18625 runs from the working clone.
+Evidence: message M302 in the factory database, 2026-11-13 23:56:39; TSR task HM-11.
+Promoted: no
+
 ### 2026-11-13 · mistake · Squeezing a new line into `roles/coder.md` by shortening its existing wording breaks planning rule P8
 Symptom: `test_repo_hygiene` failed with "role coder: 11512 bytes > target 11410"; I then cut three existing phrases to land on exactly 11410 and committed that (e623cab).
 Cause: the enforced number is `ROLE_PROMPT_TARGET_BYTES = 11410` in tests/test_repo_hygiene.py, not the 12000 that `CLAUDE.md` names; `_common.md` + `coder.md` had 1 byte free. docs/planning-rules.md P8 forbids compressing existing wording.

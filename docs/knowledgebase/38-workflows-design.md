@@ -350,3 +350,62 @@ Two ways to go, to be decided by the owner:
 Recommendation: Go, for the reason the owner gave for the whole approach: extend so that upstream changes affect the extensions as little as possible.
 
 Not needed for the next steps: the Settings page change (HM-7) added no file, and reference run 2 changes no code.
+
+## Q: Would it be possible later to tell the workflow to send me a WirePusher notification when the task is merged? (2026-11-13 23:32)
+
+Yes. The right place is the workflow engine itself, at the moment it records the merge, not an agent. A mechanical step always fires and costs no tokens; an agent can forget, and factory agents run with a network guard.
+
+Upstream already has a phone alert that works this way, and the new one should copy its shape: the tick sends the owner's open alerts to ntfy when `owner_alert_feed=1` and `owner_alert_send=1` (`bin/factory_cli.py`: `DEFAULT_CONFIG` lines 163 to 164, `NTFY_BASE`, `ntfy_topic`, `_ntfy_post`, the tick hook after them). Its rules: the address is a constant (no config key may redirect it), the topic comes from a file under `~/.config/factory` (never the database or the repository), fixed fields only, 5 s timeout, no redirects, deduplicated per alert.
+
+For the new workflows: on "story merged, TSR task Done" the engine sends one line (task key and "merged", within WirePusher's short-message limit) to WirePusher, with the device id read from a file under `~/.config/factory`. It lives beside upstream code (per the "extend beside upstream" decision), behind its own switch, default off.
+
+Two alternatives, both weaker: switch on the existing ntfy alerts (works today, but it is a different phone app and covers owner-attention alerts, not merges; not checked whether a merge raises one); or have Taskosaur notify when a task becomes Done (covers every task, not only factory ones, and needs a Taskosaur change).
+
+Not read yet: the body of the tick hook and what `owner_attention()` contains. No TSR task written for this yet.
+
+### Follow-up: "and completed" (2026-11-13 23:35)
+
+Yes, the same step covers it. In the decided design "merged" and "Done" are one moment for a story (merged = the TSR task goes to Done), so one notification serves both. Where they differ, the engine sends at each of its own recorded events: a story's PR merged, and the whole request completed (every story merged, the boss reports back to the owner). Proposed: one message per story merge and one when the whole request is complete, each behind the same switch. Not decided by the owner yet: whether per-story messages are wanted or only the final one.
+
+### Follow-up: "Or we can add a trigger on the TSR side: when the task is going to Done, a WirePusher notification is sent" (2026-11-13 23:37)
+
+Yes, and on reflection this is the better place; it replaces the earlier recommendation (engine step in Hivemill) above.
+
+| | Trigger in Taskosaur | Step in the Hivemill engine |
+|---|---|---|
+| Covers | Every agent that completes a task: the factory, Claude sessions, Pi, Omp | Only factory work |
+| Code touched | Taskosaur, the owner's own app | New code beside upstream Hivemill, to maintain across upstream merges |
+| Fits the design | The factory already marks the TSR task Done on merge, so nothing extra in Hivemill | Needs its own switch and secret file |
+| Risk | Fires for tasks the owner completes by hand, unless filtered | None of that kind |
+
+The filter that removes the risk: send only when the status change to Done is made by an agent user (Taskosaur users carry `isAgent`; the MCP connector bot is one). The owner's own clicks then send nothing. Suggested shape: a per-user or per-organisation setting holding the WirePusher device id, off by default; one message with the task key and title, cut to WirePusher's short limit.
+
+"Merged" is not a Taskosaur event. It is covered because merged = Done in the decided design; a separate "merged but not Done" message would still need the factory.
+
+Not read: Taskosaur's notification code, so where the trigger hooks in is not known yet. Per the owner's rule the task is written only after reading that code. No TSR task written yet.
+
+### Follow-up: "I don't want every task Done to trigger WirePusher, only the parent ones" (2026-11-13 23:39, owner decision)
+
+Decided by the owner: only parent items notify; children do not.
+
+Proposed exact rule (the assistant's reading, to confirm): a notification is sent when an item goes to Done and its own parent is an EPIC or it has no parent. So a story notifies once, when the story itself goes to Done; its child tasks and sub-tasks never notify; a standalone task directly under an epic notifies, because it is the whole piece of work. "Has children" alone is not used as the test, because every task sits under an epic and a standalone task has no children. Combined with the earlier filter: only when an agent user makes the change.
+
+Open: whether a standalone task directly under an epic should notify (proposed: yes), and whether an EPIC going to Done should.
+
+### Follow-up: "And those that were completed by agents, not by humans" (2026-11-13 23:41, owner decision)
+
+Decided by the owner: the notification is sent only when an agent completes the item, never when a human does. This confirms the filter proposed above (the status change to Done is made by a user marked `isAgent`, which includes the MCP connector bot). Both conditions must hold: parent item, and completed by an agent.
+
+### Task created: TSK-597 (2026-11-13 23:50)
+
+The Taskosaur task is written from the code (`master` at `22ad34c`). Facts found: a user's status change goes through two places only, `TasksService.update` (all single-task routes, including the MCP `complete_task`) and `TasksService.bulkUpdateTasksStatus`; both already call `agentDispatch.onStatusChanged` right after the change, and the new hook goes beside that call with the acting user's id. Automation rules change status with no acting user, so they are out of scope. Per-user encrypted settings already exist (`Settings` model, `POST /settings`), so the device id needs no new endpoint or migration.
+
+Choices made by the assistant in the task, not confirmed by the owner: recipients are the human organization members with a saved device id; the id is entered on the profile settings page; the message is the key, " done: " and the title, cut to 40 characters; an EPIC completed by an agent also notifies.
+
+## Q: Do we need to install Go and a C compiler? (2026-11-13 23:50, during reference run 2)
+
+Go: no, it is installed. The coder for factory task T-0013 ran `go test` and `go build` in its worktree, and only reported that `-race` cannot build.
+
+C compiler: not needed for the run, useful afterwards. `go test -race` needs cgo and therefore gcc; without it coders run the Go tests without the race detector locally, and CI runs the race detector for them. The first run had the same gap (a coder reported "no -race run (no cgo)"), so installing gcc now would change the conditions mid-run. Recommended: leave it for this run, then install with `sudo apt install gcc` (needs the owner's password). Not checked: whether CI's race job would have caught something earlier if run locally.
+
+Seen in the same screenshots, all normal: "No such tool: bash" (the model wrote the tool name in lower case and retried); the worker guard blocking inline Python that names the CLI (the coder moved its edit script to a file); the coder fixing the `goldenEnv` compile error in its own PR (the same pre-existing break the first run started with). Checked at 23:33: the coder works in `~/factory/worktrees/G-002-T-0013`, whose origin is `hivemill-ref`; the installed factory checkout is clean. Planning (T-0012) took about 4 minutes and produced four coder tasks, T-0013 to T-0016; 11 messages since the start.

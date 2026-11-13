@@ -1,59 +1,57 @@
-# 40. Handover: workflow redesign, state on 2026-11-13 22:18
+# 40. Handover: workflow redesign, state on 2026-11-13 23:30
 
-Written so a new session can continue without the old conversation. Read this first, then file 38 (design) and file 39 (reference run).
+Written so a new session can continue without the old conversation. Read this first, then file 39 (reference run) and file 38 (design).
 
-## Where things stand
+## Reference run 2 (TSR task HM-5, runbook in file 39)
 
-### Reference run 2 (TSR task HM-5, runbook in file 39)
+Everything is set up; the run has **not started**. It starts when the owner pastes the prompt (HM-5, word for word) into the boss pane.
 
-| Step | State |
+| Item | State |
 |---|---|
-| Seven automation switches on | done by the owner at 21:58, confirmed in the database |
-| Reference repository | `ndovgaluk/hivemill-ref`, public, `main` = commit `8d616f6` (before G-001); local clone `~/src/hivemill-ref` with only `main` |
-| CI on its `main` | still running at 22:18: push run 43414268162 and a manual run 43414256574. `go vet` fails in both. `unittest-shard (9)` failed in the manual run; the push run had not reached it |
-| Factory prepared (`worktree_reuse 0`, `factory clean`, project re-pointed) | **not done** |
-| Boss and director restarted fresh | **not done** |
-| Prompt pasted to the boss | **not done** (the owner does this) |
+| Seven automation switches | on since 21:58 |
+| Reference repository | `ndovgaluk/hivemill-ref`, public, `main` = commit `8d616f6` (before G-001); clone `~/src/hivemill-ref`, only `main` |
+| CI on its `main` | all green except `go` (`not enough arguments in call to goldenEnv`); the summary job `unittest` fails only because of it. Same break the first run started with. It must stay: do not fix or push anything to `hivemill-ref` |
+| Factory | `worktree_reuse` 0; project `hivemill` → `~/src/hivemill-ref`, GitHub `ndovgaluk/hivemill-ref`; boss and director relaunched fresh at 22:52 |
+| `factory clean` | not run on purpose (pool empty; G-001's eight worktrees kept) |
+| At 23:15 | no new goal in the database yet |
 
-What to decide when CI finishes:
+### When the owner says the goal is done (or asks for status)
 
-- The baseline was already red when G-001 started: the same commit's test run failed upstream, and the lead reported "main's Go tests do not compile" in the first run; the first factory task fixed it. So a red `go` job is the original starting condition.
-- `unittest-shard (9)` must be checked: if it fails in both runs, read its log (`gh run view --repo ndovgaluk/hivemill-ref --job <id> --log-failed`) and decide whether it fails because the repository is a different one (then the merge gate could never pass and the setup needs a fix) or for the same reason as the first run.
-- If only original failures remain: run step 2 of file 39, then step 4, then tell the owner to paste the prompt.
+1. Read the state read-only from `~/factory/db/factory.db` (goal, tasks, messages, verdicts, events, agents), as for G-001. From Windows run a script file: `wsl -d Ubuntu -u dell -- bash /mnt/c/.../script.sh`.
+2. Measure the run the same way as the first (file 37, sections 1 and 2): wall time, messages by sender and recipient, sessions started, verdicts, spec updates, tokens and cost per role from the session transcripts under `~/.claude/projects/-home-dell-factory*`, size of the merged code in `hivemill-ref`. Compare with the table in HM-5. Check quality too: the success criteria, and whether the isolation hole the first run found was handled.
+3. Point the factory back, as the owner (no agent identity): `factory project update hivemill --repo ~/factory --gh ndovgaluk/hivemill` and `factory config worktree_reuse 1`. The switches stay as the owner decides.
+4. Write the result into a new knowledge file and a comment on HM-5; message the owner in Taskosaur; the owner asked for a WirePusher notification as well when their attention is needed (the `wire` parameter of the Taskosaur skill).
 
-The owner's go-ahead covers creating the repository and re-pointing the project ("Go ahead, create what you need").
+Not verified: the mechanical merger's runner is not installed as a systemd unit; `red_main_freeze` and `judge_wait_main_run` are 0. The database still holds G-001's plan and messages (possible contamination).
 
-### Taskosaur tasks, with an agent
+## Taskosaur side
 
-TSK-592 → TSK-593 and TSK-594 → TSK-591; TSK-595 independent. Story TSK-590 holds the contract. All were written from the Taskosaur code (master at 84b5450).
+TSK-590 (story), TSK-592, TSK-593, TSK-594, TSK-591, TSK-595 are Done and committed in the Taskosaur repository by another agent (not pushed). `set_agent_check` is live in the MCP server. Not done: the Playwright spec `agent-check-marks` was written but not run; no task yet for showing estimates in the web app.
 
-### Hivemill design (TSR story DVDG-565, file 38)
+## Hivemill design (TSR story DVDG-565, file 38)
 
-Decided by the owner: three workflows chosen by size and complexity; their contents; limits by convergence (5 fix rounds, architect after 2 on the same kind of finding); one manager-level agent user for Taskosaur; "enriched" = description, acceptance criteria and e2e tests written; one PR per story; overlapping stories in sequence; merged = Done; Taskosaur task is the design record; estimate time and cost before execution; extend beside upstream.
+Decided by the owner: three workflows chosen by size and complexity, and their contents; limits by convergence; one manager-level agent user in Taskosaur; "enriched" = description, acceptance criteria and e2e tests written; one PR per story; overlapping stories in sequence; merged = Done; the Taskosaur task is the design record; estimate time and cost before execution; extend beside upstream; no task written without reading the code.
 
 Open for the owner:
 
-1. **Go or Python for the workflow engine.** Upstream requires Go for all new code since 2026-11-11 and forbids new Python files. Recommended: Go.
-2. Proposals not yet confirmed: a rejected child is fixed after the current child; how the boss names a workflow; a Taskosaur story is created first for a goal given as text; which roles may call which `factory tsr` command.
+1. Go or Python for the workflow engine (upstream requires Go for new code since 2026-11-11; recommended: Go).
+2. Four proposals not yet confirmed (file 38, section 11, rows 4 to 7).
 
-Not written yet: the Hivemill build tasks. Before writing them, read in full: `dispatch_tick`, `review_rerun_tick`, `coder_ci_resume_tick`, `cmd_up`, and how a factory task maps to a PR (candidate: one Taskosaur story = one factory task = one PR). Rule: no task without reading the code.
+Not written: the Hivemill build tasks. Read first, in full: `dispatch_tick`, `review_rerun_tick`, `coder_ci_resume_tick`, `cmd_up`, and how a factory task maps to a PR. The second reference run will show how much the existing switches already give; write the tasks after it.
 
-Also not written: a Taskosaur task to show estimates and actuals in the web app (TSK-595 covers storage, API and MCP only).
+## Working clone (`~/src/hivemill`, branch `hm-1-settings-page`)
 
-## Uncommitted work in the working clone (branch `hm-1-settings-page`)
+- Committed, not pushed (9 commits ahead of its remote): HM-7 `1731401`, HM-8 `cce0124`, notes `707e583`. HM-7, HM-8 and HM-4 are Done.
+- Uncommitted: `docs/knowledgebase/00-session-log.md` and this file.
+- The branch is 33 commits behind the installed `main`.
 
-- HM-7 (Automation group on the Settings page, In Review): `web/views/settings.py`, `web/server.py`, `tests/test_web_settings.py`, `docs/web-ui.md`.
-- Knowledge files: `00-session-log.md`, `38-workflows-design.md`, `README.md`, new `39-…`, this file.
-- `web/components.py` and `tests/test_web_detail.py` are changed by another session; do not commit them without asking.
-- The branch is 6 commits ahead of its remote and 33 behind the installed `main`.
+## Known problems
 
-## Known problems to fix
-
-- Commit `e623cab` edits upstream's `roles/coder.md` in place and shortens existing wording (against planning rule P8 and the "extend beside upstream" rule). It also blocks `/hm deploy`: the installed `main` changed the same lines. Fix: restore the three phrases and put the pointer to `worktree-postinit-rules.md` into a separate skill.
-- `/hm deploy` (new): only `check` was run. `apply` and `revert` are untested.
-- `/hm master-local-deploy`: only `check` was run.
-- The mechanical merger's runner (a systemd unit `factory-mech-merge` named in its docs) is not installed; whether merging without a judge works here is unknown.
-- The four factory lessons from the G-001 analysis (file 31) are still not recorded.
+- Commit `e623cab` edits upstream's `roles/coder.md` in place (against planning rule P8 and "extend beside upstream") and blocks `/hm deploy`. Fix: restore the three phrases, put the pointer to `worktree-postinit-rules.md` into a separate skill.
+- `/hm deploy` and `/hm master-local-deploy`: only `check` was run.
+- The fork's `main` is red in CI since the morning merges; another agent was asked to fix it. Its fix was not found on the fork, in the working clone or in the installed factory at 23:20.
+- The four factory lessons from the G-001 analysis (file 31) are not recorded.
+- Commit links on HM tasks point at the Taskosaur repository (the Dev project's repository URL), so they do not open.
 
 ## Where to look
 
@@ -61,7 +59,7 @@ Also not written: a Taskosaur task to show estimates and actuals in the web app 
 |---|---|
 | Session log, one line per turn | `00-session-log.md` |
 | G-001 measured, lean flow proposal | `37-g-001-full-analysis-and-lean-flow.md` |
-| Consolidated design, decisions, code findings, Go policy | `38-workflows-design.md` |
+| Design, decisions, code findings, Go policy, estimation | `38-workflows-design.md` |
 | Reference run 2 runbook and the boss prompt | `39-reference-run-with-automation-switches.md` |
 | Draft workflow and agent definitions | `workflows/` at the repository root |
 | Reference goal, prompt word for word | TSR task HM-5 |
