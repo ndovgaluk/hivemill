@@ -89,6 +89,7 @@ var DefaultConfig = []ConfigDefault{
 	{"serve_bind", ""},
 	{"serve_port", "8765"},
 	{"serve_hostnames", ""},
+	{"serve_show_text", "0"},
 	{"worktree_reuse", "0"},
 	{"worktree_pool_max", "2"},
 	{"task_clones", "0"},

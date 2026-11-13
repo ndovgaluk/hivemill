@@ -233,6 +233,7 @@ INSERT INTO "config"("key","value") VALUES('worker_gh_repos','');
 INSERT INTO "config"("key","value") VALUES('serve_bind','');
 INSERT INTO "config"("key","value") VALUES('serve_port','8765');
 INSERT INTO "config"("key","value") VALUES('serve_hostnames','');
+INSERT INTO "config"("key","value") VALUES('serve_show_text','0');
 INSERT INTO "config"("key","value") VALUES('worktree_reuse','0');
 INSERT INTO "config"("key","value") VALUES('worktree_pool_max','2');
 INSERT INTO "config"("key","value") VALUES('task_clones','0');
