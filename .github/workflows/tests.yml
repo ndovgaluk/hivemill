@@ -81,7 +81,7 @@ jobs:
   go:
     name: go
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 20   # was 10: the job took 9 min 45 s on main at d54ebae and was cancelled at 10 on the next run (HM-9)
     env:
       GOTOOLCHAIN: local
     defaults:

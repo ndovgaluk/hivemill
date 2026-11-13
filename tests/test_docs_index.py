@@ -6,6 +6,7 @@ from collections import Counter
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DOCS = os.path.join(ROOT, "docs")
 INDEX = os.path.join(DOCS, "README.md")
+UNINDEXED = ("demo", "knowledgebase")   # folders of docs/ that docs/README.md does not list page by page
 LINK = re.compile(r"\]\(([^)#\s]+)")
 
 
@@ -13,7 +14,8 @@ def doc_pages():
     pages = []
     for base, dirs, files in os.walk(DOCS):
         rel = os.path.relpath(base, DOCS)
-        if rel == "demo" or rel.startswith("demo" + os.sep):
+        # demo/ holds recordings; knowledgebase/ is the fork owner's own notes with its own index (docs/knowledgebase/README.md)
+        if rel.split(os.sep)[0] in UNINDEXED:
             dirs[:] = []
             continue
         for f in files:
