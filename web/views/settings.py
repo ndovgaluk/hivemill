@@ -27,10 +27,22 @@ VALUE_MAX = 64
 class Kind:
     SWITCH = "switch"    # "0" / "1"
     INT = "int"
+    CHOICE = "choice"    # one of Setting.options; the CLI does not validate these keys, so the page must
 
 
 ON, OFF = "1", "0"
-Setting = namedtuple("Setting", "key label help kind lo hi")
+Setting = namedtuple("Setting", "key label help kind lo hi options", defaults=(None,))
+
+
+class Label:
+    OFF = "Off"
+    ON = "On"
+    SHADOW = "Shadow (events only)"
+
+
+# option values are the ones DEFAULT_CONFIG and bin/flags.json document for each key
+OFF_ON = (("off", Label.OFF), ("on", Label.ON))
+OFF_SHADOW_ON = (("off", Label.OFF), ("shadow", Label.SHADOW), ("on", Label.ON))
 GROUPS = (
     ("Worktrees", "How coder tasks get their git worktree. Details: docs/worktree-reuse.md.", (
         Setting("worktree_reuse", "Reuse coder worktrees",
@@ -40,8 +52,47 @@ GROUPS = (
         Setting("worktree_pool_max", "Free worktrees kept per project",
                 "How many unused worktrees factory clean keeps per project while reuse is on.", Kind.INT, 0, 50),
     )),
+    ("Automation", "Steps the tick can do itself instead of a lead or a judge agent. All are off by default. Each "
+                   "applies from the next tick; Off is the rollback.", (
+        Setting("lead_parking", "Lead parking",
+                "On: a lead with nothing to do may park (factory park); its pane is closed and unread mail wakes a "
+                "fresh lead. Off: leads stay live. Details: docs/lead-parking.md.", Kind.SWITCH, None, None),
+        Setting("lead_less_dispatch", "Start workers without the lead",
+                "On: the tick starts workers for ready tasks of a parked team and only informs the lead. Shadow: "
+                "records what it would start. Needs lead parking. Details: docs/lead-less-dispatch.md.",
+                Kind.CHOICE, None, None, ((OFF, Label.OFF), ("shadow", Label.SHADOW), (ON, Label.ON))),
+        Setting("review_autospawn", "Start review when a PR opens",
+                "On: the tick starts the reviewer and QA when a coder's PR opens, and again on a new green head. "
+                "Details: docs/review-autospawn.md.", Kind.CHOICE, None, None, OFF_ON),
+        Setting("coder_ci_handoff", "Coder hands off at PR open",
+                "The coder finishes at PR open without waiting for CI; the tick starts review at green and, on a red "
+                "head, restarts the coder: Resume continues its session, Fresh starts a new one. Works only with "
+                "review autospawn on and the PR check required. Details: docs/prcheck.md.", Kind.CHOICE, None, None,
+                (("off", Label.OFF), ("resume", "Resume the same session"), ("fresh", "Fresh session"))),
+        Setting("prcheck_required", "PR check required before done",
+                "On: a coder's factory done on a task with a PR needs a passing factory prcheck on its head. The "
+                "coder hand-off above needs it. Details: docs/prcheck.md.", Kind.SWITCH, None, None),
+        Setting("risk_tiers", "Risk tiers",
+                "On: a PR's risk tier (T0 to T3) is computed. The mechanical merger and the combined reviewer and QA "
+                "agent for low tiers need it.", Kind.CHOICE, None, None, OFF_ON),
+        Setting("mech_merge", "Merge without a judge agent",
+                "On: the tick merges tier T0 to T2 PRs through the judge's own gate, with no judge agent. Shadow: "
+                "runs the gate and records what it would do. Needs risk tiers. Details: docs/mech-merge.md.",
+                Kind.CHOICE, None, None, OFF_SHADOW_ON),
+    )),
 )
-EDITABLE = frozenset(s.key for _, _, items in GROUPS for s in items)
+SETTINGS = {s.key: s for _, _, items in GROUPS for s in items}
+EDITABLE = frozenset(SETTINGS)
+
+
+def valid_value(key, value):
+    """True when `value` is one the page offers for `key`. An integer's range stays with the CLI, which names it."""
+    s = SETTINGS[key]
+    if s.kind == Kind.CHOICE:
+        return value in dict(s.options)
+    if s.kind == Kind.SWITCH:
+        return value in (ON, OFF)
+    return value.isascii() and value.isdigit()
 
 # query parameters of the redirect after a change (server: Handler._settings_post)
 Q_SAVED, Q_ERROR, Q_MSG = "saved", "error", "msg"
@@ -65,7 +116,9 @@ def apply_change(factory_home, key, value, env=None):
 
 def _shown(s, value):
     if s.kind == Kind.SWITCH:
-        return "On" if value == ON else "Off" if value == OFF else value
+        return Label.ON if value == ON else Label.OFF if value == OFF else value
+    if s.kind == Kind.CHOICE:
+        return dict(s.options).get(value, value)
     return value
 
 
@@ -80,6 +133,7 @@ def data(ctx):
             default = str(dflt.get(s.key, ""))
             value = str(have.get(s.key, default))
             rows.append({"key": s.key, "label": s.label, "help": s.help, "kind": s.kind, "min": s.lo, "max": s.hi,
+                         "options": [{"value": v, "label": lab} for v, lab in s.options or ()],
                          "value": value, "default": default, "is_default": s.key not in have or value == default})
         groups.append({"title": title, "note": note, "settings": rows})
     q = ctx.query or {}
@@ -96,12 +150,15 @@ def _control(s):
         return el("select", el("option", "On", value=ON, selected=s["value"] == ON),
                   el("option", "Off", value=OFF, selected=s["value"] != ON),
                   name="value", class_="set-input", aria_label=s["label"])
+    if s["kind"] == Kind.CHOICE:
+        return el("select", *[el("option", o["label"], value=o["value"], selected=s["value"] == o["value"])
+                              for o in s["options"]], name="value", class_="set-input", aria_label=s["label"])
     return el("input", type="number", name="value", value=s["value"], min=str(s["min"]), max=str(s["max"]), step="1",
               required=True, class_="set-input", aria_label=s["label"])
 
 
 def _row(ctx, d, s):
-    current = next(x for _, _, items in GROUPS for x in items if x.key == s["key"])
+    current = SETTINGS[s["key"]]
     value = el("span", _shown(current, s["value"]), class_="set-value")
     dflt = el("span", "default" if s["is_default"] else f"default: {_shown(current, s['default'])}", class_="set-default")
     if d["editable"]:
@@ -110,7 +167,12 @@ def _row(ctx, d, s):
                  el("button", "Save", type="submit", class_="set-btn"),
                  method="post", action="/settings", class_="set-form")
     else:
-        example = (OFF if s["value"] == ON else ON) if s["kind"] == Kind.SWITCH else s["value"]
+        if s["kind"] == Kind.SWITCH:
+            example = OFF if s["value"] == ON else ON
+        elif s["kind"] == Kind.CHOICE:   # the first value it is not set to
+            example = next(o["value"] for o in s["options"] if o["value"] != s["value"])
+        else:
+            example = s["value"]
         ctl = el("code", f"factory config {s['key']} {example}", class_="set-cmd")
     note = None
     r = d["result"]

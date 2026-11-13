@@ -274,7 +274,7 @@ class Handler(BaseHTTPRequestHandler):
         key, value = form.get("key", ""), form.get("value", "").strip()
         if key not in settings_view.EDITABLE:
             return self._error(400, "not an editable setting")
-        if not value or len(value) > settings_view.VALUE_MAX:
+        if not value or len(value) > settings_view.VALUE_MAX or not settings_view.valid_value(key, value):
             return self._error(400, "bad value")
         ok, msg = settings_view.apply_change(app.factory_home, key, value, env=app.config_env)
         target = (f"{SETTINGS_PATH}?{settings_view.Q_SAVED}={quote(key)}" if ok else

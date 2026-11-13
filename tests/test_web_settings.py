@@ -24,6 +24,10 @@ from web import server  # noqa: E402
 from web.views import settings  # noqa: E402
 
 KEY = "worktree_reuse"
+MECH_MERGE = "mech_merge"
+REVIEW_AUTOSPAWN = "review_autospawn"
+AUTOMATION_KEYS = ("lead_parking", "lead_less_dispatch", REVIEW_AUTOSPAWN, "coder_ci_handoff", "prcheck_required",
+                   "risk_tiers", MECH_MERGE)
 TOKEN_RE = re.compile(rb'name="token" value="([^"]+)"')
 
 
@@ -79,7 +83,7 @@ class SettingsPage(ServerCase):
         body = self.get("/settings")[2]
         self.assertNotIn(b"<form", body)
         self.assertIn(f"factory config {KEY} 1".encode(), body)
-        self.assertFalse(server.is_loopback("192.168.1.10"))
+        self.assertFalse(server.is_loopback("203.0.113.10"))   # a documentation address: the scrub scan refuses LAN ones
         self.assertTrue(server.is_loopback("127.0.0.1"))
 
     def test_api_json_never_carries_the_form_token(self):
@@ -124,6 +128,53 @@ class SettingsPage(ServerCase):
                 st, h, _ = self.post("/settings", {"key": KEY, "value": "1"}, token=tok, method=method)
                 self.assertEqual((st, h["Allow"]), (405, "GET, HEAD"))
         self.assertEqual(self.post("/goals", {"key": KEY, "value": "1"}, token=tok)[0], 405)
+
+    # ── HM-7: the Automation group; the CLI does not validate these keys, so the page offers and accepts fixed values ──
+
+    def test_automation_group_lists_the_six_switches_with_their_options(self):
+        text = self.get("/settings")[2].decode()
+        self.assertLess(text.index("Worktrees"), text.index("Automation"))
+        for key in AUTOMATION_KEYS:
+            with self.subTest(key):
+                self.assertIn(f'id="set-{key}"', text)
+        row = text[text.index(f'id="set-{MECH_MERGE}"'):]
+        row = row[:row.index("</form>")]
+        self.assertEqual(re.findall(r'<option[^>]*value="([^"]*)"', row), [v for v, _ in settings.OFF_SHADOW_ON])
+
+    def test_lan_page_shows_commands_for_the_automation_group(self):
+        self.httpd.app.loopback = False
+        self.httpd.app.defaults = {**(self.httpd.app.defaults or {}), MECH_MERGE: "off"}
+        body = self.get("/settings")[2].decode()
+        self.assertNotIn("<form", body)
+        self.assertIn(f"factory config {MECH_MERGE} shadow", body)   # the first value it is not set to
+
+    def test_api_json_lists_the_options(self):
+        import json
+        groups = json.loads(self.get("/api/settings.json")[2])["groups"]
+        rows = {s["key"]: s for g in groups for s in g["settings"]}
+        self.assertEqual(set(AUTOMATION_KEYS) - set(rows), set())
+        self.assertEqual([o["value"] for o in rows[MECH_MERGE]["options"]], [v for v, _ in settings.OFF_SHADOW_ON])
+
+    def test_rejects_a_value_the_page_does_not_offer_and_runs_nothing(self):
+        calls = []
+        orig = settings.apply_change
+        settings.apply_change = lambda *a, **k: calls.append(a) or (True, "")
+        self.addCleanup(setattr, settings, "apply_change", orig)
+        tok = self.token()
+        for key, value in ((MECH_MERGE, "maybe"), ("lead_less_dispatch", "on"), ("lead_parking", "2"),
+                           (KEY, "2"), ("worktree_pool_max", "abc")):
+            with self.subTest(key=key, value=value):
+                self.assertEqual(self.post("/settings", {"key": key, "value": value}, token=tok)[0], 400)
+        self.assertEqual(calls, [])
+
+    def test_valid_value_accepts_exactly_what_the_page_offers(self):
+        for key, s in settings.SETTINGS.items():
+            if s.kind == settings.Kind.CHOICE:
+                for value, _ in s.options:
+                    with self.subTest(key=key, value=value):
+                        self.assertTrue(settings.valid_value(key, value))
+        self.assertTrue(settings.valid_value("worktree_pool_max", "999"))   # the range stays with the CLI
+        self.assertFalse(settings.valid_value("worktree_pool_max", "-1"))
 
     def test_nothing_runs_when_a_check_fails(self):
         calls = []
@@ -171,6 +222,17 @@ class SettingsWrite(FactoryTestCase):
         body = self.page(h["Location"].split("#")[0])[2].decode()
         self.assertIn("Saved.", body)
         self.assertRegex(body, r'class="set-value">On<')
+
+    def test_automation_choice_is_written_by_the_cli_and_shown_by_its_label(self):
+        st, h, _ = self.submit(REVIEW_AUTOSPAWN, "on")
+        self.assertEqual(st, 303, h)
+        self.assertEqual(parse_qs(urlsplit(h["Location"]).query), {settings.Q_SAVED: [REVIEW_AUTOSPAWN]})
+        self.assertEqual(self.value(REVIEW_AUTOSPAWN), "on")
+        ev = self.env.sql("SELECT action, detail FROM events WHERE entity='config' AND entity_id=?", (REVIEW_AUTOSPAWN,))
+        self.assertEqual([(r["action"], r["detail"]) for r in ev], [("set", "on")])
+        body = self.page(h["Location"].split("#")[0])[2].decode()
+        row = body[body.index(f'id="set-{REVIEW_AUTOSPAWN}"'):]
+        self.assertRegex(row[:row.index("</form>")], r'class="set-value">On<')
 
     def test_value_the_cli_refuses_is_reported_and_not_written(self):
         before = self.value("worktree_pool_max")
