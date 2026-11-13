@@ -55,7 +55,7 @@ function DiagramInner({ data, onOpenFindings = noop, onExpandLanes = noop, onOpe
       return {
         id: n.id,
         type: BOX,
-        position: POSITIONS[n.id as NodeId],
+        position: POSITIONS[n.id as NodeId]!,
         width: NODE_W,
         height: NODE_H,
         draggable: false,

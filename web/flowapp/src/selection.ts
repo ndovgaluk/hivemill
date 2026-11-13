@@ -2,6 +2,7 @@
 import { createContext, createElement, useContext, useEffect, useMemo, useReducer, useRef, useState, type ReactNode } from "react";
 
 import { Lens, SelectionKind, TimelineTab, UrlParam, type Dir, type EdgeId, type LaneId, type NodeId } from "./constants";
+import { groupOf, members } from "./groups";
 import { parseSel, selParam } from "./reference/reference";
 import type { FlowData, FlowEvent } from "./types";
 
@@ -89,14 +90,17 @@ export function derive(data: FlowData | null, selection: Selection | null): Hot 
   if (selection.kind === SelectionKind.Node) {
     const id = selection.id as NodeId;
     hot.nodes.add(id);
-    data.edges.filter((e) => e.from === id || e.to.includes(id)).forEach((e) => hot.edges.add(e.id));
-    data.events.filter((e) => e.from_node === id || e.to_node === id).forEach((e) => hot.events.add(e.id));
+    // HM-17: a box also owns the arrows and steps addressed to its group (e.g. "rework" leaves the Review gate frame)
+    const group = groupOf(data, id);
+    const mine = (n: string | null | undefined) => n === id || (group !== null && n === group);
+    data.edges.filter((e) => mine(e.from) || e.to.some(mine)).forEach((e) => hot.edges.add(e.id));
+    data.events.filter((e) => mine(e.from_node) || mine(e.to_node)).forEach((e) => hot.events.add(e.id));
     lanesOf(hot.nodes);
   } else if (selection.kind === SelectionKind.Edge) {
     const edge = data.edges.find((e) => e.id === selection.id);
     if (!edge) return hot;
     hot.edges.add(edge.id);
-    [edge.from, ...edge.to].forEach((n) => hot.nodes.add(n));
+    [edge.from, ...edge.to].flatMap((n) => members(data, n)).forEach((n) => hot.nodes.add(n as NodeId));
     data.events.filter((e) => e.edge === edge.id).forEach((e) => hot.events.add(e.id));
     lanesOf(hot.nodes);
   } else {
@@ -104,8 +108,7 @@ export function derive(data: FlowData | null, selection: Selection | null): Hot 
     if (!ev) return hot;
     hot.events.add(ev.id);
     if (ev.edge) hot.edges.add(ev.edge);
-    if (ev.from_node) hot.nodes.add(ev.from_node);
-    if (ev.to_node) hot.nodes.add(ev.to_node);
+    for (const n of [ev.from_node, ev.to_node]) if (n) members(data, n).forEach((m) => hot.nodes.add(m as NodeId));
     if (ev.lane) hot.lanes.add(ev.lane);
     hot.dir = ev.dir;
     hot.cursor = ev.t_s;

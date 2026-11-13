@@ -14,7 +14,9 @@ export const NodeId = {
   System: "system",
   Pm: "pm",
   Coders: "coders",
-  Gate: "gate",
+  Reviewer: "reviewer",   // HM-17: the review gate is two boxes …
+  Qa: "qa",
+  Gate: "gate",           // … and this is the id of their group (the dashed frame), not a box
   Judge: "judge",
   Main: "main",
   Wait: "wait",
@@ -44,6 +46,7 @@ export const LaneId = {
   Reviewer: "reviewer",
   Qa: "qa",
   Judge: "judge",
+  Wait: "wait",
 } as const;
 export type LaneId = (typeof LaneId)[keyof typeof LaneId];
 
@@ -87,7 +90,7 @@ export const RefPrefix = { Box: "box:", Arrow: "arrow:" } as const;
 /** Keyboard shortcut on the focused diagram: copy the reference of the current selection. */
 export const COPY_KEY = "c";
 
-export const DialogKind ={ Instructions: "instructions", Findings: "findings", Events: "events" } as const;
+export const DialogKind ={ Instructions: "instructions", Findings: "findings", Events: "events", Rejections: "rejections" } as const;
 export type DialogKind = (typeof DialogKind)[keyof typeof DialogKind];
 
 export const LoadStatus = { Loading: "loading", Ready: "ready", Error: "error" } as const;

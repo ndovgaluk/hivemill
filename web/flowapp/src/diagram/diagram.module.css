@@ -13,7 +13,7 @@
   border-radius: var(--r-sm); padding: 2px 8px; cursor: pointer;
 }
 .group button[aria-pressed="true"] { background: var(--accent); color: var(--surface-0); border-color: var(--accent); }
-.canvas { height: 340px; position: relative; }   /* fixed: the grid cell no longer stretches, so 100% would be 0 */
+.canvas { height: 416px; position: relative; }   /* layout CANVAS_H 376 plus room for the rework label (HM-17) */   /* fixed: the grid cell no longer stretches, so 100% would be 0 */
 
 .box { position: relative; width: 140px; height: 64px; }
 .box[data-dim="true"] { opacity: 0.35; }
@@ -59,6 +59,15 @@
 }
 
 .edges { position: absolute; left: 0; top: 0; overflow: visible; pointer-events: none; }
+/* HM-17: the dashed frame of a group (Review gate around Reviewer and QA), its name on the top border */
+.frame {
+  position: absolute; box-sizing: border-box; pointer-events: none;
+  border: 1px dashed var(--border); border-radius: var(--r-md);
+}
+.frameLabel {
+  position: absolute; top: 0; left: 12px; transform: translateY(-50%); padding: 0 6px;
+  font-size: 11px; line-height: 14px; font-weight: 600; color: var(--text-2); background: var(--surface-1); white-space: nowrap;
+}
 .head path { fill: var(--text-3); stroke: none; }
 .head_warn path { fill: var(--warning-solid); }
 .head_bad path { fill: var(--danger-solid); }

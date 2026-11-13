@@ -1,20 +1,22 @@
 // Lanes tab: one lane per role with work/wait/fail spans and event marks; expands to one row per agent.
-import { useEffect, useRef } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
-import { SelectionKind, SpanKind } from "../constants";
-import { MESSAGE_ONLY, MSGS_ONLY, NO_SESSIONS } from "../diagram/BoxNode";
+import { NodeId, SelectionKind, SpanKind } from "../constants";
+import { MESSAGE_ONLY, MSGS_ONLY, NO_SESSIONS, NOT_WAITING } from "../diagram/BoxNode";
 import { fmtCost, fmtDuration } from "../format";
 import { useSelection } from "../selection";
 import type { FlowData, FlowEvent, Lane, Span } from "../types";
 import { axisLength, clock, markName, pct, tickLabel, ticks } from "./time";
+import { QuickInfo } from "./QuickInfo";
 import styles from "./timeline.module.css";
 
 
-function spanWork(spans: Span[]): number | null {
+/** Summed length of the work spans; with `waits`, of the wait spans instead (the Waiting lane, HM-18). */
+function spanWork(spans: Span[], waits = false): number | null {
   let sum = 0;
   let any = false;
   for (const s of spans)
-    if (s.kind !== SpanKind.Wait && s.start_s !== null && s.end_s !== null) {
+    if ((s.kind === SpanKind.Wait) === waits && s.start_s !== null && s.end_s !== null) {
       sum += s.end_s - s.start_s;
       any = true;
     }
@@ -22,8 +24,9 @@ function spanWork(spans: Span[]): number | null {
 }
 
 function laneTotal(data: FlowData, l: Lane): string {
-  if (!l.rows.length) return MESSAGE_ONLY.has(l.node) ? MSGS_ONLY : NO_SESSIONS;
-  const work = fmtDuration(spanWork(l.rows.flatMap((r) => r.spans)));
+  const waits = l.node === NodeId.Wait;
+  if (!l.rows.length) return waits ? NOT_WAITING : MESSAGE_ONLY.has(l.node) ? MSGS_ONLY : NO_SESSIONS;
+  const work = fmtDuration(spanWork(l.rows.flatMap((r) => r.spans), waits));
   const cost = data.nodes.find((n) => n.id === l.node)?.cost ?? null;
   return cost === null ? work : `${work} · ${fmtCost(cost)}`;
 }
@@ -57,7 +60,11 @@ function Spans({ spans, total }: { spans: Span[]; total: number }) {
   );
 }
 
-function Marks({ events, total }: { events: FlowEvent[]; total: number }) {
+interface Info { id: string; x: number; y: number; mark: HTMLElement }
+
+function Marks({ events, total, onInfo, infoId }: {
+  events: FlowEvent[]; total: number; onInfo: (i: Info | null) => void; infoId: string | null;
+}) {
   const sel = useSelection();
   return (
     <>
@@ -67,7 +74,17 @@ function Marks({ events, total }: { events: FlowEvent[]; total: number }) {
           <button key={e.id} type="button" className={`${styles.mark} ${styles[e.kind] ?? ""} ${styles[e.severity] ?? ""}`}
                   style={{ left: `${pct(e.t_s!, total)}%` }} data-kind={e.kind} data-mark={e.id}
                   data-hot={sel.hot.events.has(e.id)} aria-pressed={on} aria-label={markName(e)} title={markName(e)}
-                  onClick={() => sel.select({ kind: SelectionKind.Event, id: e.id })} />
+                  onClick={(ev) => {
+                    // a selected mark with its Quick info open: the click clears both; otherwise it (re)opens it
+                    if (on && infoId === e.id) {
+                      sel.select({ kind: SelectionKind.Event, id: e.id });
+                      onInfo(null);
+                      return;
+                    }
+                    if (!on) sel.select({ kind: SelectionKind.Event, id: e.id });
+                    const r = ev.currentTarget.getBoundingClientRect();
+                    onInfo({ id: e.id, x: r.left + r.width / 2, y: r.bottom, mark: ev.currentTarget });
+                  }} />
         );
       })}
     </>
@@ -84,6 +101,28 @@ export function Lanes({ data, zoom, expanded, toggle }: {
   const total = axisLength(data);
   const ref = useRef<HTMLDivElement>(null);
   const selectedId = sel.selection?.kind === SelectionKind.Event ? sel.selection.id : null;
+  // HM-19: the Quick info popover of the last clicked mark; it closes when the selection moves elsewhere
+  const [info, setInfo] = useState<Info | null>(null);
+  const shown = info && info.id === selectedId ? info : null;
+  const infoEv = shown ? data.events.find((e) => e.id === shown.id) : undefined;
+  const closeInfo = useCallback(() => {
+    setInfo((cur) => {
+      cur?.mark.focus?.();
+      return null;
+    });
+  }, []);
+  // the popover is fixed: it follows its mark when the lanes or the page scroll (also the scroll into view below)
+  const following = shown !== null;
+  useEffect(() => {
+    if (!following) return;
+    const follow = () => setInfo((cur) => {
+      if (!cur) return cur;
+      const r = cur.mark.getBoundingClientRect();
+      return { ...cur, x: r.left + r.width / 2, y: r.bottom };
+    });
+    window.addEventListener("scroll", follow, true);
+    return () => window.removeEventListener("scroll", follow, true);
+  }, [following]);
 
   useEffect(() => {
     // an event selected anywhere: open its lane and bring its mark into view
@@ -95,6 +134,7 @@ export function Lanes({ data, zoom, expanded, toggle }: {
 
   return (
     <div className={styles.scroller} ref={ref}>
+      {shown && infoEv ? <QuickInfo data={data} ev={infoEv} at={shown} onClose={closeInfo} /> : null}
       <div className={styles.grid} data-zoom={zoom} style={{ width: `${zoom * 100}%` }}>
         {sel.hot.cursor !== null ? (
           <span className={styles.cursor} data-testid="flow-cursor" style={{ left: `calc(var(--label-w) + (100% - var(--label-w)) * ${pct(sel.hot.cursor, total) / 100})` }} />
@@ -122,7 +162,7 @@ export function Lanes({ data, zoom, expanded, toggle }: {
                 </button>
                 <div className={styles.track}>
                   <Spans spans={l.rows.flatMap((r) => r.spans)} total={total} />
-                  <Marks events={evs} total={total} />
+                  <Marks events={evs} total={total} onInfo={setInfo} infoId={shown?.id ?? null} />
                 </div>
               </div>
               {open
@@ -130,11 +170,12 @@ export function Lanes({ data, zoom, expanded, toggle }: {
                     <div key={r.name} className={`${styles.row} ${styles.sub}`} role="group" aria-label={r.name}>
                       <span className={`${styles.label} ${styles.sticky} ${styles.rowLabel}`} data-sticky="true">
                         <span>{r.name}</span>
-                        <span className={styles.total}>{fmtDuration(spanWork(r.spans))}</span>
+                        <span className={styles.total}>{fmtDuration(spanWork(r.spans, l.node === NodeId.Wait))}</span>
                       </span>
                       <div className={styles.track}>
                         <Spans spans={r.spans} total={total} />
-                        <Marks events={evs.filter((e) => e.row === r.name)} total={total} />
+                        <Marks events={evs.filter((e) => e.row === r.name)} total={total} onInfo={setInfo}
+                               infoId={shown?.id ?? null} />
                       </div>
                     </div>
                   ))

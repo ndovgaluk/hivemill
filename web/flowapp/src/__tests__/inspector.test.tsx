@@ -69,6 +69,19 @@ describe("summary bar", () => {
     expect(btn.getAttribute("aria-pressed")).toBe("true");
   });
 
+  it("rejections open their list when there are any, and are plain text at zero (HM-16)", () => {
+    const d = fresh();
+    d.totals.rejections = 2;
+    const onOpen = vi.fn();
+    const { unmount } = render(<SelectionProvider data={d}><SummaryBar data={d} onOpenRejections={onOpen} /></SelectionProvider>);
+    fireEvent.click(within(document.querySelector('[data-kpi="Rejections"]') as HTMLElement).getByRole("button"));
+    expect(onOpen).toHaveBeenCalledTimes(1);
+    unmount();
+    d.totals.rejections = 0;
+    render(<SelectionProvider data={d}><SummaryBar data={d} onOpenRejections={onOpen} /></SelectionProvider>);
+    expect(document.querySelector('[data-kpi="Rejections"] button')).toBeNull();
+  });
+
   it("longest wait is plain text when no arrow has a wait", () => {
     const d = fresh();
     for (const e of d.edges) e.wait_s = null;

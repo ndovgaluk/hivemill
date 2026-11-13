@@ -3,8 +3,10 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { EventKind, LaneId, NodeId, SelectionKind, Severity, SpanKind } from "../constants";
 import goalFixture from "../fixtures/goal.json";
+import { fmtDuration } from "../format";
 import { SelectionProvider, timeOrder, useSelection, type SelectionApi } from "../selection";
 import { COLLAPSE, EXPAND, SEQUENCE_HELP } from "../timeline/Sequence";
+import { colourInfo, KIND_INFO } from "../timeline/QuickInfo";
 import { markName } from "../timeline/time";
 import { Timeline } from "../timeline/Timeline";
 import type { FlowData } from "../types";
@@ -32,6 +34,41 @@ afterEach(() => {
 
 const withRows = (d: FlowData) => d.lanes.find((l) => l.rows.length > 0)!;
 
+describe("timeline: quick info on a mark (HM-19)", () => {
+  const firstOf = (d: FlowData, kind: EventKind) => d.events.find((e) => e.kind === kind && e.t_s !== null && e.lane)!;
+
+  it("a click on a mark selects it and explains each kind of mark", () => {
+    const d = fresh();
+    show(d);
+    for (const kind of [EventKind.Msg, EventKind.Status, EventKind.Verdict]) {
+      const e = firstOf(d, kind);
+      fireEvent.click(document.querySelector(`[data-mark="${e.id}"]`)!);
+      expect(api!.selection).toEqual({ kind: SelectionKind.Event, id: e.id });
+      const box = screen.getByTestId("flow-quick-info");
+      expect(within(box).getByText(KIND_INFO[kind].name)).toBeTruthy();
+      expect(box.textContent).toContain(KIND_INFO[kind].shape);
+      expect(box.textContent).toContain(colourInfo(e));
+      expect(box.textContent).toContain(e.title);
+    }
+  });
+
+  it("Esc and Close close it; selecting something else hides it", () => {
+    const d = fresh();
+    show(d);
+    const e = firstOf(d, EventKind.Msg);
+    const mark = () => document.querySelector(`[data-mark="${e.id}"]`)!;
+    fireEvent.click(mark());
+    fireEvent.keyDown(document.body, { key: "Escape" });
+    expect(screen.queryByTestId("flow-quick-info")).toBeNull();
+    fireEvent.click(mark());
+    fireEvent.click(within(screen.getByTestId("flow-quick-info")).getByRole("button", { name: "Close" }));
+    expect(screen.queryByTestId("flow-quick-info")).toBeNull();
+    fireEvent.click(mark());
+    act(() => api!.select({ kind: SelectionKind.Node, id: NodeId.Lead }));
+    expect(screen.queryByTestId("flow-quick-info")).toBeNull();
+  });
+});
+
 describe("timeline: lanes", () => {
   it("renders one lane per payload lane with its total", () => {
     const d = fresh();
@@ -40,6 +77,16 @@ describe("timeline: lanes", () => {
       expect(screen.getByTestId(`flow-lane-${l.id}`)).toBeTruthy();
       expect(screen.getByRole("button", { name: l.label })).toBeTruthy();
     }
+  });
+
+  it("the Waiting lane totals its wait spans instead of saying unknown (HM-18)", () => {
+    const d = fresh();
+    const lane = d.lanes.find((l) => l.id === LaneId.Wait)!;
+    lane.rows = [{ name: "no agent running", task_id: null, spans: [
+      { start_s: 60, end_s: 180, kind: SpanKind.Wait, note: null }, { start_s: 600, end_s: 660, kind: SpanKind.Wait, note: null }] }];
+    show(d);
+    const label = within(screen.getByTestId(`flow-lane-${LaneId.Wait}`)).getByRole("button", { name: lane.label });
+    expect(label.textContent).toContain(fmtDuration(180));
   });
 
   it("spans are placed by time", () => {

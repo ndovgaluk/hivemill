@@ -5,7 +5,7 @@ import { NodeId, SelectionKind } from "../constants";
 import goalFixture from "../fixtures/goal.json";
 import { HIDDEN_TEXT } from "../instructions/Body";
 import { Dialog } from "../instructions/Dialog";
-import { DialogsProvider, useDialogs, type DialogsApi } from "../instructions/Dialogs";
+import { DialogsProvider, REJECTIONS_TITLE, rejectionsOf, useDialogs, type DialogsApi } from "../instructions/Dialogs";
 import { SelectionProvider, timeOrder, useSelection, type SelectionApi } from "../selection";
 import type { FlowData } from "../types";
 
@@ -151,6 +151,25 @@ describe("instruction viewer", () => {
     );
     fireEvent.keyDown(document.body, { key: "Escape" });
     expect(closed).toEqual(["second"]);
+  });
+});
+
+describe("rejections dialog (HM-16)", () => {
+  it("lists every failing verdict, count equals totals.rejections, and shows the first one", () => {
+    const d = fresh();
+    const rej = rejectionsOf(d);
+    expect(rej.length).toBe(d.totals.rejections);
+    expect(rej.length).toBeGreaterThan(0);
+    show(d);
+    act(() => dialogs!.openRejections());
+    const dlg = screen.getByRole("dialog", { name: REJECTIONS_TITLE });
+    const rows = within(within(dlg).getByRole("list", { name: REJECTIONS_TITLE })).getAllByRole("button");
+    expect(rows.length).toBe(rej.length);
+    expect(within(dlg).getByText(`${rej.length} in time order`)).toBeTruthy();
+    expect(within(dlg).getByRole("heading", { level: 3, name: rej[0]!.title })).toBeTruthy();
+    fireEvent.click(rows[rows.length - 1]!);
+    expect(sel!.selection).toEqual({ kind: SelectionKind.Event, id: rej[rej.length - 1]!.id });
+    expect(screen.getByRole("dialog")).toBeTruthy();   // picking keeps it open
   });
 });
 

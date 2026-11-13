@@ -21,11 +21,22 @@ describe("selection", () => {
   it("selecting an edge marks both ends and its events", () => {
     const edge = data.edges.find((e) => e.id === EdgeId.Rework)!;
     const hot = derive(data, { kind: SelectionKind.Edge, id: edge.id });
-    expect(ids(hot.nodes)).toEqual([edge.from, ...edge.to].sort());
+    // the rework arrow leaves the Review gate frame: both of its boxes light up (HM-17)
+    expect(ids(hot.nodes)).toEqual([NodeId.Coders, NodeId.Qa, NodeId.Reviewer].sort());
     expect(ids(hot.edges)).toEqual([edge.id]);
     const want = data.events.filter((e) => e.edge === edge.id).map((e) => e.id);
     expect(want.length).toBeGreaterThan(0);
     expect(ids(hot.events)).toEqual(want.sort());
+  });
+
+  it("a box in a group owns the arrows that start or end on the group (HM-17)", () => {
+    for (const id of [NodeId.Reviewer, NodeId.Qa]) {
+      const hot = derive(data, { kind: SelectionKind.Node, id });
+      expect(hot.edges.has(EdgeId.Rework)).toBe(true);
+      expect(hot.edges.has(EdgeId.GateJudge)).toBe(true);
+      expect(hot.edges.has(EdgeId.CodersGate)).toBe(true);
+      expect(ids(hot.nodes)).toEqual([id]);
+    }
   });
 
   it("selecting an event marks its edge, direction and cursor", () => {
@@ -38,7 +49,7 @@ describe("selection", () => {
   });
 
   it("selecting the same thing twice clears the selection", () => {
-    const sel = { kind: SelectionKind.Node, id: NodeId.Gate };
+    const sel = { kind: SelectionKind.Node, id: NodeId.Reviewer };
     const once = reducer(initialState, { type: Act.Select, selection: sel });
     expect(once.selection).toEqual(sel);
     expect(reducer(once, { type: Act.Select, selection: sel }).selection).toBeNull();

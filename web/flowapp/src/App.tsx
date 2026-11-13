@@ -20,7 +20,7 @@ function Frame({ data }: { data: FlowData }) {
   return (
     <div className={styles.frame}>
       <section className={`${styles.card} ${styles.summary}`} data-region={Region.Summary} aria-label="Summary">
-        <SummaryBar data={data} />
+        <SummaryBar data={data} onOpenRejections={dialogs.openRejections} />
       </section>
       <div className={styles.main}>
       <section className={`${styles.card} ${styles.diagram}`} data-region={Region.Diagram} aria-label="Diagram">

@@ -10,31 +10,42 @@ const LONGEST = "Longest wait";
 
 export const tokenSum = (t: Tokens | null | undefined) => (t ? t.input + t.output + t.cache_read + t.cache_write : null);
 
-export function SummaryBar({ data }: { data: FlowData }) {
+const REJECTIONS = "Rejections";
+const noop = () => {};
+
+interface KpiAction { label: string; onClick: () => void; pressed?: boolean }
+
+export function SummaryBar({ data, onOpenRejections = noop }: { data: FlowData; onOpenRejections?: () => void }) {
   const sel = useSelection();
   const longest = data.edges.reduce<FlowEdge | null>(
     (a, e) => (e.wait_s !== null && e.wait_s > (a?.wait_s ?? 0) ? e : a), null);
-  const kpis: [string, string, Severity?][] = [
+  const isEdge = (id: string) => sel.selection?.kind === SelectionKind.Edge && sel.selection.id === id;
+  const waitText = fmtDuration(longest?.wait_s ?? null);
+  const nRej = data.totals.rejections;
+  const kpis: [string, string, Severity?, KpiAction?][] = [
     ["Elapsed", fmtDuration(data.elapsed_s)],
     ["Agent time", fmtDuration(data.totals.agent_s)],
-    [LONGEST, fmtDuration(longest?.wait_s ?? null), longest?.severity],
-    ["Rejections", String(data.totals.rejections), data.totals.rejections ? Severity.Bad : undefined],
+    // HM-12: the longest wait jumps to its arrow, like the arrow's own label
+    [LONGEST, waitText, longest?.severity, longest ? {
+      label: `${LONGEST} ${waitText}: select the arrow ${longest.label}`, pressed: isEdge(longest.id),
+      onClick: () => sel.select({ kind: SelectionKind.Edge, id: longest.id }),
+    } : undefined],
+    // HM-16: the rejections open their own list
+    [REJECTIONS, String(nRej), nRej ? Severity.Bad : undefined,
+      nRej ? { label: `${REJECTIONS} ${nRej}: open the list`, onClick: onOpenRejections } : undefined],
     ["Tokens", fmtTokens(tokenSum(data.totals.tokens))],
     ["Cost (est.)", fmtCost(data.totals.cost)],
   ];
-  const isEdge = (id: string) => sel.selection?.kind === SelectionKind.Edge && sel.selection.id === id;
   return (
     <div className={styles.bar}>
       <dl className={styles.kpis}>
-        {kpis.map(([k, v, sev]) => (
+        {kpis.map(([k, v, sev, act]) => (
           <div key={k} className={styles.kpi}>
             <dt>{k}</dt>
             <dd data-kpi={k} className={sev ? styles[`fg_${sev}`] : undefined}>
-              {/* HM-12: the longest wait jumps to its arrow, like the arrow's own label */}
-              {k === LONGEST && longest ? (
-                <button type="button" className={styles.kpiLink} aria-pressed={isEdge(longest.id)}
-                        aria-label={`${LONGEST} ${v}: select the arrow ${longest.label}`}
-                        onClick={() => sel.select({ kind: SelectionKind.Edge, id: longest.id })}>
+              {act ? (
+                <button type="button" className={styles.kpiLink} aria-pressed={act.pressed} aria-label={act.label}
+                        onClick={act.onClick}>
                   {v}
                 </button>
               ) : v}
