@@ -25,7 +25,7 @@ const noop = () => {};
 const LEGEND_TIME = "Box = work time, cost";
 const LEGEND_COST = "Box = cost, share bar";
 const LEGEND_ARROWS = "Arrow label = wait. Thicker, red = slower";
-export const FLOW_HINT = "Select a box, a badge or a timeline mark. Click an arrow label to read the instructions sent over that link.";
+export const FLOW_HINT = "Select a box, a badge or a timeline mark. Click an arrow label to read the instructions sent over that link. Ctrl + wheel zooms.";
 
 export function Diagram(props: { data: FlowData } & DiagramHandlers) {
   return (
@@ -133,6 +133,8 @@ function DiagramInner({ data, onOpenFindings = noop, onExpandLanes = noop, onOpe
           nodesConnectable={false}
           elementsSelectable={false}
           zoomOnDoubleClick={false}
+          // HM-6: a plain wheel scrolls the page; React Flow then zooms only on a ctrl wheel (and trackpad pinch)
+          preventScrolling={false}
           // React Flow sets pointer-events:none on nodes that are neither selectable nor draggable unless a node
           // handler exists; the box's own button does the selecting
           onNodeClick={noop}

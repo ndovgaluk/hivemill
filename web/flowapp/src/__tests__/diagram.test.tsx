@@ -142,6 +142,17 @@ describe("diagram", () => {
     expect(label.textContent).toBe("100%");
   });
 
+  it("a plain wheel leaves the page to scroll; only a ctrl wheel is taken for zoom (HM-6)", () => {
+    show(fresh());
+    const pane = document.querySelector(".react-flow__pane") ?? document.querySelector(".react-flow")!;
+    const plain = new WheelEvent("wheel", { deltaY: -100, bubbles: true, cancelable: true });
+    pane.dispatchEvent(plain);
+    expect(plain.defaultPrevented).toBe(false);
+    const ctrl = new WheelEvent("wheel", { deltaY: -100, ctrlKey: true, bubbles: true, cancelable: true });
+    pane.dispatchEvent(ctrl);
+    expect(ctrl.defaultPrevented).toBe(true);
+  });
+
   it("clicking an edge label with instructions selects it and opens the viewer", () => {
     const data = fresh();
     const ev = data.events.find((e) => e.is_instruction && e.edge)!;
