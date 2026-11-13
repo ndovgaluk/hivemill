@@ -45,6 +45,9 @@ CLASSES = frozenset({
     "flow", "flow-svg", "flow-node", "flow-node--live", "flow-box", "flow-label", "flow-time", "flow-badge", "flow-edge",
     "flow-edge--done", "flow-edge--active", "flow-arrow", "flow-loop", "flow-loop-label", "flow-note", "flow-text",
     "flow-link", "flow-hit", "flow-blocks", "flow-stage", "flow-in", "gflow-arc", "gflow-count",
+    # HM-1 settings page (web/views/settings.py)
+    "settings", "set-intro", "set-row", "set-text", "set-name", "set-key", "set-help", "set-ctl", "set-now", "set-value",
+    "set-default", "set-form", "set-input", "set-btn", "set-cmd", "set-note", "set-note--ok", "set-note--bad",
     "flow-full", "flow-root",   # DVDG-561: the React flow debugger's full-width section and mount element
     *(f"flow-node--{s}" for s in ("done", "current", "pending", "skipped")),
 })
@@ -54,7 +57,7 @@ GROUPS = (("Work", (("/", "Overview", "grid"), ("/goals", "Goals", "target"), ("
                     ("/agents", "Agents", "user"))),
           ("Insights", (("/throughput", "Throughput", "bars"), ("/quality", "Quality", "check"),
                         ("/tokens", "Tokens", "db"), ("/changelog", "Changelog", "lines"))),
-          ("System", (("/resources", "Resources", "chip"),)))
+          ("System", (("/resources", "Resources", "chip"), ("/settings", "Settings", "gear"))))
 NAV = tuple((p, label) for _, items in GROUPS for p, label, _ in items)
 TABS = ("/", "/goals", "/tasks", "/agents")
 
@@ -74,6 +77,8 @@ _SVG16 = {
     "db": '<ellipse cx="8" cy="4.5" rx="5" ry="2"/><path d="M3 4.5v7c0 1.1 2.2 2 5 2s5-.9 5-2v-7M3 8c0 1.1 2.2 2 5 2s5-.9 5-2"/>',
     "lines": '<path d="M3 4h10M3 8h10M3 12h6"/>',
     "chip": '<rect x="3" y="3" width="10" height="10" rx="2"/><path d="M6 1.5V3M10 1.5V3M6 13v1.5M10 13v1.5"/>',
+    "gear": '<circle cx="8" cy="8" r="2.2"/><path d="M8 1.5v2M8 12.5v2M1.5 8h2M12.5 8h2M3.4 3.4l1.4 1.4M11.2 11.2l1.4 1.4'
+            'M3.4 12.6l1.4-1.4M11.2 4.8l1.4-1.4"/>',
     "more": '<circle cx="3.5" cy="8" r="1"/><circle cx="8" cy="8" r="1"/><circle cx="12.5" cy="8" r="1"/>',
 }
 _RING = '<circle cx="6" cy="6" r="4.25" fill="none" stroke="currentColor" stroke-width="1.5"/>'
@@ -100,7 +105,7 @@ _ATTR_RE = re.compile(r"^[a-z-]+$")
 _REL_RE = re.compile(r"^/(?!/)[\w./?=&%#:+~-]*$")
 _PR_RE = re.compile(r"^https://github\.com/[\w.-]+/[\w.-]+/pull/\d+$")
 _TAG_RE = re.compile(r"^[a-z][a-z0-9]*$")
-_VOID = frozenset({"meta", "link", "br", "hr", "img"})
+_VOID = frozenset({"meta", "link", "br", "hr", "img", "input"})
 
 
 class Safe(str):

@@ -32,9 +32,9 @@ from web.views import ROUTES  # noqa: E402
 
 XSS = "<script>alert(1)</script>"
 PAGES = ["/", "/goals", "/goal/G-1", "/tasks", "/task/T-1", "/agents", "/resources", "/throughput", "/quality",
-         "/changelog", "/tokens"]
+         "/changelog", "/tokens", "/settings"]
 APIS = ["/api/home.json", "/api/goals.json", "/api/tasks.json", "/api/agents.json", "/api/resources.json",
-        "/api/throughput.json", "/api/quality.json", "/api/changelog.json", "/api/tokens.json"]
+        "/api/throughput.json", "/api/quality.json", "/api/changelog.json", "/api/tokens.json", "/api/settings.json"]
 ALL_ROUTES = PAGES + APIS + ["/healthz", "/static/app.css", "/static/favicon.svg"]
 
 
@@ -379,7 +379,7 @@ class TestVocabularyAndStubs(ServerCase):
     def test_every_page_has_nav_to_all_pages(self):
         want = [p for p, _ in wh.NAV]
         self.assertEqual(want, ["/", "/goals", "/tasks", "/agents", "/throughput", "/quality",
-                                "/tokens", "/changelog", "/resources"])
+                                "/tokens", "/changelog", "/resources", "/settings"])   # HM-1: Settings under System
         for path in PAGES:
             with self.subTest(path):
                 text = self.get(path)[2].decode()
@@ -417,7 +417,8 @@ class TestVocabularyAndStubs(ServerCase):
 
     def test_registry_complete(self):
         self.assertEqual(set(ROUTES), {"/", "/goals", "/goal/<id>", "/tasks", "/task/<id>", "/agents", "/resources",
-                                       "/throughput", "/quality", "/changelog", "/tokens"})
+                                       "/throughput", "/quality", "/changelog", "/tokens",
+                                       "/settings"})
         for v in ROUTES.values():
             self.assertTrue(callable(v.data) and callable(v.render))
 
