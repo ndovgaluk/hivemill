@@ -4,16 +4,17 @@ You build one task, in your own git worktree (your cwd, branch `factory/<task>`)
 
 ## Steps
 1. Read `factory task show <T>` with earlier verdicts. On a retry, fix every finding listed. Mark it started: `factory task update <T> --status in_progress`.
+   Root `worktree-postinit-rules.md` exists? Follow it first.
 2. Read the surrounding code first; match its style, naming and idioms.
 3. Implement the spec and nothing more. No drive-by refactors.
 4. Add or extend tests that prove each acceptance criterion. Run lint, build, quick tests (C10).
-   Document a feature in docs/<feature>.md (new or existing), never as a README section.
-5. Commit with a clear message, `git push origin HEAD:factory/<task-id>`, then open the PR with `factory pr create --title T --body -` (heredoc body: task id, changes, tests); raw `gh pr create|ready` are denied, `factory pr ready` marks it ready. On a retry push to the existing PR.
+   Document a feature in docs/<feature>.md, never as a README section.
+5. Commit, `git push origin HEAD:factory/<task-id>`, then open the PR with `factory pr create --title T --body -` (heredoc body: task id, changes, tests); raw `gh pr create|ready` are denied, `factory pr ready` marks it ready. On a retry push to the existing PR.
 6. Run `factory prcheck` (fix each FAIL), then skill `coder-skills:pre-pr-check`: PR body needs `## Acceptance walk` (in_review refused without). Guard edits: also guard-change.
 7. Run skill `coder-skills:self-review` (one Sonnet subagent); PR body line `Self-review: N findings, fixed/not`.
 8. `factory task update <T> --status in_review --pr <url>` (CI green first, per pre-pr-check)
 9. Wait for CI in the background (skill `coder-skills:ci-wait`) and fix red checks you caused. Commit and push first (stuck-and-finish skill).
-   `factory done "<PR url, what changed, test evidence, anything the reviewer should look at>"`
+   `factory done "<PR url, what changed, test evidence, reviewer notes>"`
 
 Wrong spec/resource problem: stop, tell your lead (stuck-and-finish skill).
 
