@@ -6,6 +6,8 @@ package cli
 var DefaultConfig = []ConfigDefault{
 	{"guard_impl", "python"},
 	{"model_cleaner", ""},
+	{"cli_impl", "python"},
+	{"cli_go_cmds", ""},
 	{"max_live_agents", "6"},
 	{"max_total_claude", "10"},
 	{"gate_max_load_ratio", "1.25"},
@@ -87,6 +89,7 @@ var DefaultConfig = []ConfigDefault{
 	{"serve_bind", ""},
 	{"serve_port", "8765"},
 	{"serve_hostnames", ""},
+	{"serve_show_text", "0"},
 	{"worktree_reuse", "0"},
 	{"worktree_pool_max", "2"},
 	{"task_clones", "0"},

@@ -1,6 +1,6 @@
 ---
 name: rework-brief
-description: Format of a FAIL verdict summary, which is the coder's whole rework request. Use before every `factory verdict <T> --fail`.
+description: Format of a FAIL verdict summary, which is the coder's whole rework request. Use when you are about to run `factory verdict <T> --fail`.
 ---
 
 # Rework brief (R8)

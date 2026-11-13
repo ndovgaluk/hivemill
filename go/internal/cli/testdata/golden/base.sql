@@ -150,6 +150,8 @@ CREATE TABLE skill_trials (
   UNIQUE(candidate_id, vendor_sha, task, condition));
 INSERT INTO "config"("key","value") VALUES('guard_impl','python');
 INSERT INTO "config"("key","value") VALUES('model_cleaner','');
+INSERT INTO "config"("key","value") VALUES('cli_impl','python');
+INSERT INTO "config"("key","value") VALUES('cli_go_cmds','');
 INSERT INTO "config"("key","value") VALUES('max_live_agents','6');
 INSERT INTO "config"("key","value") VALUES('max_total_claude','10');
 INSERT INTO "config"("key","value") VALUES('gate_max_load_ratio','1.25');
@@ -231,6 +233,7 @@ INSERT INTO "config"("key","value") VALUES('worker_gh_repos','');
 INSERT INTO "config"("key","value") VALUES('serve_bind','');
 INSERT INTO "config"("key","value") VALUES('serve_port','8765');
 INSERT INTO "config"("key","value") VALUES('serve_hostnames','');
+INSERT INTO "config"("key","value") VALUES('serve_show_text','0');
 INSERT INTO "config"("key","value") VALUES('worktree_reuse','0');
 INSERT INTO "config"("key","value") VALUES('worktree_pool_max','2');
 INSERT INTO "config"("key","value") VALUES('task_clones','0');
