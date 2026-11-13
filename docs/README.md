@@ -5,6 +5,7 @@ Every page under `docs/`, grouped by what you want to do. New to the factory? St
 ## Use it
 
 - [SETUP.md](SETUP.md): install the factory on a Linux box and bring up the first agents.
+- [getting-started.md](getting-started.md): the parts, the technology stack, and how to set up, build, test and run it, in one ordered guide.
 - [adopt/ADOPT.md](adopt/ADOPT.md): a prompt you hand to your own Claude Code so it performs the setup for you.
 - [examples/README.md](examples/README.md): overview of three worked examples with real command output.
 - [examples/01-goal-to-merged-pr.md](examples/01-goal-to-merged-pr.md): follows one owner request all the way to a merged PR.
@@ -117,6 +118,7 @@ Every page under `docs/`, grouped by what you want to do. New to the factory? St
 - [runtimes.md](runtimes.md): agent runtimes (Claude, Cursor) and the two-org model (claude-* and cursor-* side by side).
 - [research/cursor-harness.md](research/cursor-harness.md): research behind the Cursor Agent CLI runtime.
 - [research/cursor-e2e-issues.md](research/cursor-e2e-issues.md): issues found dogfooding Cursor coder, qa, reviewer and judge.
+- [research/windows-port.md](research/windows-port.md): feasibility of running the factory natively on Windows, and the decision to use WSL2 instead.
 - [web-design.md](web-design.md): the design pass behind the web UI styling.
 - [web-redesign-brief.md](web-redesign-brief.md): G-015 SC4 redesign brief: page audit from the before screenshots, decisions, F-27 tree, task split.
 - [web-redesign-review.md](web-redesign-review.md): G-015 SC4 design review: before and after screenshots per page, phone layout, contrast, open visual findings.
