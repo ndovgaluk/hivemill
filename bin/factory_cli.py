@@ -145,6 +145,8 @@ GOAL_STATUSES = ["proposed", "planning", "active", "blocked", "done", "cancelled
 DEFAULT_CONFIG = {
     "guard_impl": "python",      # G-016: python | go | shadow; run/guard_impl is rewritten from this (docs/worker-guard-go.md); director-only
     "model_cleaner": "",         # G-011 trial rollback: "" = the MODELS table (Haiku); else opus/sonnet/haiku 5.5 (docs/model-routing.md)
+    "cli_impl": "python",        # G-041: python | go | shadow; run/cli_impl is rewritten from this (docs/cli-go.md); director-only
+    "cli_go_cmds": "",           # G-041: comma list of subcommands bin/factory may hand to factory-go (S1 set only)
     # cap on factory agents: status='live' in the DB and listed by herdr (by name or pane id) or started <180 s ago.
     # Claude panes factory didn't start are not counted (shown as "other"); the MemAvailable floor guards RAM.
     "max_live_agents": "6",
@@ -391,6 +393,11 @@ CREATE INDEX IF NOT EXISTS idx_gate_runs_head ON gate_runs(project_id, head_sha)
 
 WORKTREE_POOL_STATES = ("free", "claimed")  # worktree_pool.state; enforced in code, no CHECK (schema convention)
 
+# T-1336 (G-041 S1-c): PRAGMA user_version of every DB this code has migrated. The Go CLI (go/internal/factorydb
+# SchemaVersion) answers only when it reads the same number; bump it, and the Go constant, with any SCHEMA or migrate()
+# change (tests/test_db_layout.py hashes both and fails until the pinned hash is renewed together with this number).
+SCHEMA_VERSION = 2
+
 SCHEMA = f"""
 CREATE TABLE IF NOT EXISTS config (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS projects (
@@ -455,7 +462,25 @@ CREATE INDEX IF NOT EXISTS worktree_pool_proj ON worktree_pool(project_id, state
 
 # ───────────────────────────── basics ─────────────────────────────
 
+_NOW_HOME_LIVE = None  # home_is_live() answer for this process (now() runs per event; asked once)
+
+
 def now():
+    """Current time as ISO seconds. $FACTORY_TEST_NOW (ISO with an offset) fixes it, but ONLY on a non-live home: the live
+    factory never honours it, so an agent exporting it cannot fake event times on the live DB."""
+    global _NOW_HOME_LIVE
+    fixed = os.environ.get("FACTORY_TEST_NOW")
+    if fixed:
+        if _NOW_HOME_LIVE is None:
+            _NOW_HOME_LIVE = home_is_live()
+        if not _NOW_HOME_LIVE:
+            try:
+                t = dt.datetime.fromisoformat(fixed)
+            except ValueError:
+                t = None
+            if t is None or t.tzinfo is None:
+                die(f"FACTORY_TEST_NOW must be an ISO timestamp with an offset, got {fixed}")
+            return t.astimezone().isoformat(timespec="seconds")
     return dt.datetime.now().astimezone().isoformat(timespec="seconds")
 
 
@@ -599,6 +624,8 @@ def migrate(con):
             except sqlite3.OperationalError:  # a concurrent process added it first
                 if col not in {r["name"] for r in con.execute("PRAGMA table_info(skill_trials)")}:
                     raise
+    if con.execute("PRAGMA user_version").fetchone()[0] != SCHEMA_VERSION:  # a write only when it differs
+        con.execute(f"PRAGMA user_version = {int(SCHEMA_VERSION)}")
 
 
 def cfg(con, key):
@@ -1172,6 +1199,7 @@ _HC_RUN_CWD = None  # spawn worktree for the next hc `run` translation (TUI path
 _HC_RUN_ENV = None  # agent env written into the hc spawn script (never on the hc argv)
 _HC_RUN_PROGRAM = None  # resolved program for hc `run` (cursor: agent/cursor-agent, not the cursor shim)
 _HC_RUN_NAME = None  # agent name for the hc spawn script under run/
+_SPAWN_HOST_EXE = None  # override host CLI for the in-flight spawn/relaunch start (herdr|hc)
 # Parent hc `run` env must not reach the agent child (env -i + explicit exports only).
 HC_SPAWN_DROP = (
     "CLAUDE_CODE_MESSAGING_TOKEN", "HC_SOCKET", "HERDR_PANE_ID", "SSH_AUTH_SOCK", "HERDR_SESSION",
@@ -1461,6 +1489,134 @@ def _row_hosted_on_hc(row):
     return (pane or "") == name
 
 
+def _spawn_args_row(row):
+    try:
+        raw = row["spawn_args"] if row and "spawn_args" in row.keys() else None
+    except Exception:
+        raw = None
+    try:
+        return json.loads(raw or "{}")
+    except ValueError:
+        return {}
+
+
+def _agent_host_exe(con, row):
+    """herdr TUI vs hc for one agent row (per-spawn --host-backend overrides config terminal_backend)."""
+    if not row:
+        return terminal_backend_effective(con)[1]
+    sa = _spawn_args_row(row)
+    hb = sa.get("host_backend")
+    if hb in ("hc", "herdr"):
+        return hb
+    if _row_hosted_on_hc(row):
+        return "hc"
+    return terminal_backend_effective(con)[1]
+
+
+def _spawn_uses_hc(con, args):
+    hb = args.get("host_backend")
+    if hb == "hc":
+        return True
+    if hb == "herdr":
+        return False
+    return terminal_backend_effective(con)[1] == "hc"
+
+
+def _agents_table_backend(spawn_args_raw):
+    try:
+        sa = json.loads(spawn_args_raw or "{}")
+    except ValueError:
+        sa = {}
+    return "hc" if sa.get("host_backend") == "hc" else "herdr"
+
+
+def _host_agent_ipc_exe(con, args):
+    """Pick herdr vs hc for one IPC call; agent-scoped verbs follow the row's host_backend."""
+    global _SPAWN_HOST_EXE
+    if _SPAWN_HOST_EXE in ("hc", "herdr"):
+        return _SPAWN_HOST_EXE
+    eff = terminal_backend_effective(con)[1]
+    if len(args) >= 3 and args[0] == "agent" and args[1] in ("prompt", "read", "send-keys", "wait", "start"):
+        row = con.execute("SELECT name, spawn_args, pane_id FROM agents WHERE name=?", (args[2],)).fetchone()
+        if row:
+            return _agent_host_exe(con, row)
+    return eff
+
+
+def _host_agents_list(exe):
+    """List agents from a specific host binary (herdr TUI or hc), without using config terminal_backend."""
+    herdr_gate(("agent", "list"))
+    ipc_argv = _host_ipc_argv(exe, ("agent", "list"))
+    if ipc_argv is None:
+        return None
+    env = _host_ipc_env(exe)
+    try:
+        p = subprocess.run([exe, *ipc_argv], capture_output=True, text=True, timeout=HERDR_TIMEOUT_S, env=env)
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return None
+    if p.returncode != 0:
+        return None
+    out = p.stdout.strip()
+    try:
+        if exe == "hc":
+            r = _hc_parse_host_stdout(ipc_argv, out)
+        else:
+            r = json.loads(out.splitlines()[-1])["result"] if out else {}
+    except (json.JSONDecodeError, KeyError, IndexError):
+        return None
+    if not isinstance(r, dict):
+        return None
+    agents = r.get("agents")
+    if not isinstance(agents, list):
+        return None
+    return [_normalize_agent_list_row(a) for a in agents]
+
+
+def _row_needs_tui_ipc(con, row):
+    """A herdr-hosted row while config terminal_backend is hc (TUI pane on an hc factory)."""
+    return bool(row) and _agent_host_exe(con, row) == "herdr" and terminal_backend_effective(con)[1] == "hc"
+
+
+def _listed_agents_for_exe(con, row_exe, row=None):
+    """Host agent list; default herdr uses herdr_agents() so harness tests can mock herdr."""
+    if row_exe == "hc":
+        return _host_agents_list("hc")
+    if row_exe == "herdr":
+        if _row_needs_tui_ipc(con, row) or terminal_backend_effective(con)[1] == "hc":
+            return _host_agents_list("herdr")
+        return herdr_agents()
+    return herdr_agents()
+
+
+def _herdr_pane_close(con, row, pane_id, *, check=None):
+    """check=None: relaunch-style call with no check kwarg; check=False: fail-soft close (close_named_pane)."""
+    chk = False if check is None else check
+    if _row_needs_tui_ipc(con, row):
+        _host_ipc_result("herdr", "pane", "close", pane_id, check=chk)
+    elif check is None:
+        herdr("pane", "close", pane_id)
+    else:
+        herdr("pane", "close", pane_id, check=check)
+
+
+def _agent_host_status(con, r, tui_by_name, tui_by_pane, hc_by_name, hc_overlay=False):
+    if _agent_host_exe(con, r) == "hc":
+        if hc_overlay:
+            return hc_by_name.get(r["name"])
+        return tui_by_name.get(r["name"]) or tui_by_pane.get(r["pane_id"])
+    return tui_by_name.get(r["name"]) or tui_by_pane.get(r["pane_id"])
+
+
+def _host_list_row(con, name):
+    """One agent's row from its own host list (per-spawn host_backend), or None if unlisted/unreachable."""
+    row = con.execute("SELECT name, spawn_args, pane_id FROM agents WHERE name=?", (name,)).fetchone()
+    exe = _agent_host_exe(con, row) if row else terminal_backend_effective(con)[1]
+    listed = _host_agents_list(exe)
+    if listed is None:
+        return None
+    return next((x for x in listed if x.get("name") == name), None)
+
+
 def _hc_translate_args(args):
     """Map TUI herdr IPC verbs to herdr-core `hc` CLI. None means no hc equivalent (fail this step only)."""
     a = list(args)
@@ -1530,11 +1686,39 @@ def _host_ipc_argv(exe, args):
     return _hc_translate_args(args)
 
 
+def _host_ipc_result(exe, *args, check=False, timeout=HERDR_TIMEOUT_S):
+    """One herdr TUI or hc IPC call on a named binary, ignoring config terminal_backend."""
+    herdr_gate(args)
+    ipc_argv = _host_ipc_argv(exe, args)
+    if ipc_argv is None:
+        if check:
+            die(f"hc has no equivalent for herdr {' '.join(str(x) for x in args[:3])}")
+        return None
+    env = _host_ipc_env(exe)
+    try:
+        p = subprocess.run([exe, *ipc_argv], capture_output=True, text=True, timeout=timeout, env=env)
+    except (FileNotFoundError, subprocess.TimeoutExpired) as e:
+        if check:
+            die(f"{exe} {' '.join(str(x) for x in args[:2])} failed: {e}")
+        return None
+    if p.returncode != 0:
+        if check:
+            die(f"{exe} {' '.join(str(x) for x in args[:3])} failed: {p.stderr.strip() or p.stdout.strip()}")
+        return None
+    out = p.stdout.strip()
+    try:
+        if exe == "hc":
+            return _hc_parse_host_stdout(ipc_argv, out)
+        return json.loads(out.splitlines()[-1])["result"] if out else {}
+    except (json.JSONDecodeError, KeyError, IndexError):
+        return {"raw": out}
+
+
 def herdr(*args, check=True, timeout=HERDR_TIMEOUT_S):
     herdr_gate(args)
     con = db()
     try:
-        _, exe = terminal_backend_effective(con)
+        exe = _host_agent_ipc_exe(con, args)
     finally:
         con.close()
     ipc_argv = _host_ipc_argv(exe, args)
@@ -1567,7 +1751,7 @@ def herdr_start_error(*args):
     herdr_gate(args)
     con = db()
     try:
-        _, exe = terminal_backend_effective(con)
+        exe = _host_agent_ipc_exe(con, args)
     finally:
         con.close()
     ipc_argv = _host_ipc_argv(exe, args)
@@ -1608,23 +1792,20 @@ def _agents_index(agents):
     return by_name, by_pane
 
 
-def _hc_kill_terminal(con, name):
+def _hc_kill_terminal(con, name, listed=None):
     """End an hc `run` terminal by name. Returns killed, not-found, or unknown (caller retries)."""
-    listed = herdr_agents()
+    row = con.execute("SELECT name, spawn_args, pane_id FROM agents WHERE name=?", (name,)).fetchone()
+    if row and _agent_host_exe(con, row) != "hc":
+        return "unknown"
+    if listed is None:
+        listed = _host_agents_list("hc")
     if listed is None:
         return "unknown"
     if not any(h.get("name") == name for h in listed):
         return "not-found"
-    con_db = db()
-    try:
-        _, exe = terminal_backend_effective(con_db)
-    finally:
-        con_db.close()
-    if exe != "hc":
-        return "unknown"
     env = _host_ipc_env("hc")
     try:
-        p = subprocess.run([exe, "kill", name], capture_output=True, text=True, timeout=HERDR_TIMEOUT_S, env=env)
+        p = subprocess.run(["hc", "kill", name], capture_output=True, text=True, timeout=HERDR_TIMEOUT_S, env=env)
     except (FileNotFoundError, subprocess.TimeoutExpired):
         return "unknown"
     if p.returncode != 0:
@@ -1639,11 +1820,12 @@ def close_named_pane(con, name, pane):
     (state, host_pane): "closed" (close issued on the host's id), "not-found" (the host lists no pane under this name,
     so nothing of ours is closed; one "pane-close-skipped" event says whether the row's id is held by another name),
     "unknown" (the host cannot be asked: nothing closed, the caller retries on its next run, no event)."""
-    listed = herdr_agents()
+    row = con.execute("SELECT name, spawn_args, pane_id FROM agents WHERE name=?", (name,)).fetchone()
+    row_exe = _agent_host_exe(con, row) if row else terminal_backend_effective(con)[1]
+    listed = _listed_agents_for_exe(con, row_exe, row)
     if listed is None:
         return "unknown", None
-    hc = terminal_backend_effective(con)[1] == "hc"
-    if hc:
+    if row_exe == "hc":
         h = next((x for x in listed if x.get("name") == name), None)
         if h is None:
             other = next((x.get("name") for x in listed if pane and x.get("pane_id") == pane), None)
@@ -1662,7 +1844,7 @@ def close_named_pane(con, name, pane):
         event(con, "agent", name, "pane-close-skipped",
               {"agent": name, "pane": pane, "reason": f"pane held by {other}" if other else "no host pane under this name"})
         return "not-found", None
-    herdr("pane", "close", h["pane_id"], check=False)
+    _herdr_pane_close(con, row, h["pane_id"], check=False)
     return "closed", h["pane_id"]
 
 
@@ -1714,8 +1896,21 @@ def herdr_panes(ws):
     return (r or {}).get("panes", [])
 
 
-def find_pane(pane_id):
-    """(workspace, tab, pane dict) of a pane herdr lists, else None."""
+def find_pane(pane_id, tui=False):
+    """(workspace, tab, pane dict) of a pane herdr lists, else None. tui=True lists via the TUI binary even when config is hc."""
+    if tui:
+        ws_map = {}
+        r = _host_ipc_result("herdr", "workspace", "list", check=False)
+        if r and "workspaces" in r:
+            ws_map = {w["workspace_id"]: w for w in r["workspaces"]}
+        for ws in ws_map:
+            pr = _host_ipc_result("herdr", "pane", "list", "--workspace", ws, check=False)
+            if not pr or "panes" not in pr:
+                continue
+            for p in pr["panes"]:
+                if p.get("pane_id") == pane_id:
+                    return ws, p.get("tab_id"), p
+        return None
     for ws in herdr_workspaces():
         for p in herdr_panes(ws):
             if p.get("pane_id") == pane_id:
@@ -1758,15 +1953,16 @@ def export_cmd(env):
     return "export " + " ".join(f"{k}={shlex.quote(v)}" for k, v in env.items()) + " && hash -r"
 
 
-def export_in_shell(pane, env, cwd):
+def export_in_shell(pane, env, cwd, host_exe=None):
     """An idle shell lacks the agent's env: export it before the agent launches. hash -r: a PATH set after the
     shell's startup files (~/.zshenv may prepend ~/.local/bin) must win over what the shell already resolved."""
-    con = db()
-    try:
-        _, exe = terminal_backend_effective(con)
-    finally:
-        con.close()
-    if exe == "hc":
+    if host_exe is None:
+        con = db()
+        try:
+            _, host_exe = terminal_backend_effective(con)
+        finally:
+            con.close()
+    if host_exe == "hc":
         return
     herdr("pane", "run", pane, export_cmd(env) + f" && cd {shlex.quote(cwd)} && clear")
     time.sleep(float(os.environ.get("FACTORY_SHELL_SETTLE_S") or 1))  # tests set a tiny value
@@ -2477,6 +2673,7 @@ def cmd_init(a):
         write_live_home(a.live_home)
     con = db(create=True)
     con.executescript(SCHEMA + scoutdb.SCOUT_DDL)
+    con.execute(f"PRAGMA user_version = {int(SCHEMA_VERSION)}")
     for k, v in DEFAULT_CONFIG.items():
         con.execute("INSERT OR IGNORE INTO config(key,value) VALUES(?,?)", (k, v))
     if (ROLES_DIR / "settings").is_dir():  # a bare data dir without a checkout (tests, dry installs) has no templates to render
@@ -2526,7 +2723,10 @@ def check_gh_roles(key, value):
 
 
 GUARD_IMPLS = ("python", "go", "shadow")
+CLI_IMPLS = ("python", "go", "shadow")
+CLI_GO_CMDS_KNOWN = ("whoami", "flags", "agents", "config")  # the S1 set the Go binary answers (go/internal/cli)
 GUARD_BUILD_TIMEOUT_S = 300  # `factory up` (factory-up.service allows 600 s)
+CLI_FETCH_TIMEOUT_S = 120  # each of `go mod download` / `go mod verify` in `factory up`
 GUARD_TICK_BUILD_TIMEOUT_S = 120  # the tick (factory-tick.service TimeoutStartSec=240): a build must not kill the tick
 GUARD_FAILED_BACKOFF_S = 30 * 60  # the tick skips a build that failed for this srchash for this long
 
@@ -2607,8 +2807,10 @@ def _run_build(cmd, cwd, timeout, env):
     return p.returncode, err
 
 
-def build_guard_go(src=None, lib=None, tick=False, go=None):
+def build_guard_go(src=None, lib=None, tick=False, go=None, name="worker-guard", pkg="./cmd/worker-guard"):
     """Build go/cmd/worker-guard into <lib>/worker-guard and stamp it with the srchash. Never raises.
+    name/pkg pick another binary of the same go/ tree (build_cli_go: factory-go from ./cmd/factory), with its own
+    <name>.stamp and <name>.failed.
 
     No-op when the stamp already equals HEAD:go and the binary exists. A failed build deletes the stamp (the shim then
     runs Python) and leaves an old binary alone. The stamp is written last, after the rename. Returns
@@ -2628,10 +2830,10 @@ def build_guard_go(src=None, lib=None, tick=False, go=None):
     srchash = guard_srchash(src)
     if not srchash:
         return "skipped"
-    stamp, binary = lib / "worker-guard.stamp", lib / "worker-guard"
+    stamp, binary = lib / f"{name}.stamp", lib / name
     if _read_line(stamp) == srchash and os.access(binary, os.X_OK):
         return "current"
-    failed = lib / "worker-guard.failed"
+    failed = lib / f"{name}.failed"
     if tick and _read_line(failed) == srchash:
         try:
             if time.time() - failed.stat().st_mtime < GUARD_FAILED_BACKOFF_S:
@@ -2649,16 +2851,18 @@ def build_guard_go(src=None, lib=None, tick=False, go=None):
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except OSError:
             return "skipped"  # another build is running
-        new = lib / "worker-guard.new"
+        new = lib / f"{name}.new"
         try:
             env = guard_build_env(lib)
             Path(env["GOTMPDIR"]).mkdir(parents=True, exist_ok=True)  # go refuses a missing GOTMPDIR
             nice = ["/usr/bin/nice", "-n", "10"] if os.access("/usr/bin/nice", os.X_OK) else []
-            rc, stderr = _run_build([*nice, go, "build", "-buildvcs=false", "-trimpath", "-o", str(new), "./cmd/worker-guard"],
+            rc, stderr = _run_build([*nice, go, "build", "-buildvcs=false", "-trimpath", "-o", str(new), pkg],
                                     src / "go", GUARD_TICK_BUILD_TIMEOUT_S if tick else GUARD_BUILD_TIMEOUT_S, env)
             ok = rc == 0
             first = (stderr or "").strip().splitlines()[:1]
             err = first[0] if first else f"exit {rc}"
+            if not ok and name == CLI_GO_BIN and "module lookup disabled" in (stderr or ""):
+                err += "; deps not fetched: run factory up"  # the build is offline; only `factory up` fetches (fetch_cli_go_deps)
         except (OSError, subprocess.SubprocessError) as e:
             ok, err = False, str(e)[:200]
         if not ok:
@@ -2693,10 +2897,66 @@ def write_guard_impl(con, src=None):
     return line
 
 
+CLI_GO_BIN = "factory-go"
+
+
+def build_cli_go(src=None, lib=None, tick=False, go=None):
+    """Build go/cmd/factory into <lib>/factory-go (CGO_ENABLED=0 comes from guard_build_env), stamped last. Same
+    contract as build_guard_go: built | current | skipped | failed, never raises."""
+    return build_guard_go(src, lib, tick=tick, go=go, name=CLI_GO_BIN, pkg="./cmd/factory")
+
+
+def fetch_cli_go_deps(lib=None, src=None, proxy=None, go=None):
+    """Download and verify the modules go/cmd/factory needs into the private GOMODCACHE (<lib>/go/mod), go.sum-pinned.
+    The only network step of the Go CLI: called from `factory up` / install, never from the tick (the build stays
+    GOPROXY=off). proxy defaults to https://proxy.golang.org. Returns "fetched" | "skipped" | "failed", never raises."""
+    lib = Path(lib or guard_lib_dir())
+    src = Path(src or Path(__file__).resolve().parent.parent)
+    go = str(go) if go else str(guard_go_path())
+    if not os.access(go, os.X_OK) or not (src / "go" / "go.mod").is_file():
+        return "skipped"
+    env = {**guard_build_env(lib), "GOPROXY": proxy or "https://proxy.golang.org", "GOSUMDB": "sum.golang.org",
+           "GOFLAGS": "-mod=readonly"}
+    try:
+        Path(env["GOTMPDIR"]).mkdir(parents=True, exist_ok=True)
+        for sub in ("download", "verify"):
+            rc, err = _run_build([go, "mod", sub], src / "go", CLI_FETCH_TIMEOUT_S, env)
+            if rc != 0:
+                first = (err or "").strip().splitlines()[:1]
+                print(f"go mod {sub}: failed ({first[0] if first else f'exit {rc}'}); factory-go stays on Python", file=sys.stderr)
+                return "failed"
+    except (OSError, subprocess.SubprocessError) as e:
+        print(f"go mod download: failed ({e}); factory-go stays on Python", file=sys.stderr)
+        return "failed"
+    return "fetched"
+
+
+def cli_binary_state(src=None, lib=None):
+    """ok | missing | stale: factory-go against its stamp and the srchash of the checkout's go/."""
+    lib = Path(lib or guard_lib_dir())
+    stamp = _read_line(lib / f"{CLI_GO_BIN}.stamp")
+    if not os.access(lib / CLI_GO_BIN, os.X_OK) or not stamp:
+        return "missing"
+    return "ok" if stamp == guard_srchash(src) else "stale"
+
+
+def write_cli_impl(con, src=None):
+    """Rewrite $FACTORY_HOME/run/cli_impl from the DB: "<mode> <srchash> <csv>" (what bin/factory reads before it execs
+    factory-go), or "python -" when cli_impl is python or go/ has no tree."""
+    mode = cfg(con, "cli_impl")
+    srchash = guard_srchash(src)
+    csv = ",".join(x.strip() for x in cfg(con, "cli_go_cmds").split(",") if x.strip())
+    line = f"{mode} {srchash} {csv}" if srchash and mode in CLI_IMPLS and mode != "python" else "python -"
+    RUN.mkdir(parents=True, exist_ok=True)
+    _write_atomic(RUN / "cli_impl", line + "\n")
+    return line
+
+
 def guard_tick(con, build=True, tick=True, src=None, lib=None, go=None):
     """`factory up` (tick=False) and the tick: refresh run/guard_impl, build (only when guard_impl != python: at the
     default no Go toolchain runs; cheap no-op when stamped; skipped under load), refresh it again. The flag is written first so a pull that changes go/ makes srchash differ from the stamp
     (the shim uses Python) before a slow or killed build. Never raises: the guard falls back to Python on its own."""
+    cap = None
     try:
         write_guard_impl(con, src)
         cap = float(cfg(con, "gate_max_load_ratio")) * (os.cpu_count() or 1)
@@ -2705,6 +2965,13 @@ def guard_tick(con, build=True, tick=True, src=None, lib=None, go=None):
             write_guard_impl(con, src)
     except (OSError, ValueError, subprocess.SubprocessError, sqlite3.Error) as e:
         print(f"guard go build: tick step failed ({e})", file=sys.stderr)
+    try:  # its own step: a failing guard build must not leave run/cli_impl stale
+        write_cli_impl(con, src)  # G-041: written first too, so a changed go/ makes srchash differ from the stamp
+        if build and cap is not None and cfg(con, "cli_impl") != "python" and load1() <= cap \
+                and build_cli_go(src, lib, tick=tick, go=go) in ("built", "failed"):
+            write_cli_impl(con, src)
+    except (OSError, ValueError, subprocess.SubprocessError, sqlite3.Error) as e:
+        print(f"cli go build: tick step failed ({e})", file=sys.stderr)
 
 
 def _config_trap(fn, *args):
@@ -2737,6 +3004,18 @@ def _config_value_rules(key, value):
         if a.value not in GUARD_IMPLS:
             die(f"guard_impl must be one of {', '.join(GUARD_IMPLS)}, not {a.value!r}: "
                 f"fix it with `factory config guard_impl python`", 2)
+    if a.key == "cli_impl":
+        a.value = a.value.strip()
+        if a.value not in CLI_IMPLS:
+            die(f"cli_impl must be one of {', '.join(CLI_IMPLS)}, not {a.value!r}: "
+                f"fix it with `factory config cli_impl python`", 2)
+    if a.key == "cli_go_cmds":
+        names = [x.strip() for x in a.value.split(",") if x.strip()]
+        bad = [n for n in names if n not in CLI_GO_CMDS_KNOWN]
+        if bad:
+            die(f"cli_go_cmds takes a comma list of {', '.join(CLI_GO_CMDS_KNOWN)}; "
+                f"{', '.join(repr(b) for b in bad)} is not one: fix it with `factory config cli_go_cmds whoami`", 2)
+        a.value = ",".join(dict.fromkeys(names))
     if a.key == "sandbox_roles":
         a.value = check_sandbox_roles(a.value)
     if a.key in ("worker_gh_roles", "gh_rw_roles"):
@@ -2834,6 +3113,12 @@ def cmd_config(a):
             state = guard_binary_state()
             if a.value != "python" and state != "ok":
                 print(f"warning: guard binary is {state}; the shim uses python until `factory up` or the tick builds it",
+                      file=sys.stderr)
+        if a.key in ("cli_impl", "cli_go_cmds"):
+            write_cli_impl(con)
+            state = cli_binary_state()
+            if cfg(con, "cli_impl") != "python" and state != "ok":
+                print(f"warning: factory-go is {state}; bin/factory uses python until `factory up` or the tick builds it",
                       file=sys.stderr)
     elif a.key:
         if a.key not in DEFAULT_CONFIG:
@@ -4006,17 +4291,28 @@ def release_stale_pane(con, name):
     ).fetchone()
     if not r or not r["pane_id"] or r["status"] not in ("done", "exited"):
         return True
-    if terminal_backend_effective(con)[1] == "hc" and not _row_hosted_on_hc(r):
-        return True
-    if terminal_backend_effective(con)[1] == "hc":
-        listed = herdr_agents()
+    row_exe = _agent_host_exe(con, r)
+    if row_exe == "hc":
+        if not _row_hosted_on_hc(r):
+            return True  # a legacy TUI pane id on an hc-config factory: nothing to release here
+        listed = _host_agents_list("hc") if terminal_backend_effective(con)[1] == "herdr" else herdr_agents()
         if listed is not None and not any(h.get("name") == name for h in listed):
             con.execute("UPDATE agents SET status='exited', pane_id=NULL, ended=coalesce(ended,?) WHERE name=?",
                         (now(), name))
             event(con, "agent", name, "reaped", r["pane_id"])
             return True
-        return False
+        if terminal_backend_effective(con)[1] == "herdr":
+            return False
+        if terminal_backend_effective(con)[1] == "hc":
+            listed = herdr_agents()
+            if listed is not None and not any(h.get("name") == name for h in listed):
+                con.execute("UPDATE agents SET status='exited', pane_id=NULL, ended=coalesce(ended,?) WHERE name=?",
+                            (now(), name))
+                event(con, "agent", name, "reaped", r["pane_id"])
+                return True
+            return False
     pane = r["pane_id"]
+    tui_list = terminal_backend_effective(con)[1] == "hc"
     gone = False
     if r["status"] == "done":
         st, hp = close_named_pane(con, name, pane)
@@ -4024,14 +4320,14 @@ def release_stale_pane(con, name):
             con.execute("UPDATE agents SET status='exited', pane_id=NULL, ended=coalesce(ended,?) WHERE name=?", (now(), name))
             event(con, "agent", name, "reaped", pane)
             return True
-        gone = st == "closed" and pane_gone(hp) is True
+        gone = st == "closed" and pane_gone(hp, tui=tui_list) is True
     else:
-        listed = herdr_agents()
+        listed = _host_agents_list("herdr") if tui_list else herdr_agents()
         if listed is not None and not any(h.get("name") == name and h.get("pane_id") == pane for h in listed):
             return True  # the host does not list that pane under this name: nothing of ours to close (as before)
         if listed is not None:  # never close a pane we cannot attribute to this name
             st, hp = close_named_pane(con, name, pane)
-            gone = st == "closed" and pane_gone(hp) is True
+            gone = st == "closed" and pane_gone(hp, tui=tui_list) is True
     if gone:
         con.execute("UPDATE agents SET status='exited', pane_id=NULL, ended=coalesce(ended,?) WHERE name=?", (now(), name))
         event(con, "agent", name, "reaped", pane)
@@ -8811,10 +9107,11 @@ def free_shell_pane(ws_id, tab_id):
     return None
 
 
-def place(con, role, goal, team, name, cwd, env):
+def place(con, role, goal, team, name, cwd, env, host_exe=None):
     """Find or create the pane an agent will live in. Returns (workspace, tab, pane)."""
-    _, exe = terminal_backend_effective(con)
-    if exe == "hc":
+    if host_exe is None:
+        _, host_exe = terminal_backend_effective(con)
+    if host_exe == "hc":
         return None, None, name
     envs = [x for k, v in env.items() for x in ("--env", f"{k}={v}")]
     if role in ("boss", "director") or not goal:
@@ -8829,7 +9126,7 @@ def place(con, role, goal, team, name, cwd, env):
             pane = free_shell_pane(ws, t["tab_id"])
             if pane:
                 # reuse an idle shell, but it lacks our env: export it before the agent launches
-                export_in_shell(pane, env, cwd)
+                export_in_shell(pane, env, cwd, host_exe)
                 return ws, t["tab_id"], pane
         if t.get("pane_count", 1) < 3 and role not in ("boss", "director"):
             anchor = next((p["pane_id"] for p in herdr_panes(ws) if p.get("tab_id") == t["tab_id"]), None)
@@ -9580,7 +9877,8 @@ def _resume_runtime_change(con, prior, role, org):
 
 def spawn(con, role, goal=None, team=None, task=None, name=None, cwd=None, prompt=None, model=None,
           resume=None, from_queue=False, pane=None, relaunch=False, env_extra=None, plugin_dirs=None,
-          add_home_dir=True, fresh=False, sandbox_optin=False, hold=None, org=None, strict_name=False):
+          add_home_dir=True, fresh=False, sandbox_optin=False, hold=None, org=None, strict_name=False,
+          host_backend=None):
     """strict_name: `factory spawn --name X`: refuse when the org naming rule would change X (never rename silently).
     org: the org this agent belongs to (G-028); default: the goal's org (see org_for).
     env_extra, plugin_dirs, add_home_dir: evaluator only (see check_evaluator_spawn); stored in spawn_args and
@@ -9647,6 +9945,15 @@ def spawn(con, role, goal=None, team=None, task=None, name=None, cwd=None, promp
         sandbox_optin = True  # a sandbox_required task never starts unsandboxed, whoever spawns it (queue and relaunch keep it)
     args = {"role": role, "goal": goal, "team": team, "task": task, "name": name, "cwd": cwd,
             "prompt": prompt, "model": model, "resume": resume, "fresh": fresh, "org": org}
+    if host_backend is not None:
+        args["host_backend"] = host_backend
+    elif from_queue and existing:
+        try:
+            prev = json.loads(existing["spawn_args"] or "{}")
+        except ValueError:
+            prev = {}
+        if prev.get("host_backend") in ("hc", "herdr"):
+            args["host_backend"] = prev["host_backend"]
     if sandbox_optin:
         args["sandbox_optin"] = True
     if role == "evaluator":
@@ -9676,7 +9983,7 @@ def spawn(con, role, goal=None, team=None, task=None, name=None, cwd=None, promp
                 old = {}
             if not isinstance(old, dict):
                 old = {}
-            args.update({k: old[k] for k in ("spawn_failures", "spawn_failed_at") if k in old})
+            args.update({k: old[k] for k in ("spawn_failures", "spawn_failed_at", "host_backend") if k in old})
         # `existing` is a snapshot taken before gate(): a dequeue can still cancel the row in the microseconds between
         # that read and this upsert, so a from_queue upsert re-checks the status in the statement itself
         # and leaves a cancelled row alone
@@ -10221,12 +10528,25 @@ def start_confirm(con, agents):
     rows = con.execute("SELECT * FROM agents WHERE status='live' AND start_pending IS NOT NULL").fetchall()
     if not rows:
         return set()
-    agents = herdr_agents() if agents is None else agents
+    eff = terminal_backend_effective(con)[1]
+    if agents is None:
+        if eff == "hc":
+            agents = herdr_agents()
+            hc_by_name = {}
+        else:
+            agents = _host_agents_list("herdr")
+            hc_list = _host_agents_list("hc")
+            hc_by_name = {x["name"]: x for x in (hc_list or []) if x.get("name")}
+    else:
+        hc_by_name = {}
     by_name, by_pane = _agents_index(agents or [])
     skip = set()
     for r in rows:
         skip.add(r["name"])
-        h = by_name.get(r["name"]) or by_pane.get(r["pane_id"])
+        if eff != "hc" and _agent_host_exe(con, r) == "hc":
+            h = hc_by_name.get(r["name"])
+        else:
+            h = by_name.get(r["name"]) or by_pane.get(r["pane_id"])
         try:
             info = json.loads(r["start_pending_info"] or "{}")
         except json.JSONDecodeError:
@@ -10376,11 +10696,10 @@ def _spawn_start_external(con, role, goal, team, task, name, cwd, prompt, model,
             die(str(e), 3)
         if plan.workspace:  # the adapter appends one decision line per hook call (no command text)
             env["FACTORY_CURSOR_HOOK_LOG"] = str(Path(plan.workspace) / "hook-events.jsonl")
-    hc_back = terminal_backend_effective(con)[1] == "hc"
+    use_hc = _spawn_uses_hc(con, args)
+    spawn_host = "hc" if use_hc else "herdr"
     args = {**args, "runtime": runtime, "launch": plan.launch, "notes": plan.notes,
             "herdr_kind": plan.herdr_kind}
-    if hc_back:
-        args["host_backend"] = "hc"
     if plan.workspace:
         args["cursor_workspace"] = str(plan.workspace)
     sid = plan.session_id
@@ -10416,12 +10735,17 @@ def _spawn_start_external(con, role, goal, team, task, name, cwd, prompt, model,
     if plan.launch != "herdr-kind" or not plan.herdr_kind:
         die(f"runtime {runtime}: launch={plan.launch!r} herdr_kind={plan.herdr_kind!r} not wired", 3)
 
-    found = find_pane(pane) if pane else None
-    if found:
-        ws, tab = found[0], found[1]
-        export_in_shell(pane, env, cwd)
-    else:
-        ws, tab, pane = place(con, role, goal, team, name, cwd, env)
+    global _HC_RUN_CWD, _HC_RUN_ENV, _HC_RUN_PROGRAM, _HC_RUN_NAME, _SPAWN_HOST_EXE
+    _SPAWN_HOST_EXE = spawn_host
+    try:
+        found = find_pane(pane) if pane and spawn_host == "herdr" else None
+        if found:
+            ws, tab = found[0], found[1]
+            export_in_shell(pane, env, cwd, spawn_host)
+        else:
+            ws, tab, pane = place(con, role, goal, team, name, cwd, env, spawn_host)
+    finally:
+        _SPAWN_HOST_EXE = None
     con.execute("INSERT INTO agents(name,role,goal_id,team_id,task_id,status,pane_id,workspace_id,tab_id,model,session_id,cwd,spawn_args,started) "
                 "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(name) DO UPDATE SET status='live', pane_id=excluded.pane_id, "
                 "workspace_id=excluded.workspace_id, tab_id=excluded.tab_id, model=excluded.model, "
@@ -10431,13 +10755,14 @@ def _spawn_start_external(con, role, goal, team, task, name, cwd, prompt, model,
                 (name, role, goal, team, task, "live", pane, ws, tab, model, sid, cwd, json.dumps(args), now()))
     start_args = ("agent", "start", name, "--kind", plan.herdr_kind, "--pane", pane, "--timeout", "90000",
                   "--", *plan.argv)
-    global _HC_RUN_CWD, _HC_RUN_ENV, _HC_RUN_PROGRAM, _HC_RUN_NAME
     _HC_RUN_CWD, _HC_RUN_ENV = cwd, {k: str(v) for k, v in env.items()}
     _HC_RUN_PROGRAM, _HC_RUN_NAME = plan.binary, name
+    _SPAWN_HOST_EXE = spawn_host
     try:
         r, start_err = herdr_start_error(*start_args)
     finally:
         _HC_RUN_CWD = _HC_RUN_ENV = _HC_RUN_PROGRAM = _HC_RUN_NAME = None
+        _SPAWN_HOST_EXE = None
     if r is None:
         event(con, "agent", name, "start-uncertain", {"pane": pane, "runtime": runtime, "kind": plan.herdr_kind})
         _write_cursor_start_log(name, pane, start_err, env)
@@ -10449,7 +10774,7 @@ def _spawn_start_external(con, role, goal, team, task, name, cwd, prompt, model,
     if task and role == "coder":
         con.execute("UPDATE tasks SET assignee=?, updated=? WHERE id=?", (name, now(), task))
     task_auto_start(con, task, f"spawn {name}", role)
-    if not hc_back:
+    if not use_hc:
         herdr("pane", "report-metadata", pane, "--source", "factory", "--display-agent",
               f"{role}·{task or team or goal or 'hq'}"[:28], check=False)
         if role in ("boss", "director", "lead"):
@@ -10522,7 +10847,8 @@ def _spawn_start(con, role, goal, team, task, name, cwd, prompt, model, resume, 
     # every launch re-renders (a tampered rendered file never survives a relaunch); first, so a bad template
     # leaves no worktree, agent dir, pane or row behind
     settings = render_settings_early(role)
-    hc_back = terminal_backend_effective(con)[1] == "hc"
+    use_hc = _spawn_uses_hc(con, args)
+    spawn_host = "hc" if use_hc else "herdr"
     ghcred_on = gh_cred_wanted(con, role, sandbox_wanted(con, role, optin))
     if ghcred_on:  # before any worktree, pane or row: a refused spawn leaves nothing behind
         gh_cred_preflight(con, role, name)
@@ -10574,14 +10900,19 @@ def _spawn_start(con, role, goal, team, task, name, cwd, prompt, model, resume, 
         args["sandbox"] = True
     if ghcred_on:
         env.update(gh_cred_env(con, role, name, cwd))
-    found = find_pane(pane) if pane else None
-    if found:
-        ws, tab = found[0], found[1]
-        export_in_shell(pane, env, cwd)
-    else:
-        ws, tab, pane = place(con, role, goal, team, name, cwd, env)
-        if sandboxed or ghcred_on:  # pane --env lands before the shell's startup files, which may reorder PATH
-            export_in_shell(pane, {"PATH": env["PATH"]}, cwd)
+    global _HC_RUN_CWD, _HC_RUN_ENV, _HC_RUN_PROGRAM, _HC_RUN_NAME, _SPAWN_HOST_EXE
+    _SPAWN_HOST_EXE = spawn_host
+    try:
+        found = find_pane(pane) if pane and spawn_host == "herdr" else None
+        if found:
+            ws, tab = found[0], found[1]
+            export_in_shell(pane, env, cwd, spawn_host)
+        else:
+            ws, tab, pane = place(con, role, goal, team, name, cwd, env, spawn_host)
+            if sandboxed or ghcred_on:  # pane --env lands before the shell's startup files, which may reorder PATH
+                export_in_shell(pane, {"PATH": env["PATH"]}, cwd, spawn_host)
+    finally:
+        _SPAWN_HOST_EXE = None
     sysprompt = RUN / f"{name}.prompt.md"
     prompt_text = role_prompt_text(role, args.get("org"), len(enabled_orgs(con)) > 1)
     if evaluator:  # the live home is hidden inside the sandbox: claude reads read-only copies kept in the trial
@@ -10593,8 +10924,6 @@ def _spawn_start(con, role, goal, team, task, name, cwd, prompt, model, resume, 
     # before this agent's own (re)launch (old pane closed first) and never delete it
     sysprompt.write_text(prompt_text)
     args.setdefault("runtime", "claude")
-    if hc_back:
-        args["host_backend"] = "hc"
     claude_args = ["--model", model, "--permission-mode", "auto", "--settings", str(settings),
                    "--append-system-prompt-file", str(sysprompt), *([] if evaluator else ["--add-dir", str(HOME)]),
                    "-n", name, *effort]
@@ -10638,9 +10967,9 @@ def _spawn_start(con, role, goal, team, task, name, cwd, prompt, model, resume, 
             env.setdefault(k, v)
     except (OSError, json.JSONDecodeError, ValueError):
         pass
-    global _HC_RUN_CWD, _HC_RUN_ENV, _HC_RUN_PROGRAM, _HC_RUN_NAME
     _HC_RUN_CWD, _HC_RUN_ENV = cwd, {k: str(v) for k, v in env.items()}
     _HC_RUN_PROGRAM, _HC_RUN_NAME = None, name
+    _SPAWN_HOST_EXE = spawn_host
     start_err = None
     try:
         if async_start:
@@ -10649,6 +10978,7 @@ def _spawn_start(con, role, goal, team, task, name, cwd, prompt, model, resume, 
             r = herdr(*start_args, check=False)
     finally:
         _HC_RUN_CWD = _HC_RUN_ENV = _HC_RUN_PROGRAM = _HC_RUN_NAME = None
+        _SPAWN_HOST_EXE = None
     if async_start and start_err and not any(m in start_err.lower() for m in START_PENDING_ERRORS):
         # a real failure (bad args, no such pane): do not wait START_CONFIRM_S for an agent that will never be ready
         event(con, "agent", name, "start-failed", {"pane": pane, "error": start_err[:300]})
@@ -10673,7 +11003,7 @@ def _spawn_start(con, role, goal, team, task, name, cwd, prompt, model, resume, 
         for pid, argv in claude_procs(sid or resume):
             if _is_claude_cmd(argv) and sandbox_escape_close(con, name, pane, pid):
                 break
-    if not hc_back:
+    if not use_hc:
         herdr("pane", "report-metadata", pane, "--source", "factory", "--display-agent",
               f"{role}·{task or team or goal or 'hq'}"[:28], check=False)
         if role in ("boss", "director", "lead"):
@@ -10882,7 +11212,7 @@ def cmd_spawn(a):
         if a.goal and goal_org(con, a.goal) not in (None, a.org):
             die(f"{a.goal} belongs to the {goal_org(con, a.goal)} org; move it first: factory goal org {a.goal} {a.org}", 2)
     spawn(con, a.role, a.goal, a.team, a.task, a.name, a.cwd, read_text(a.prompt), a.model, sandbox_optin=a.sandbox,
-          org=a.org, strict_name=bool(a.name))
+          org=a.org, strict_name=bool(a.name), host_backend=a.host_backend)
 
 
 def mark_read(con, msgs):
@@ -11516,8 +11846,24 @@ def stop_confirm_s():
         return 10.0
 
 
-def pane_gone(pane):
-    """True when herdr no longer lists the pane, False when it does, None when herdr cannot be asked."""
+def pane_gone(pane, tui=False):
+    """True when herdr no longer lists the pane, False when it does, None when herdr cannot be asked.
+    tui=True asks the TUI binary (needed for TUI pane ids while config terminal_backend is hc)."""
+    if tui:
+        r = _host_ipc_result("herdr", "pane", "list", check=False)
+        if r is None or "panes" not in r:
+            ws = _host_ipc_result("herdr", "workspace", "list", check=False)
+            if ws is None or "workspaces" not in ws:
+                return None
+            panes = []
+            for w in ws["workspaces"]:
+                r = _host_ipc_result("herdr", "pane", "list", "--workspace", w["workspace_id"], check=False)
+                if r is None or "panes" not in r:
+                    return None
+                panes += r["panes"]
+        else:
+            panes = r["panes"]
+        return not any(p.get("pane_id") == pane for p in panes)
     r = herdr("pane", "list", check=False)
     if r is None or "panes" not in r:
         ws = herdr("workspace", "list", check=False)
@@ -11587,21 +11933,31 @@ def force_stop(con, name, how, attempt_seen=_NO_CHECK):
     pane, wait = r["pane_id"], stop_confirm_s()
     kind, pids = None, []
     sid = r["session_id"]
+    row_exe = _agent_host_exe(con, r)
+    tui_ipc = _row_needs_tui_ipc(con, r)
     if not sid:  # a row that never got its session id: ask the host (a read) before deciding anything
-        h = next((x for x in (herdr_agents() or []) if x.get("name") == name or (pane and x.get("pane_id") == pane)), None)
+        listed = _listed_agents_for_exe(con, row_exe, r) or []
+        h = next((x for x in listed if x.get("name") == name or (pane and x.get("pane_id") == pane)), None)
         sid = ((h or {}).get("agent_session") or {}).get("value")
     note = None
     if not sid or _scan_claude() is None:
         kind = "process-unknown"  # fail closed: without the session or a readable /proc nothing proves it exited
         note = _UNKNOWN_BEFORE
     else:
-        gone = pane_gone(pane) if pane else True
-        if gone is True and pane:  # the row's id is not listed, but the host may carry the agent under its name on another id
-            listed = herdr_agents()
+        if row_exe == "hc":
+            listed = _listed_agents_for_exe(con, row_exe, r)
             if listed is None:
                 gone = None
-            elif any(x.get("name") == name and x.get("pane_id") for x in listed):
-                gone = False
+            else:
+                gone = not any(x.get("name") == name for x in listed)
+        else:
+            gone = pane_gone(pane, tui=tui_ipc) if pane else True
+            if gone is True and pane:  # the row's id is not listed, but the host may carry the agent under its name on another id
+                listed = _listed_agents_for_exe(con, row_exe, r)
+                if listed is None:
+                    gone = None
+                elif any(x.get("name") == name and x.get("pane_id") for x in listed):
+                    gone = False
         if gone is False:
             # the worker may have run `factory done` in the window: re-read right before the pane close
             cur = con.execute("SELECT status, stop_requested_at FROM agents WHERE name=?", (name,)).fetchone()
@@ -11615,7 +11971,11 @@ def force_stop(con, name, how, attempt_seen=_NO_CHECK):
                 close_leftover_shell(con, name, pane)  # T-1118: the id may still list a bare shell; close it or say why not
             end = time.time() + wait
             while st == "closed":  # confirm: the host must stop listing the pane it closed
-                gone = pane_gone(hp)
+                if row_exe == "hc":
+                    listed = _listed_agents_for_exe(con, row_exe, r)
+                    gone = listed is not None and not any(x.get("name") == name for x in listed)
+                else:
+                    gone = pane_gone(hp, tui=tui_ipc)
                 if gone or time.time() >= end:
                     break
                 time.sleep(min(1.0, max(0.05, end - time.time())))
@@ -11706,10 +12066,10 @@ def esc_wait_nudge(con, name, nudge, what, defer=False):
             event_as(con, "tick", "agent", name, "nudge-pending", {"nudge": nudge, "what": what,
                                                                    "pane_id": r["pane_id"], "started": r["started"]})
         return
-    hc_back = terminal_backend_effective(con)[1] == "hc"
-    if hc_back:
+    row = con.execute("SELECT name, spawn_args, pane_id FROM agents WHERE name=?", (name,)).fetchone()
+    if row and _agent_host_exe(con, row) == "hc":
         st = None
-        h = next((x for x in (herdr_agents() or []) if x.get("name") == name), None)
+        h = next((x for x in (_host_agents_list("hc") or []) if x.get("name") == name), None)
         if h:
             st = h.get("agent_status")
         if live() and st in ("idle", "done"):
@@ -12174,7 +12534,7 @@ def cmd_dequeue(a):
 
 def cmd_agents(a):
     con = db()
-    q = ("SELECT name,role,status,"
+    q = ("SELECT name,role,status,spawn_args,"
          "COALESCE(org, json_extract(spawn_args,'$.org'), CASE json_extract(spawn_args,'$.runtime') WHEN 'cursor' "
          "THEN 'cursor' ELSE 'claude' END) AS org,"
          "COALESCE(json_extract(spawn_args,'$.runtime'),'claude') AS runtime,"
@@ -12182,9 +12542,14 @@ def cmd_agents(a):
          "CASE WHEN relaunch_requested_at IS NOT NULL THEN 'RELAUNCH-PENDING' ELSE '' END relaunch,"
          "goal_id,team_id,task_id,pane_id,model,started FROM agents")
     q += "" if a.all else " WHERE status IN ('live','starting','queued')"
-    table(con.execute(q + " ORDER BY status, started").fetchall(),
-          ["name", "org", "role", "status", "runtime", "flagless", "relaunch", "goal_id", "team_id", "task_id", "pane_id",
-           "model", "started"])
+    rows = con.execute(q + " ORDER BY status, started").fetchall()
+    out = []
+    for r in rows:
+        d = {k: r[k] for k in r.keys()}
+        d["backend"] = _agents_table_backend(r["spawn_args"])
+        out.append(d)
+    table(out, ["name", "org", "role", "status", "runtime", "flagless", "relaunch", "goal_id", "team_id", "task_id",
+                "pane_id", "model", "started", "backend"])
 
 
 def cmd_flags(a):
@@ -12279,12 +12644,21 @@ def pane_holds(con, pane_id, listed):
     return any(r["status"] in ("live", "starting", "queued") for r in rows)
 
 
+def row_pane_gone(r, panes, listed):
+    """True only with proof a done/stopped row's pane is gone: the agent list is known, the row has a pane id, the
+    pane server lists no agent on that pane id or under that name, and the pane id is not in the live pane list.
+    Anything else (live rows, no list, no pane id, no pane list) is not proof: the cwd still holds the worktree."""
+    return (r["status"] in ("done", "stopped") and listed is not None and panes is not None and bool(r["pane_id"])
+            and not any(x.get("pane_id") == r["pane_id"] or x.get("name") == r["name"] for x in listed)
+            and not any(pid == r["pane_id"] for pid, _ in panes))
+
+
 def protected_by(con, wt, panes, listed=None):
     """Reason if an agent's recorded cwd or a live pane sits in the worktree, else None. A stale live row (its pane now
     used by another agent) and a pane whose owner ended no longer hold it; unknown owners and running agents do."""
     for r in con.execute("SELECT * FROM agents WHERE status IN ('live','starting','queued','done','stopped') AND cwd IS NOT NULL AND cwd!=''"):
         if _within(_real(r["cwd"]), wt):
-            if pane_reused(r, listed):
+            if pane_reused(r, listed) or row_pane_gone(r, panes, listed):
                 continue
             return f"protected: cwd of agent {r['name']}"
     for pane_id, c in panes:
@@ -13206,15 +13580,49 @@ def utilization(con):
         f"SELECT goal_id FROM agents WHERE goal_id IS NOT NULL AND role IN ({gmarks}) AND status IN ('live','starting','queued')",
         UTIL_GOAL_ROLES)}
 
-    def starved(prio):
+    def unstaffed(prio):
         return sorted(r["id"] for r in con.execute(
             "SELECT id FROM goals WHERE status IN ('planning','active') AND priority=?", (prio,)) if r["id"] not in staffed)
-    p1, p2 = starved(1), starved(2)
+
+    def waiting_on_owner_ci(gid):
+        """T-1401 (owner M33717): the goal has open tasks, none ready, and each one waits on the owner, on CI/review
+        (in_review) or on another task. DB state only; anything else (in_progress without a worker, no tasks) stays starved."""
+        open_t = con.execute("SELECT status,depends_on FROM tasks WHERE goal_id=? AND status NOT IN ('done','cancelled')",
+                             (gid,)).fetchall()
+        if not open_t:
+            return False
+        for t in open_t:
+            if t["status"] in ("in_review", "blocked"):
+                continue  # blocked: waits=owner, or waits=internal on another task
+            if t["status"] != "todo":
+                return False
+            try:
+                deps = json.loads(t["depends_on"] or "[]")
+            except ValueError:
+                deps = []
+            if all(d in done for d in deps):
+                return False  # a ready task: the goal is starved
+        return True
+    p2 = unstaffed(2)
+    p1, p1_waiting = [], []
+    for gid in unstaffed(1):
+        (p1_waiting if waiting_on_owner_ci(gid) else p1).append(gid)
+    now = digest_clock().timestamp()
+    wait_txt = []
+    for gid in p1_waiting:
+        last = con.execute(f"SELECT max(julianday(ended)) FROM agents WHERE goal_id=? AND role IN ({marks}) AND ended IS NOT NULL",
+                           (gid, *UTIL_WORKER_ROLES)).fetchone()[0]
+        if last is None:
+            last = con.execute("SELECT julianday(created) FROM goals WHERE id=?", (gid,)).fetchone()[0]
+        mins = max(0, int((now - (last - 2440587.5) * 86400) // 60)) if last else 0
+        wait_txt.append(f"{gid} ({mins} min)")
     line = (f"live {n}: workers {live['workers']} / leads {live['leads']} / judges {live['judges']} / HQ {live['hq']} / queued {queued}; "
             f"P1 goals without workers: {', '.join(p1) or 'none'}")
+    waiting_line = f"P1 waiting on owner/CI: {', '.join(wait_txt)}" if wait_txt else ""
     return {**live, "live": n, "queued": queued, "queued_workers": queued_workers, "cap": cap, "target": target,
             "under": live["workers"] < target, "ready": ready, "demand": queued_workers > 0 or ready > 0,
-            "hq_heavy": (live["leads"] + live["judges"]) * 3 > n, "p1_starved": p1, "p2_starved": p2, "line": line}
+            "hq_heavy": (live["leads"] + live["judges"]) * 3 > n, "p1_starved": p1, "p1_waiting": p1_waiting,
+            "p2_starved": p2, "line": line, "waiting_line": waiting_line}
 
 
 def cap_breaches(con, start_iso, end_iso):
@@ -14510,6 +14918,8 @@ def cmd_res(a):
           + ("" if cfg(con, "lead_parking") == "1" else " · lead parking off"))
     u2 = utilization(con)
     print(u2["line"])
+    if u2["waiting_line"]:
+        print(u2["waiting_line"])
     print(f"utilization: workers {u2['workers']}/{u2['target']} target · leads+judges {u2['leads'] + u2['judges']}/{u2['live']} (max 1/3)"
           + (" · UNDER TARGET" if u2["under"] and u2["demand"] else "") + (" · HQ-HEAVY" if u2["hq_heavy"] else ""))
     om = res_org_mix(con)
@@ -14829,10 +15239,10 @@ def classify_dialog(text):
     return ("permission",) if b[0] == "permission" else ("settings-warning", b[3], b[4], b[5])
 
 
-def dialog_now(name, role, want):
+def dialog_now(con, name, role, want):
     """Right before a key send: herdr reports `name` blocked on THIS tick AND its bottom region still classifies as
     `want`; for the boss pane also no unsent input (L-019). Returns the classification or None (then: no keys)."""
-    h = next((x for x in (herdr_agents() or []) if x.get("name") == name), None)
+    h = _host_list_row(con, name)
     if not h or h.get("agent_status") != "blocked":
         return None
     tail = herdr("agent", "read", name, "--source", "recent", "--lines", "60", check=False) or {}
@@ -14889,7 +15299,7 @@ def auto_clear_dialog(con, r, t):
                          f"The tick sent Esc {len(prior)} times today and the dialog is still there; it sends no more. "
                          f"Clear it by hand: {sfile}\n{warning}", "alert", r["goal_id"], r["task_id"], sender="tick")
                 return False
-            if not dialog_now(name, r["role"], "settings-warning"):
+            if not dialog_now(con, name, r["role"], "settings-warning"):
                 return False
             herdr("agent", "send-keys", name, "esc", check=False)
             event_as(con, "tick", "agent", name, "settings-warning-dismissed", {"file": sfile, "warning": warning},
@@ -14906,7 +15316,7 @@ def auto_clear_dialog(con, r, t):
         limit = int(cfg(con, "hq_unblock_s" if hq else "blocked_alert_s"))
         if not r["blocked_since"] or t - r["blocked_since"] <= limit:
             return False
-        if not dialog_now(name, r["role"], "permission"):
+        if not dialog_now(con, name, r["role"], "permission"):
             return False
         con.execute("UPDATE agents SET blocked_since=? WHERE name=?", (t, name))  # re-arm: one Esc per timeout
         event_as(con, "tick", "agent", name, "unblock", {"by": "tick", "reason": "auto-deny after timeout"})
@@ -15545,7 +15955,27 @@ def cmd_tick(a, locked=False):
     _pt_lap("render_settings")
     guard_tick(con)
     _pt_lap("guard_build")
-    agents = herdr_agents()
+    eff_exe = terminal_backend_effective(con)[1]
+    hc_back = eff_exe == "hc"
+    hc_by_name = {}
+    hc_list_ok = True
+    tui_by_name, tui_by_pane, tui_list_ok = {}, {}, True
+    need_tui_tick = False
+    if hc_back:
+        agents = herdr_agents()
+        need_tui_tick = bool(con.execute(
+            "SELECT 1 FROM agents WHERE status IN ('live','done') "
+            "AND json_extract(spawn_args,'$.host_backend')='herdr' LIMIT 1"
+        ).fetchone())
+        if need_tui_tick:
+            tui_agents = _host_agents_list("herdr")
+            tui_list_ok = tui_agents is not None
+            tui_by_name, tui_by_pane = _agents_index(tui_agents or [])
+    else:
+        agents = _host_agents_list("herdr")
+        hc_list = _host_agents_list("hc")
+        hc_list_ok = hc_list is not None
+        hc_by_name = {x["name"]: x for x in (hc_list or []) if x.get("name")}
     _pt_lap("herdr_list")
     morning_digest(con)
     _pt_lap("digest")
@@ -15587,17 +16017,32 @@ def cmd_tick(a, locked=False):
     scout_tick(con)
     retro_tick(con)
     skilleval_tick(con)
-    hc_back = terminal_backend_effective(con)[1] == "hc"
-    by_name, by_pane = _agents_index(agents)
+    by_name, by_pane = _agents_index(agents or [])
+    if not hc_back:
+        by_name = {**by_name, **hc_by_name}
     t = time.time()
     finish_pending_nudges(con, by_name, t)
     _pt_lap("pending_nudges")
 
     # 1. reap finished workers; detect lost agents; record session ids for resume
     for r in con.execute("SELECT * FROM agents WHERE status IN ('live','done')").fetchall():
-        if hc_back and not _row_hosted_on_hc(r):
-            continue
-        h = _pane_host(con, by_name, by_pane, r)
+        row_exe = _agent_host_exe(con, r)
+        if hc_back:
+            if row_exe == "herdr":
+                if not tui_list_ok:
+                    continue
+                h = _pane_host(con, tui_by_name, tui_by_pane, r)
+            elif _row_hosted_on_hc(r):
+                h = _pane_host(con, by_name, by_pane, r)
+            else:
+                continue  # a legacy TUI pane id without host_backend=herdr: tick does not reconcile on hc
+        elif row_exe == "hc":
+            if not hc_list_ok:
+                continue
+            h = hc_by_name.get(r["name"])
+        else:
+            tui_by_name, tui_by_pane = _agents_index(agents or [])
+            h = _pane_host(con, tui_by_name, tui_by_pane, r)
         if h is _PANE_FOREIGN and r["status"] == "done":
             h = None  # the done path closes by host NAME only, so another row's pane is never touched
         if h is _PANE_FOREIGN:
@@ -15606,9 +16051,10 @@ def cmd_tick(a, locked=False):
                 event(con, "agent", r["name"], "pane-foreign-skip", str(r["pane_id"]))
             continue
         if r["status"] == "done":
-            if hc_back:
-                if r["name"] in by_name:
-                    if _hc_kill_terminal(con, r["name"]) == "unknown":
+            if row_exe == "hc":
+                listed_src = by_name if hc_back else hc_by_name
+                if r["name"] in listed_src:
+                    if _hc_kill_terminal(con, r["name"], list(listed_src.values())) == "unknown":
                         continue
                 con.execute(
                     "UPDATE agents SET status='exited', pane_id=NULL, ended=coalesce(ended,?) WHERE name=?",
@@ -15817,7 +16263,7 @@ def cmd_tick(a, locked=False):
             _timed_spawn(con, s["role"], s["goal"], s["team"], s["task"], s["name"], s["cwd"], s["prompt"], s["model"],
                   s.get("resume"), from_queue=True, env_extra=s.get("env_extra"), plugin_dirs=s.get("plugin_dirs"),
                   add_home_dir=s.get("add_home_dir", True), fresh=s.get("fresh", False),
-                  sandbox_optin=s.get("sandbox_optin") is True)
+                  sandbox_optin=s.get("sandbox_optin") is True, host_backend=s.get("host_backend"))
         except SandboxRefused as e:
             sandbox_drop_queued(con, q, s, e)  # spawn() left the row queued; every refusal needs a human fix
             con.commit()
@@ -15892,11 +16338,33 @@ def cmd_tick(a, locked=False):
     
     # 3. nudge idle agents that have unread mail; give the director its cycle
     cooldown = int(cfg(con, "nudge_cooldown_s"))
-    agents = herdr_agents() or []
-    by_name, by_pane = _agents_index(agents)
+    nudge_eff = terminal_backend_effective(con)[1]
+    nudge_hc_by = {}
+    tui_by_name, tui_by_pane, tui_list_ok = {}, {}, True
+    if nudge_eff == "hc":
+        nudge_agents = herdr_agents() or []
+        if con.execute(
+            "SELECT 1 FROM agents WHERE status='live' "
+            "AND json_extract(spawn_args,'$.host_backend')='herdr' LIMIT 1"
+        ).fetchone():
+            tui_agents = _host_agents_list("herdr")
+            tui_list_ok = tui_agents is not None
+            tui_by_name, tui_by_pane = _agents_index(tui_agents or [])
+    else:
+        nudge_agents = _host_agents_list("herdr") or []
+        nudge_hc_list = _host_agents_list("hc") or []
+        nudge_hc_by = {x["name"]: x for x in nudge_hc_list if x.get("name")}
+    nudge_by_name, nudge_by_pane = _agents_index(nudge_agents)
     for r in con.execute("SELECT * FROM agents WHERE status='live'").fetchall():
         if r["role"] == "boss":
-            h = by_name.get(r["name"]) or by_pane.get(r["pane_id"])
+            if nudge_eff == "hc" and _agent_host_exe(con, r) == "herdr":
+                if not tui_list_ok:
+                    continue
+                h = tui_by_name.get(r["name"]) or tui_by_pane.get(r["pane_id"])
+            elif nudge_eff != "hc" and _agent_host_exe(con, r) == "hc":
+                h = nudge_hc_by.get(r["name"])
+            else:
+                h = nudge_by_name.get(r["name"]) or nudge_by_pane.get(r["pane_id"])
             if h and h.get("agent_status") in ("idle", "done"):
                 boss_cd = int(cfg(con, "boss_wake_cooldown_s"))
                 if not (r["last_nudge"] and t - r["last_nudge"] < boss_cd):
@@ -15927,7 +16395,14 @@ def cmd_tick(a, locked=False):
             continue
         if r["name"] in starting:
             continue  # start pending or just kicked off: no second prompt
-        h = by_name.get(r["name"]) or by_pane.get(r["pane_id"])  # herdr may have resumed it under another name
+        if nudge_eff == "hc" and _agent_host_exe(con, r) == "herdr":
+            if not tui_list_ok:
+                continue
+            h = tui_by_name.get(r["name"]) or tui_by_pane.get(r["pane_id"])
+        elif nudge_eff != "hc" and _agent_host_exe(con, r) == "hc":
+            h = nudge_hc_by.get(r["name"])
+        else:
+            h = nudge_by_name.get(r["name"]) or nudge_by_pane.get(r["pane_id"])
         if not h or h.get("agent_status") not in ("idle", "done"):
             continue
         if r["last_nudge"] and t - r["last_nudge"] < cooldown:
@@ -16637,6 +17112,8 @@ def cmd_up(a):
     con = db()
     require_role(con, "boss")
     render_all_settings()  # every role's rendered settings are rewritten before anything is (re)started
+    if cfg(con, "cli_impl") != "python":
+        fetch_cli_go_deps()  # the one network step of the Go CLI; the build below is offline
     guard_tick(con, tick=False)
     agents = herdr_agents()
     if agents is None:  # let systemd show the failure instead of queueing everything against a dead server
@@ -16760,23 +17237,35 @@ def relaunch_agent(con, r, dry_run=False, force=False, fresh=False):
     if not r["session_id"]:
         die(f"{r['name']} has no recorded session id; nothing to resume", 3)
     cursor_ws = agent_cursor_workspace(r) if _agent_runtime(r) == "cursor" else None
-    agents = herdr_agents()
-    if agents is None:
-        die("herdr is unreachable")
+    row_exe = _agent_host_exe(con, r)
+    if row_exe == "hc":
+        agents = _host_agents_list("hc")
+        if agents is None:
+            die("hc is unreachable")
+    else:
+        agents = _listed_agents_for_exe(con, "herdr", r)
+        if agents is None:
+            die("herdr is unreachable")
     pane, close, by_pane, by_pane_cursor = r["pane_id"], False, False, False
     # the session decides which pane hosts the agent; the row's pane id may be stale
     host = next((x for x in agents if (x.get("agent_session") or {}).get("value") == r["session_id"]), None)
+    if not host and row_exe == "hc":
+        host = next((x for x in agents if x.get("name") == r["name"]), None)
     if host:
-        pane = host.get("pane_id")
+        pane = host.get("pane_id") or r["pane_id"]
     elif procs := claude_procs(r["session_id"]):
         # herdr omits agent_session for most workers (sandboxed or not): fall back to the row's own pane, but only when
         # exactly one process runs the session and the entry there is this agent and names no session of its own
         host = next((x for x in agents if pane and x.get("pane_id") == pane and x.get("name") == r["name"]
                      and not (x.get("agent_session") or {}).get("value")), None) if len(procs) == 1 else None
         if not host:
-            die(f"a live claude process runs session {r['session_id']} but herdr lists no pane for it; "
-                "refusing to start a second copy", 3)
-        by_pane = True
+            if row_exe == "hc" and len(procs) == 1:
+                close = True
+            else:
+                die(f"a live claude process runs session {r['session_id']} but herdr lists no pane for it; "
+                    "refusing to start a second copy", 3)
+        else:
+            by_pane = True
     elif _agent_runtime(r) == "cursor":
         ws = agent_cursor_workspace(r)
         if not ws:
@@ -16788,19 +17277,24 @@ def relaunch_agent(con, r, dry_run=False, force=False, fresh=False):
         host = next((x for x in agents if pane and x.get("pane_id") == pane and x.get("name") == r["name"]
                      and not (x.get("agent_session") or {}).get("value")), None)
         if not host:
-            die(f"a live cursor-agent process runs workspace {ws} but herdr lists no pane for it; "
-                "refusing to start a second copy", 3)
-        by_pane, by_pane_cursor = True, True
+            if row_exe == "hc" and len(procs) == 1:
+                close = True
+            else:
+                die(f"a live cursor-agent process runs workspace {ws} but herdr lists no pane for it; "
+                    "refusing to start a second copy", 3)
+        else:
+            by_pane, by_pane_cursor = True, True
     else:
         host = next((x for x in agents if pane and x.get("pane_id") == pane), None)
     if host:
         sess = (host.get("agent_session") or {}).get("value")
-        if sess != r["session_id"] and not by_pane:
+        same_hc = row_exe == "hc" and host.get("name") == r["name"]
+        if sess != r["session_id"] and not by_pane and not same_hc:
             die(f"pane {pane} hosts another agent ({host.get('name')}, session {sess}); refusing to touch it", 3)
         if host.get("agent_status") == "working" and not force:
             die(f"{r['name']} is mid-turn (a relaunch would lose the turn); use --when-idle, or --force", 2)
         close = True
-    elif pane and find_pane(pane):
+    elif pane and row_exe != "hc" and find_pane(pane, tui=_row_needs_tui_ipc(con, r)):
         if not pane_at_shell(pane):
             die(f"pane {pane} runs a process that is not a registered agent; refusing to touch it", 3)
     else:
@@ -16850,12 +17344,26 @@ def relaunch_agent(con, r, dry_run=False, force=False, fresh=False):
         print("(dry run: nothing changed)")
         return
     if close:
-        herdr("pane", "close", pane)
-        for _ in range(20):
-            if not find_pane(pane):
-                break
-            time.sleep(_relaunch_poll_s())
-        pane = None
+        if row_exe == "hc":
+            st = _hc_kill_terminal(con, r["name"])
+            if st != "killed":
+                die(f"hc could not end terminal {r['name']} (state={st}); not restarting", 3)
+            pane = None
+            for _ in range(20):
+                listed = _host_agents_list("hc")
+                if listed is not None and not any(x.get("name") == r["name"] for x in listed):
+                    break
+                time.sleep(_relaunch_poll_s())
+            else:
+                die(f"hc still lists {r['name']} after kill; not restarting", 3)
+        else:
+            tui_ipc = _row_needs_tui_ipc(con, r)
+            _herdr_pane_close(con, r, pane)
+            for _ in range(20):
+                if not find_pane(pane, tui=tui_ipc):
+                    break
+                time.sleep(_relaunch_poll_s())
+            pane = None
         for _ in range(10):  # the prompt file is rewritten next: the old process must be gone first
             if by_pane_cursor and cursor_ws:
                 gone = not claude_procs(r["session_id"]) and not cursor_procs(cursor_ws)
@@ -16938,16 +17446,42 @@ def tick_recycle(con):
                        "AND role IN ('director','lead')").fetchall()
     if not rows:
         return
-    agents = herdr_agents()
+    eff = terminal_backend_effective(con)[1]
+    hc_by_name = {}
+    hc_list_ok = True
+    tui_by_name, tui_by_pane, tui_list_ok = {}, {}, True
+    if eff == "hc":
+        agents = herdr_agents()
+        if con.execute(
+            "SELECT 1 FROM agents WHERE status IN ('live') AND role IN ('director','lead') "
+            "AND json_extract(spawn_args,'$.host_backend')='herdr' LIMIT 1"
+        ).fetchone():
+            tui_agents = _host_agents_list("herdr")
+            tui_list_ok = tui_agents is not None
+            tui_by_name, tui_by_pane = _agents_index(tui_agents or [])
+    else:
+        agents = _host_agents_list("herdr")
+        hc_list = _host_agents_list("hc")
+        hc_by_name = {x["name"]: x for x in (hc_list or []) if x.get("name")}
+        hc_list_ok = hc_list is not None
     if agents is None:
         return
-    by_name, by_pane = _agents_index(agents)
+    by_name, by_pane = _agents_index(agents or [])
     try:
         clock = digest_clock().timestamp()
     except FactoryNowError:
         clock = time.time()
     for r in rows:
-        h = by_name.get(r["name"]) or by_pane.get(r["pane_id"])
+        if eff == "hc" and _agent_host_exe(con, r) == "herdr":
+            if not tui_list_ok:
+                continue
+            h = tui_by_name.get(r["name"]) or tui_by_pane.get(r["pane_id"])
+        elif eff != "hc" and _agent_host_exe(con, r) == "hc":
+            if not hc_list_ok:
+                continue
+            h = hc_by_name.get(r["name"])
+        else:
+            h = by_name.get(r["name"]) or by_pane.get(r["pane_id"])
         if not h or h.get("agent_status") not in ("idle", "done"):
             continue  # never mid-turn
         if con.execute("SELECT 1 FROM messages WHERE recipient=? AND read_at IS NULL", (r["name"],)).fetchone():
@@ -18242,12 +18776,38 @@ def tick_relaunches(con):
     rows = con.execute("SELECT * FROM agents WHERE status='live' AND relaunch_requested_at IS NOT NULL").fetchall()
     if not rows:
         return
-    agents = herdr_agents()
+    eff = terminal_backend_effective(con)[1]
+    hc_list_ok = True
+    hc_by_name = {}
+    tui_by_name, tui_by_pane, tui_list_ok = {}, {}, True
+    if eff == "hc":
+        agents = herdr_agents()
+        if con.execute(
+            "SELECT 1 FROM agents WHERE status='live' AND relaunch_requested_at IS NOT NULL "
+            "AND json_extract(spawn_args,'$.host_backend')='herdr' LIMIT 1"
+        ).fetchone():
+            tui_agents = _host_agents_list("herdr")
+            tui_list_ok = tui_agents is not None
+            tui_by_name, tui_by_pane = _agents_index(tui_agents or [])
+    else:
+        agents = _host_agents_list("herdr")
+        hc_list = _host_agents_list("hc")
+        hc_list_ok = hc_list is not None
+        hc_by_name = {x["name"]: x for x in (hc_list or []) if x.get("name")}
     if agents is None:
         return
     by_name, by_pane = _agents_index(agents)
     for r in rows:
-        h = by_name.get(r["name"]) or by_pane.get(r["pane_id"])
+        if eff == "hc" and _agent_host_exe(con, r) == "herdr":
+            if not tui_list_ok:
+                continue
+            h = tui_by_name.get(r["name"]) or tui_by_pane.get(r["pane_id"])
+        elif eff != "hc" and _agent_host_exe(con, r) == "hc":
+            if not hc_list_ok:
+                continue
+            h = hc_by_name.get(r["name"])
+        else:
+            h = by_name.get(r["name"]) or by_pane.get(r["pane_id"])
         if not h or h.get("agent_status") not in ("idle", "done"):
             continue  # mid-turn, blocked or not listed: a later tick
         ok, why, _ = gate(con, own_slot=True)  # the agent already holds its slot; never close a pane the gate would queue
@@ -19112,7 +19672,63 @@ def evaluator_home_guard():
             "(FACTORY_HOME=<temp dir> factory <cmd>)", 3)
 
 
+def cli_dispatch_mode(argv, environ=None):
+    """(mode, go binary) from run/cli_impl and the factory-go stamp, as bin/factory reads them; ("python", None) on any
+    doubt. Only the stub execs Go (mode go); here a shadow call is told apart so main() can compare both answers."""
+    environ = os.environ if environ is None else environ
+    if len(argv) < 2 or environ.get("FACTORY_CLI_IMPL") == "python":
+        return "python", None
+    try:
+        mode, srchash, cmds = (RUN / "cli_impl").read_text().strip().split(" ", 2)
+        lib = Path(guard_lib_dir())
+        if mode in ("go", "shadow") and srchash and argv[1] in cmds.split(",") \
+                and _read_line(lib / f"{CLI_GO_BIN}.stamp") == srchash and os.access(lib / CLI_GO_BIN, os.X_OK):
+            return mode, str(lib / CLI_GO_BIN)
+    except (OSError, ValueError):
+        pass
+    return "python", None
+
+
+def cli_shadow(binary, argv, environ):
+    """Python answers (its output and exit code are passed through), then Go runs the same argv under a 2 s timeout;
+    a difference is logged to logs/cli-shadow.log as hashes only, never text. Returns the exit code."""
+    import hashlib
+    py_env = {k: v for k, v in environ.items() if k != "FACTORY_CLI_TRACE"}  # the parent already traced
+    py_env["FACTORY_CLI_IMPL"] = "python"
+    py = subprocess.run([sys.executable, os.path.realpath(argv[0]), *argv[1:]], env=py_env, capture_output=True)
+    sys.stdout.buffer.write(py.stdout)
+    sys.stdout.buffer.flush()
+    sys.stderr.buffer.write(py.stderr)
+    sys.stderr.buffer.flush()
+    try:
+        go = subprocess.run([argv[0], *argv[1:]], executable=binary, env=environ, capture_output=True,
+                            stdin=subprocess.DEVNULL, timeout=2)
+        go_rc, go_out, go_err = go.returncode, go.stdout, go.stderr
+    except subprocess.TimeoutExpired:
+        go_rc, go_out, go_err = "timeout", b"", b""
+    except OSError:
+        go_rc, go_out, go_err = "oserror", b"", b""
+    if (go_rc, go_out, go_err) != (py.returncode, py.stdout, py.stderr):
+        sha = lambda b: hashlib.sha256(b).hexdigest()  # noqa: E731
+        line = " ".join([time.strftime("%Y-%m-%dT%H:%M:%S"), sha("\0".join(argv[1:]).encode()), f"py={py.returncode}",
+                         f"go={go_rc}", sha(py.stdout + b"\0" + py.stderr), sha(go_out + b"\0" + go_err)])
+        try:
+            (RUN.parent / "logs").mkdir(parents=True, exist_ok=True)
+            with open(RUN.parent / "logs" / "cli-shadow.log", "a") as f:
+                f.write(line + "\n")
+        except OSError:
+            pass  # the log is best effort; the answer already went out
+    return py.returncode
+
+
 def main():
+    mode, binary = cli_dispatch_mode(sys.argv)
+    if mode == "shadow" and not (sys.argv[1] in ("whoami", "agents", "flags") or (sys.argv[1] == "config" and len(sys.argv) <= 3)):
+        mode = "python"  # only read-only commands are shadowed: a write would run twice
+    if os.environ.get("FACTORY_CLI_TRACE") == "1":
+        print(f"impl={'python' if mode == 'go' else mode}", file=sys.stderr, flush=True)  # go here: the stub could not exec it
+    if mode == "shadow":
+        sys.exit(cli_shadow(binary, sys.argv, os.environ))
     evaluator_home_guard()
     p = argparse.ArgumentParser(prog="factory", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
 
@@ -19287,6 +19903,8 @@ def main():
     x.add_argument("--model")
     x.add_argument("--org", help="the org this agent belongs to (default: the goal's org, else yours); e.g. cursor")
     x.add_argument("--sandbox", action="store_true", help="run this one agent in the worker sandbox (reviewer, qa, coder)")
+    x.add_argument("--host-backend", choices=["herdr", "hc"], default=None,
+                   help="spawn on herdr TUI or hc for this agent only; config terminal_backend is unchanged")
     x.set_defaults(fn=cmd_spawn)
     x = sp.add_parser("done", help="worker: finish, send summary to lead, get reaped")
     x.add_argument("--force", action="store_true", help="close even with unread decision/request messages")
