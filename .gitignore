@@ -21,3 +21,4 @@ go/**/coverage.out
 .factory-test-*
 
 # personal notes, never committed
+.local-docs/
