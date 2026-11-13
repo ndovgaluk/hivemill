@@ -66,6 +66,20 @@ def disclosure(label, *body, key, count=None, open=False):
     return el("details", summ, *body, class_="disc", data_key=key, open=open or None)
 
 
+FLOW_MOUNT_ID = "flow-root"            # web/flowapp/src/constants.ts MOUNT_ID
+FLOW_JS = "/static/flow/flow.js"       # the committed React bundle (DVDG-554, DVDG-561)
+FLOW_CSS = "/static/flow/flow.css"
+FLOW_MODULE = "module"
+
+
+def flow_mount(scope, oid, *fallback):
+    """DVDG-561: the Flow section as the React flow debugger, full width. The server-rendered flow (`fallback`) sits
+    inside the mount element: shown without JavaScript, replaced when the app mounts (grilling DVDG-552)."""
+    return el("div", section("Flow", el("div", *fallback, id=FLOW_MOUNT_ID, data_scope=scope, data_id=oid, class_="flow-root"),
+                             el("link", rel="stylesheet", href=FLOW_CSS), el("script", "", type=FLOW_MODULE, src=FLOW_JS)),
+              class_="flow-full")
+
+
 def section(title, *body, count=None):
     """Titled box: h2 (+ count) outside, rows inside."""
     head = el("h2", title, " ", el("span", count, class_="sect-n") if count is not None else None)

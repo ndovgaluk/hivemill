@@ -14,7 +14,8 @@ B5 and B6 import from here; keep the signatures stable:
 `points` are (day "YYYY-MM-DD", number) pairs, oldest first.
 """
 from web.components import empty_state
-from web.html import Safe, el, h
+from web.html import Safe, dur, el, h
+from web.queries import FlowState
 
 TONES = ("success", "warning", "danger", "neutral")
 SPARK_W, SPARK_H, SPARK_PAD = 120, 24, 3
@@ -172,3 +173,131 @@ def columns(points, label, height=96, unit="day"):
     svg = _svg([*bars, *texts], f"0 0 {int(vb_w)} {height}", height=height, role="img", focusable="false",
                preserveAspectRatio="xMidYMin meet", **{"aria-label": _summary(points, label, unit)}, **{"class": "cols"})
     return el("div", svg, _data_table(points, label, f"{label.capitalize()} per {unit}, last {n} {unit}s", unit), class_="cols-wrap")
+
+
+# ───────────── task flow diagram (DVDG-544) ─────────────
+FLOW_W, FLOW_H, FLOW_GAP, FLOW_TOP, FLOW_PAD = 132, 62, 34, 12, 8
+FLOW_LOOP_DROP = 34   # how far the rejection loop dips below the boxes
+FLOW_LOOP_FROM, FLOW_LOOP_TO = "review", "coding"   # stage keys of queries.FLOW_STAGES: a rejection sends work back to coding
+
+
+def flow_stage_id(key):
+    """Anchor of a task stage's block under the diagram (a node links here)."""
+    return f"flow-s-{key}"
+
+
+def flow_in_id(key):
+    """Anchor of the instructions a stage received (the arrow into the stage links here)."""
+    return f"flow-in-{key}"
+
+
+def goal_node_id(role):
+    return f"gf-n-{role}"
+
+
+def goal_link_id(a, b):
+    return f"gf-e-{a}-{b}"
+
+
+def _flow_node(i, st, live):
+    x = FLOW_PAD + i * (FLOW_W + FLOW_GAP)
+    cls = f"flow-node flow-node--{st['state']}" + (" flow-node--live" if live else "")
+    tip = [f"{st['label']}: {st['state']}, {dur(st['seconds'])}"] + [f"{n['ts'] or '?'}  {n['text']}" for n in st["notes"]]
+    if st["more"]:
+        tip.insert(1, f"(+{st['more']} earlier)")
+    tip.append("Click to highlight this stage below.")
+    kids = [el("title", "\n".join(tip)),
+            el("rect", class_="flow-box", x=x, y=FLOW_TOP, width=FLOW_W, height=FLOW_H, rx=8),
+            el("text", st["label"], class_="flow-label", x=x + 10, y=FLOW_TOP + 22),
+            el("text", dur(st["seconds"]) if st["seconds"] is not None else "", class_="flow-time", x=x + 10, y=FLOW_TOP + 40)]
+    if live:
+        kids.append(el("text", f"● {live['role']} working", class_="flow-badge", x=x + 10, y=FLOW_TOP + 55))
+    return el("a", el("g", *kids, class_=cls), href=f"#{flow_stage_id(st['key'])}", class_="flow-link")
+
+
+def flow_diagram(flow):
+    """DVDG-544: the task's stages left to right; the current one pulses (stronger, with a moving arrow, while an agent
+    works on it); time spent under each label; the rejection loop back to Coding; notes in each node's <title> tooltip.
+    Every node, arrow and the loop is a link to its block under the diagram, which CSS :target highlights. No JS, no
+    inline style (CSP)."""
+    stages = flow["stages"]
+    live = flow.get("live")
+    nodes, edges = [], []
+    for i, st in enumerate(stages):
+        nodes.append(_flow_node(i, st, live if st["state"] == FlowState.CURRENT else None))
+        if i:
+            x1, x2, y = FLOW_PAD + i * (FLOW_W + FLOW_GAP) - FLOW_GAP, FLOW_PAD + i * (FLOW_W + FLOW_GAP) - 4, FLOW_TOP + FLOW_H / 2
+            cls = "flow-edge" + (" flow-edge--active" if live and st["state"] == FlowState.CURRENT
+                                 else " flow-edge--done" if st["state"] in (FlowState.DONE, FlowState.CURRENT) else "")
+            n_in = sum(1 for n in st["notes"] if n.get("incoming"))
+            edges.append(el("a", el("title", f"{stages[i - 1]['label']} → {st['label']}: {n_in} instruction(s). Click to highlight."),
+                            Safe(f'<line class="flow-hit" x1="{x1}" y1="{y}" x2="{x2}" y2="{y}"/>'),
+                            Safe(f'<line class="{cls}" x1="{x1}" y1="{y}" x2="{x2}" y2="{y}"/>'),
+                            el("polygon", class_="flow-arrow", points=f"{x2},{y} {x2 - 7},{y - 4} {x2 - 7},{y + 4}"),
+                            href=f"#{flow_in_id(st['key'])}", class_="flow-link"))
+    keys = [s["key"] for s in stages]
+    if flow["rejections"] and FLOW_LOOP_FROM in keys and FLOW_LOOP_TO in keys:
+        cx = FLOW_PAD + keys.index(FLOW_LOOP_TO) * (FLOW_W + FLOW_GAP) + FLOW_W / 2
+        rx = FLOW_PAD + keys.index(FLOW_LOOP_FROM) * (FLOW_W + FLOW_GAP) + FLOW_W / 2
+        y0, y1 = FLOW_TOP + FLOW_H, FLOW_TOP + FLOW_H + FLOW_LOOP_DROP
+        n = flow["rejections"]
+        loop = f"M{rx},{y0} C{rx},{y1} {cx},{y1} {cx},{y0}"
+        edges.append(el("a", el("title", "Rejections: click to highlight the review stage"),
+                        el("path", class_="flow-hit", d=loop), el("path", class_="flow-loop", d=loop),
+                        el("text", f"rejected {n}× · {flow['attempts']} attempts", class_="flow-loop-label",
+                           x=(cx + rx) / 2, y=y1 + 4, text_anchor="middle"),
+                        href=f"#{flow_stage_id(FLOW_LOOP_FROM)}", class_="flow-link"))
+    width = FLOW_PAD * 2 + len(stages) * FLOW_W + (len(stages) - 1) * FLOW_GAP
+    height = FLOW_TOP + FLOW_H + FLOW_LOOP_DROP + 12
+    where = next((s["label"] for s in stages if s["state"] == FlowState.CURRENT), "finished")
+    svg = _svg([*edges, *nodes], f"0 0 {width} {height}", role="img", focusable="false",
+               **{"aria-label": f"Task flow, now at: {where}", "class": "flow-svg"})
+    return el("div", svg, class_="flow")
+
+
+# ───────────── goal flow diagram (DVDG-544): roles and who instructed whom ─────────────
+GF_W, GF_H, GF_GAP, GF_PAD, GF_ARC = 108, 54, 22, 8, 26   # GF_ARC: arc height per role between the two ends
+
+
+def goal_diagram(gf):
+    """The goal's roles left to right (Owner → Boss → Director → System → Lead → PM → Coders → Reviewer → QA → Judge),
+    each with its agent count and time alive (pulsing while one of its agents is live), and one arc per pair of roles
+    that messaged each other, labelled with the counts both ways. A node links to that role's block under the diagram
+    (its agents and their own summaries), an arc to the block with the messages between the two roles (:target
+    highlight). No JS, no inline style (CSP)."""
+    nodes, links = gf["nodes"], gf["links"]
+    if not nodes:
+        return empty_state("No agents or messages on this goal yet.")
+    pos = {n["key"]: i for i, n in enumerate(nodes)}
+    span = max((abs(pos[l["b"]] - pos[l["a"]]) for l in links), default=1)
+    top = GF_PAD + 14 + GF_ARC * span
+    cx = lambda k: GF_PAD + pos[k] * (GF_W + GF_GAP) + GF_W / 2  # noqa: E731
+    arcs = []
+    for l in links:
+        x1, x2, d = cx(l["a"]), cx(l["b"]), abs(pos[l["b"]] - pos[l["a"]])
+        apex = top - GF_ARC * d
+        path = f"M{x1},{top} C{x1},{apex} {x2},{apex} {x2},{top}"
+        label = f"{l['ab']}→ {l['ba']}←" if l["ba"] else f"{l['ab']}→"
+        names = {n["key"]: n["label"] for n in nodes}
+        arcs.append(el("a", el("title", f"{names[l['a']]} ⇄ {names[l['b']]}: {l['ab'] + l['ba']} message(s). Click to highlight."),
+                       el("path", class_="flow-hit", d=path), el("path", class_="gflow-arc", d=path),
+                       el("text", label, class_="gflow-count", x=(x1 + x2) / 2, y=top - GF_ARC * d * 0.75 - 3,
+                          text_anchor="middle"),
+                       href=f"#{goal_link_id(l['a'], l['b'])}", class_="flow-link"))
+    boxes = []
+    for n in nodes:
+        x = GF_PAD + pos[n["key"]] * (GF_W + GF_GAP)
+        cls = "flow-node " + ("flow-node--current flow-node--live" if n["live"] else "flow-node--done" if n["agents"] else "flow-node--pending")
+        sub = f"{len(n['agents'])} agent{'s' if len(n['agents']) != 1 else ''}" if n["agents"] else ""
+        boxes.append(el("a", el("g", el("title", f"{n['label']}: {sub or 'no agent'}{', ' + dur(n['seconds']) if n['agents'] else ''}"
+                                                 f"{' · working now' if n['live'] else ''}. Click to highlight."),
+                                el("rect", class_="flow-box", x=x, y=top, width=GF_W, height=GF_H, rx=8),
+                                el("text", n["label"], class_="flow-label", x=x + 9, y=top + 21),
+                                el("text", sub, class_="flow-time", x=x + 9, y=top + 37),
+                                el("text", dur(n["seconds"]) if n["agents"] else "", class_="flow-time", x=x + 9, y=top + 50),
+                                class_=cls),
+                          href=f"#{goal_node_id(n['key'])}", class_="flow-link"))
+    width = GF_PAD * 2 + len(nodes) * GF_W + (len(nodes) - 1) * GF_GAP
+    svg = _svg([*arcs, *boxes], f"0 0 {width} {top + GF_H + GF_PAD}", role="img", focusable="false",
+               **{"aria-label": f"Goal flow: {len(nodes)} roles, {len(links)} links", "class": "flow-svg"})
+    return el("div", svg, class_="flow")

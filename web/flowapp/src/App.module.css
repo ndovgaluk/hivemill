@@ -1,0 +1,21 @@
+/* Colours and spacing come from web/static/app.css (light and dark); no new colour values here. */
+.frame {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 10px;
+  width: 100%;
+  color: var(--text-1);
+  font-family: var(--font);
+}
+
+.card { background: var(--surface-1); border: 1px solid var(--hairline); border-radius: 12px; padding: 10px 12px; }
+.summary { flex: 1 1 100%; }
+.main { flex: 999 1 640px; min-width: 0; display: flex; flex-direction: column; gap: 10px; }
+.diagram { min-height: 320px; }
+.timeline { min-height: 200px; }
+/* sticky so the detail stays in view while the timeline scrolls */
+.inspector { flex: 1 1 340px; min-width: 0; position: sticky; top: 8px; max-height: calc(100vh - 16px); overflow: auto; }
+
+.note { color: var(--text-2); }
+.error { color: var(--danger-fg); }

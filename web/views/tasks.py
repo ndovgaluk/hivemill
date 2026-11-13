@@ -1,14 +1,15 @@
-"""Tasks list and task detail with the full PR cycle. Never renders specs, acceptance text, notes or verdict summaries."""
+"""Tasks list and task detail with the full PR cycle. Never renders specs, acceptance text, notes or verdict summaries,
+except the DVDG-544 Flow section when the owner turned on serve_show_text on a loopback-bound server (web/server.show_text_allowed)."""
 import re
 from types import SimpleNamespace
 
-from web import ci, queries
+from web import charts, ci, queries
 from web.queries import parse_ts
 from web.components import (data_table, disclosure, empty_state, filter_bar, ago, chips, ctx_org, href, org_badge, org_href, pr_label, row_status,
                             GROUP_ORDER, COLLAPSED)
 from web.prices import PRICES_AS_OF
 from web.tokens import attribute, rollup, task_usage
-from web.html import LABELS, badge, card, dur, el, empty, kpi, link, table, ts
+from web.html import LABELS, badge, card, dur, el, empty, kpi, link, md, table, ts
 from web.views.goals import status_badge, task_badge
 
 TITLE = "Tasks"
@@ -247,7 +248,8 @@ def render(ctx, d):
 
 # ── detail ──
 
-from web.components import section, tile                    # noqa: E402  (the list part above is B3's and keeps its imports)
+from web.components import flow_mount, section, tile        # noqa: E402  (the list part above is B3's and keeps its imports)
+from web.flow import Scope as FlowScope                      # noqa: E402
 from web.html import crumbs, glyph, status                  # noqa: E402
 from web.views.goals import DetailView, not_found           # noqa: E402
 
@@ -341,8 +343,10 @@ def _detail_data(ctx, id=None, **params):
             "created": t["created"], "merged": bool(merged_ev), "ci": label, "ci_checks": checks,
             "rejections": cyc["rejections"], "retries": cyc["retries"], "attempts": cyc["attempts"], "reopens": cyc["reopens"],
             "total_s": total, "steps": steps, "cost": _cost_data(ctx, t),
-            "lifecycle": queries.task_lifecycle(con, id, ctx.now), "usage": _usage_data(ctx, id),
-            "incidents": _incident_causes(con, id)}
+            "lifecycle": queries.task_lifecycle(con, id, ctx.now),
+            "flow": queries.task_flow(con, id, ctx.now, show_text=getattr(ctx, "show_text", False)),
+            "show_text": bool(getattr(ctx, "show_text", False)),
+            "usage": _usage_data(ctx, id), "incidents": _incident_causes(con, id)}
 
 
 def _usage_data(ctx, task_id):
@@ -595,6 +599,43 @@ def _usage_section(d):
                    note, el("p", _rework_line(d), class_="muted"))
 
 
+def flow_note(text, body, when=None):
+    """One note line, led by its time (full timestamp on hover); with instruction text (only present when show_text
+    is on) it opens to the Markdown."""
+    line = (el("span", ts(when), class_="muted"), " ", text) if when else (text,)
+    if not body:
+        return el("span", *line, class_="flow-note")
+    return el("details", el("summary", *line), el("div", md(body), class_="flow-text"), class_="flow-note")
+
+
+def flow_hint(show_text):
+    return ("click a box, an arrow or the loop to highlight it below · open a message to read it (Markdown)" if show_text
+            else "click a box, an arrow or the loop to highlight it below · instruction text is hidden: the owner can turn it "
+                 "on with serve_show_text on a 127.0.0.1 server")
+
+
+def _flow_section(d):
+    """DVDG-544: the stage diagram plus one block per stage (anchors the diagram links to; CSS :target highlights the
+    clicked one). Touch and screen readers get the same facts as text here."""
+    fl = d.get("flow")
+    if not fl:
+        return None
+    blocks = []
+    for st in fl["stages"]:
+        inc = [n for n in st["notes"] if n.get("incoming")]
+        rest = [n for n in st["notes"] if not n.get("incoming")]
+        blocks.append(el("div",
+                         el("h4", f"{st['label']} · {st['state']} · {dur(st['seconds'])}"),
+                         el("div", el("strong", "Instructions received"), *[flow_note(n["text"], n["body"], n["ts"]) for n in inc],
+                            id=charts.flow_in_id(st["key"]), class_="flow-in") if inc else None,
+                         el("span", f"+{st['more']} earlier", class_="flow-note") if st["more"] else None,
+                         *[flow_note(n["text"], n["body"], n["ts"]) for n in rest],
+                         id=charts.flow_stage_id(st["key"]), class_="flow-stage"))
+    head = el("p", f"Total {dur(fl['total_s'])}" + (" so far" if fl["open"] else "") + f" · {flow_hint(d.get('show_text'))}",
+              class_="muted")
+    return flow_mount(FlowScope.TASK, fl["task_id"], head, charts.flow_diagram(fl), el("div", *blocks, class_="flow-blocks"))
+
+
 def _detail_render(ctx, d):
     crumb = crumbs(("/tasks", "Tasks"), (f"/task/{d.get('id')}", d.get("id") or "?"))
     if not d.get("found"):
@@ -603,7 +644,8 @@ def _detail_render(ctx, d):
                class_="tiles")
     blocks = _attempt_blocks(d["steps"])
     cycle = ([_attempt(n, b, n == len(blocks), ctx.now) for n, b in enumerate(blocks, 1)] if blocks else [empty_state("No events yet.")])
-    parts = [el("div", crumb, _meta(d), el("p", _cost_line(d["cost"]), class_="muted"), class_="tblock tblock--wide"), section("Verdicts", _verdict_summary(d) or empty_state("No verdicts yet.")), tiles,
+    parts = [el("div", crumb, _meta(d), el("p", _cost_line(d["cost"]), class_="muted"), class_="tblock tblock--wide"), _flow_section(d),
+             section("Verdicts", _verdict_summary(d) or empty_state("No verdicts yet.")), tiles,
              _lifecycle_section(d), _usage_section(d), section("PR cycle", *cycle)]
     fu = [el("span", link(f"/task/{f['id']}", f["id"]), " ", f["title"], " ", task_badge(f["status"], f["waits"]), " ") for f in d["follow_ups"]]
     if d["follow_up_of"]:

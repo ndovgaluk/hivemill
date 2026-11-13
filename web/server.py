@@ -19,6 +19,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlsplit
 
 from web import db as wdb
+from web import flow, flow_findings, flowcost
 from web import queries
 from web.html import page
 from web.tokens import TokenIndex
@@ -32,8 +33,11 @@ CSP = ("default-src 'self'; img-src 'self' data:; style-src 'self'; script-src '
 MAX_CONCURRENT = 8
 REQUEST_TIMEOUT_S = 10
 _ID_RE = re.compile(r"^/(goal|task)/([A-Z]-\d+)$")
-_STATIC_NAME_RE = re.compile(r"^(?:fonts/)?[\w][\w.-]*$")  # one level: static/fonts/
+_FLOW_RE = re.compile(r"^/api/flow/(goal|task)/([A-Z]-\d+)\.json$")   # DVDG-553
+JSON_TYPE = "application/json"
+_STATIC_NAME_RE = re.compile(r"^(?:fonts/|flow/)?[\w][\w.-]*$")  # one level: static/fonts/, static/flow/ (DVDG-554 bundle)
 RELOAD_INTERVAL_S = 60     # FACTORY_SERVE_RELOAD_INTERVAL overrides it (tests)
+SHOW_TEXT_KEY = "serve_show_text"   # config key (bin/factory_cli.py DEFAULT_CONFIG), read per request
 ROOT = Path(__file__).resolve().parent.parent
 # callables a view may append at import; each runs once in a daemon thread when the server starts
 background = []
@@ -42,10 +46,21 @@ background = []
 class Ctx:
     """What a view gets: a per-request read-only connection plus injected helpers."""
 
-    def __init__(self, db, tokens, usage_fn, mem_fn, defaults, now, factory_home=None, query=None):
+    def __init__(self, db, tokens, usage_fn, mem_fn, defaults, now, factory_home=None, query=None, show_text=False):
         self.db, self.tokens, self.usage_fn, self.mem_fn = db, tokens, usage_fn, mem_fn
         self.defaults, self.now, self.factory_home = defaults, now, factory_home
         self.query = query or {}    # str -> first value of the query string; views validate what they use
+        self.show_text = show_text  # DVDG-544: instruction text may be shown (see show_text_allowed)
+
+
+def show_text_allowed(bind, setting):
+    """Instruction text (message bodies, spec, acceptance, verdict summaries) is shown only when the owner set
+    serve_show_text=1 AND the server listens on a loopback address: an unauthenticated UI must not serve it on a LAN."""
+    try:
+        loopback = ipaddress.ip_address(bind).is_loopback
+    except ValueError:
+        loopback = False
+    return loopback and (setting or "").strip() == "1"
 
 
 def _refuse(msg):
@@ -158,6 +173,9 @@ class Handler(BaseHTTPRequestHandler):
             return self._healthz(app)
         if path.startswith("/static/"):
             return self._static(unquote(path[len("/static/"):]))
+        m = _FLOW_RE.match(path)
+        if m:
+            return self._flow(m.group(1), m.group(2))
         if path.startswith("/api/") and path.endswith(".json"):
             name = path[len("/api/"):-len(".json")]
             route = "/" if name == "home" else f"/{name}"
@@ -177,18 +195,37 @@ class Handler(BaseHTTPRequestHandler):
     def _view(self, view, active, params, as_json=False):
         app = self.server.app
         with wdb.reader(app.current_db()) as con:
+            setting = con.execute("SELECT value FROM config WHERE key=?", (SHOW_TEXT_KEY,)).fetchone()
             ctx = Ctx(con, app.tokens, app.usage_fn, app.mem_fn, app.defaults, dt.datetime.now().astimezone(), app.factory_home,
-                      getattr(self, "query", {}))
+                      getattr(self, "query", {}), show_text=show_text_allowed(app.bind, setting[0] if setting else None))
             data = view.data(ctx, **params)
             if as_json:
                 body, ctype = json.dumps(data, default=str), "application/json"
             else:
                 shell = {**queries.shell_status(con, app.usage_fn() if app.usage_fn else None, app.defaults,
                                                  mem=app.mem_fn() if app.mem_fn else None, now=ctx.now), "now": ctx.now}
+                # DVDG-561: the goal and task pages refresh their flow data themselves; no 60 s full-page reload there
                 body = page(getattr(view, "TITLE", active), view.render(ctx, data), active, shell=shell,
+                            refresh=getattr(view, "REFRESH", True),
                             org=queries.org_param(ctx.query), path=getattr(self, "_path", None), query=ctx.query)
                 ctype = "text/html; charset=utf-8"
         self._send(200, body, ctype)  # reader is closed before the response is written
+
+    def _flow(self, scope, oid):
+        """DVDG-553: the flow debugger's JSON for one goal or task; 404 JSON for an unknown id."""
+        app = self.server.app
+        with wdb.reader(app.current_db()) as con:
+            setting = con.execute("SELECT value FROM config WHERE key=?", (SHOW_TEXT_KEY,)).fetchone()
+            now = dt.datetime.now().astimezone()
+            data = flow.build(con, scope, oid, now, show_text_allowed(app.bind, setting[0] if setting else None))
+            if data is not None:   # DVDG-555: tokens and cost per box and step, from the logs the token index knows
+                index = getattr(app.tokens, "__self__", None)
+                flowcost.fill(data, con, flowcost.Usage(app.tokens() if app.tokens else {},
+                                                        index if isinstance(index, TokenIndex) else None))
+                flow_findings.attach(data, con, now)   # DVDG-560
+        if data is None:
+            return self._send(404, json.dumps({"error": "not found", "scope": scope, "id": oid}), JSON_TYPE)
+        self._send(200, json.dumps(data, default=str), JSON_TYPE)
 
     def _healthz(self, app):
         try:
@@ -210,7 +247,7 @@ class Handler(BaseHTTPRequestHandler):
 class _App:
     def __init__(self, db_path, bind, port, hostnames, tokens, usage_fn, mem_fn, defaults, factory_home):
         self.db_path, self.tokens, self.usage_fn, self.mem_fn = db_path, tokens, usage_fn, mem_fn
-        self.defaults, self.factory_home = defaults, factory_home
+        self.defaults, self.factory_home, self.bind = defaults, factory_home, bind
         self.hosts = _host_allowed(bind, port, hostnames)
         self.sem = threading.BoundedSemaphore(MAX_CONCURRENT)
 

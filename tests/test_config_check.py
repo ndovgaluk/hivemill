@@ -73,3 +73,19 @@ class ConfigCheck(FactoryTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ServeShowText(FactoryTestCase):
+    """DVDG-544: serve_show_text accepts only 0 or 1 (the loopback gate is tested in tests/test_web_detail.py)."""
+
+    def setUp(self):
+        super().setUp()
+        self.env.seed_agent("claude-director", "director")
+
+    def test_accepts_0_and_1_and_refuses_anything_else(self):
+        r = self.env.run("config", "serve_show_text", "1", agent="claude-director")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(self.env.run("config", "serve_show_text", "0", agent="claude-director").returncode, 0)
+        r = self.env.run("config", "serve_show_text", "yes", agent="claude-director")
+        self.assertEqual(r.returncode, 2, r.stderr)
+        self.assertIn("serve_show_text must be 0 or 1", r.stderr)

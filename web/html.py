@@ -41,6 +41,12 @@ CLASSES = frozenset({
     *(f"status--{s}" for s in _STATUSES),
     *(f"{p}-{o}" for p in ("org", "org-dot", "lane-") for o in _orgs.NAMES),
     *(f"bar--{n}" for n in range(0, 101, 5)),
+    # DVDG-544 task flow diagram (web/charts.flow_diagram)
+    "flow", "flow-svg", "flow-node", "flow-node--live", "flow-box", "flow-label", "flow-time", "flow-badge", "flow-edge",
+    "flow-edge--done", "flow-edge--active", "flow-arrow", "flow-loop", "flow-loop-label", "flow-note", "flow-text",
+    "flow-link", "flow-hit", "flow-blocks", "flow-stage", "flow-in", "gflow-arc", "gflow-count",
+    "flow-full", "flow-root",   # DVDG-561: the React flow debugger's full-width section and mount element
+    *(f"flow-node--{s}" for s in ("done", "current", "pending", "skipped")),
 })
 
 # nav groups (note 4): (group label, ((path, label, icon), ...)); a flat NAV keeps the old (path, label) shape
@@ -198,6 +204,111 @@ def dur(seconds):
     if s < 86400:
         return f"{s // 3600}h {s % 3600 // 60:02d}m"
     return f"{s // 86400}d {s % 86400 // 3600}h"
+
+
+# ───────────── small safe Markdown (DVDG-544: agents' instruction text rendered like Taskosaur's viewer) ─────────────
+MD_MAX_CHARS = 20000
+_MD_LINK_RE = re.compile(r"\[([^\]\n]+)\]\((https?://[^\s)]+)\)")
+_MD_BOLD_RE = re.compile(r"\*\*(?=\S)(.+?)(?<=\S)\*\*")
+_MD_EM_RE = re.compile(r"(?<![*\w])\*(?=\S)(.+?)(?<=\S)\*(?![*\w])")
+_MD_HEAD_RE = re.compile(r"(#{1,6})\s+(.*)")
+_MD_UL_RE = re.compile(r"[-*+]\s+")
+_MD_OL_RE = re.compile(r"\d+[.)]\s+")
+_MD_TABLE_SEP_RE = re.compile(r"^\|?\s*:?-{3,}")
+_MD_FENCE = "```"
+_MD_HEAD_SHIFT = 3   # '#' renders as <h4>: message headings sit inside a page section
+
+
+def _md_inline(s):
+    """Inline Markdown on one line: `code` spans stay literal; the rest is escaped first, then [text](http(s) url),
+    **bold** and *italic* become tags. Other link schemes, images and raw HTML stay escaped text."""
+    out = []
+    for part in re.split(r"(`[^`\n]+`)", s):
+        if len(part) > 1 and part.startswith("`") and part.endswith("`"):
+            out.append(f"<code>{h(part[1:-1])}</code>")
+            continue
+        p = h(part)
+        p = _MD_LINK_RE.sub(lambda m: f'<a href="{m.group(2)}" rel="noopener noreferrer">{m.group(1)}</a>', p)
+        p = _MD_BOLD_RE.sub(r"<strong>\1</strong>", p)
+        out.append(_MD_EM_RE.sub(r"<em>\1</em>", p))
+    return "".join(out)
+
+
+def _md_cells(row):
+    return [c.strip() for c in row.strip().strip("|").split("|")]
+
+
+def md(text):
+    """Markdown → HTML for instruction text (message bodies, specs, verdict summaries): ATX headings, - * + and 1. lists
+    (flattened to one level), > quotes, ``` fences, | pipe | tables |, paragraphs, plus _md_inline. Everything is escaped
+    before any tag is added, so the result is safe to embed; no class or style attributes are emitted (CSP, CLASSES)."""
+    lines = (text or "")[:MD_MAX_CHARS].replace("\r\n", "\n").split("\n")
+    out, para, i, n = [], [], 0, len(lines)
+
+    def flush():
+        if para:
+            out.append(f"<p>{_md_inline(' '.join(para))}</p>")
+            para.clear()
+
+    while i < n:
+        s = lines[i].strip()
+        if s.startswith(_MD_FENCE):
+            flush()
+            j, buf = i + 1, []
+            while j < n and not lines[j].strip().startswith(_MD_FENCE):
+                buf.append(lines[j])
+                j += 1
+            out.append(f"<pre><code>{h(chr(10).join(buf))}</code></pre>")
+            i = j + 1
+            continue
+        if not s:
+            flush()
+            i += 1
+            continue
+        m = _MD_HEAD_RE.match(s)
+        if m:
+            flush()
+            lvl = min(6, len(m.group(1)) + _MD_HEAD_SHIFT)
+            out.append(f"<h{lvl}>{_md_inline(m.group(2))}</h{lvl}>")
+            i += 1
+            continue
+        if s.startswith(">"):
+            flush()
+            buf = []
+            while i < n and lines[i].strip().startswith(">"):
+                buf.append(lines[i].strip()[1:].strip())
+                i += 1
+            out.append(f"<blockquote>{_md_inline(' '.join(buf))}</blockquote>")
+            continue
+        if _MD_UL_RE.match(s) or _MD_OL_RE.match(s):
+            flush()
+            pat = _MD_OL_RE if _MD_OL_RE.match(s) else _MD_UL_RE
+            tag = "ol" if pat is _MD_OL_RE else "ul"
+            items = []
+            while i < n and pat.match(lines[i].strip()):
+                items.append(pat.sub("", lines[i].strip(), count=1))
+                i += 1
+                while i < n and lines[i].startswith(("  ", "\t")) and lines[i].strip() \
+                        and not (_MD_UL_RE.match(lines[i].strip()) or _MD_OL_RE.match(lines[i].strip())):
+                    items[-1] += " " + lines[i].strip()
+                    i += 1
+            out.append(f"<{tag}>" + "".join(f"<li>{_md_inline(x)}</li>" for x in items) + f"</{tag}>")
+            continue
+        if s.startswith("|") and i + 1 < n and _MD_TABLE_SEP_RE.match(lines[i + 1].strip()):
+            flush()
+            head, rows = _md_cells(s), []
+            i += 2
+            while i < n and lines[i].strip().startswith("|"):
+                rows.append(_md_cells(lines[i]))
+                i += 1
+            out.append("<table><thead><tr>" + "".join(f"<th>{_md_inline(c)}</th>" for c in head) + "</tr></thead><tbody>"
+                       + "".join("<tr>" + "".join(f"<td>{_md_inline(c)}</td>" for c in r) + "</tr>" for r in rows)
+                       + "</tbody></table>")
+            continue
+        para.append(s)
+        i += 1
+    flush()
+    return Safe("".join(out))
 
 
 def card(title, *body):

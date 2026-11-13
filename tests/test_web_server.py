@@ -51,6 +51,15 @@ def get(httpd, path, host="auto", method="GET"):
         c.close()
 
 
+THEME_SCRIPT = '<script src="/static/theme.js" defer></script>'           # the deferred theme toggle
+FLOW_SCRIPT = '<script type="module" src="/static/flow/flow.js"></script>'  # DVDG-561: the committed React flow bundle
+
+
+def assert_known_scripts(case, text):
+    """Only the two known same-origin script tags may appear; anything else (inline or another file) fails."""
+    case.assertNotIn("<script", text.replace(THEME_SCRIPT, "").replace(FLOW_SCRIPT, ""))
+
+
 class ServerCase(unittest.TestCase):
     hostnames = ()
 
@@ -395,7 +404,16 @@ class TestVocabularyAndStubs(ServerCase):
             self.assertNotRegex(text, r'href="(?:https?:)?//(?!github\.com/[\w.-]+/[\w.-]+/pull/\d+")')
             for href in re.findall(r'href="(https?://[^"]*)"', text):
                 self.assertRegex(href, r"^https://github\.com/[\w.-]+/[\w.-]+/pull/\d+$")
-            self.assertNotIn("<script", text.replace('<script src="/static/theme.js" defer></script>', ""))  # only the deferred theme toggle
+            assert_known_scripts(self, text)
+
+    def test_unknown_script_is_rejected(self):
+        """Guard (DVDG-561): the two known same-origin scripts pass; any other script tag still fails."""
+        page = self.get("/goals")[2].decode()
+        assert_known_scripts(self, page)                                   # accept: a real page through the handler
+        for extra in ('<script src="/static/other.js"></script>', "<script>alert(1)</script>",
+                      '<script type="module" src="/static/flow/flow.js" async></script>'):
+            with self.subTest(extra), self.assertRaises(AssertionError):
+                assert_known_scripts(self, page.replace("</body>", extra + "</body>"))
 
     def test_registry_complete(self):
         self.assertEqual(set(ROUTES), {"/", "/goals", "/goal/<id>", "/tasks", "/task/<id>", "/agents", "/resources",

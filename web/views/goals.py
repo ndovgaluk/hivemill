@@ -1,4 +1,5 @@
-"""Goals page and goal detail: progress, success criteria, owner-pending items. Never renders plan bodies."""
+"""Goals page and goal detail: progress, success criteria, owner-pending items. Never renders plan bodies.
+The DVDG-544 goal Flow shows message bodies and agent summaries only with serve_show_text on a loopback bind."""
 import statistics
 from threading import local as _thread_local
 from types import SimpleNamespace
@@ -7,7 +8,8 @@ from web import charts, queries, tokens as wtokens
 from web.prices import PRICES_AS_OF
 from scout import orgs as _orgs
 from web.components import (AGENT_COLS, COLLAPSED, agent_row, GROUP_ORDER, ago, chip, chips, ctx_org, data_table, disclosure, empty_state, filter_bar, needs_you_row,
-                            org_badge, org_href, row_status, section, segmented)
+                            org_badge, org_href, row_status, section, segmented, flow_mount)
+from web.flow import Scope as FlowScope
 from web.html import CLASSES, LABELS, badge, card, crumbs, dur, el, link, table, ts
 from web.views.home import _needs, goal_row, needs_by_goal
 
@@ -25,6 +27,8 @@ INTENT_OPEN_MAX =480   # a longer intent collapses behind a disclosure
 class DetailView:
     """A detail page whose h1 is the subject's own title. The server reads `TITLE` after `data()` on the same thread, so
     data() leaves the title in a thread-local and web/server.py needs no change."""
+
+    REFRESH = False   # DVDG-561: the flow debugger polls its own data (30 s); a full-page reload would lose its state
 
     def __init__(self, fallback, data, render):
         self._fallback, self._data, self.render, self._local = fallback, data, render, _thread_local()
@@ -167,6 +171,8 @@ def _detail_data(ctx, id=None, **params):
     ids = {t["id"] for t in g["tasks"]}
     g["blocking"] = [i for i in _needs(ctx) if i.get("ref") == id or i.get("ref") in ids]
     g["usage"] = _usage(ctx, id)
+    g["show_text"] = bool(getattr(ctx, "show_text", False))
+    g["flow"] = queries.goal_flow(ctx.db, id, ctx.now, show_text=g["show_text"])
     return g
 
 
@@ -317,6 +323,33 @@ def _rail(d):
     return el("aside", el("dl", [[el("dt", k), el("dd", a, b)] for k, a, b in defs], class_="rail-dl"), class_="rail", aria_label="Goal details")
 
 
+def _goal_flow_section(d):
+    """DVDG-544: who instructed whom on this goal; nodes and arcs link to the blocks below (CSS :target highlight)."""
+    gf = d.get("flow")
+    if not gf:
+        return None
+    from web.views.tasks import flow_hint, flow_note   # tasks imports goals at module level
+    names = {n["key"]: n["label"] for n in gf["nodes"]}
+    blocks = []
+    for n in gf["nodes"]:
+        agents = [el("div", flow_note(f"{a['name']} started · {a['status']} · {dur(a['seconds'])}", None, a["started"]),
+                     flow_note("its summary of the work", a["summary"]) if a["summary"] else None)
+                  for a in n["agents"]]
+        blocks.append(el("div", el("h4", f"{n['label']} · {len(n['agents'])} agent(s) · {dur(n['seconds'])}"
+                                         + (" · working now" if n["live"] else "")),
+                         *(agents or [el("span", "no agent of this role on the goal (messages only)", class_="flow-note")]),
+                         id=charts.goal_node_id(n["key"]), class_="flow-stage"))
+    for l in gf["links"]:
+        msgs = [flow_note(f"{m['from']} → {m['to']} ({m['kind']}): {m['subject']}", m["body"], m["ts"])
+                for m in l["messages"]]
+        blocks.append(el("div", el("h4", f"{names[l['a']]} ⇄ {names[l['b']]} · {l['ab']} → · {l['ba']} ←"),
+                         el("span", f"+{l['more']} earlier", class_="flow-note") if l["more"] else None, *msgs,
+                         id=charts.goal_link_id(l["a"], l["b"]), class_="flow-stage"))
+    head = el("p", f"{len(gf['nodes'])} roles · {sum(l['ab'] + l['ba'] for l in gf['links'])} messages · "
+                   f"{flow_hint(d.get('show_text'))}", class_="muted")
+    return flow_mount(FlowScope.GOAL, gf["goal_id"], head, charts.goal_diagram(gf), el("div", *blocks, class_="flow-blocks"))
+
+
 def _detail_render(ctx, d):
     if not d.get("found"):
         return not_found("goal", d.get("id"), "/goals", "Back to Goals", _crumb(d.get("id") or "?"))
@@ -328,9 +361,10 @@ def _detail_render(ctx, d):
     meta = el("p", status_badge(d["status"]), " ", org_badge(d.get("org")), " · ",
               f"P{d['priority']}" if d["priority"] is not None else "no priority",
               " · ", team or "no team", " · updated ", ts(d["updated"]), class_="metarow")
-    main = el("div", meta, _intent(d), _teams(d, ctx.now), charts.meter(done, total, summary), _cost_time_card(d), _blocking(d, ctx.now), _criteria(d), _tasks_table(d, ctx.now),
-              class_="gd-main")
-    return el("div", _crumb(d["id"]), el("div", main, _rail(d), class_="gd"))
+    main = el("div", _intent(d), _teams(d, ctx.now), charts.meter(done, total, summary), _cost_time_card(d),
+              _blocking(d, ctx.now), _criteria(d), _tasks_table(d, ctx.now), class_="gd-main")
+    # DVDG-561: the flow debugger sits above the two columns, so it gets the full content width
+    return el("div", _crumb(d["id"]), meta, _goal_flow_section(d), el("div", main, _rail(d), class_="gd"))
 
 
 detail = DetailView("Goal", _detail_data, _detail_render)

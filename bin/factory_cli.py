@@ -239,6 +239,7 @@ DEFAULT_CONFIG = {
     "serve_bind": "",            # `factory serve`: LAN address to listen on; empty = source address of the default route
     "serve_port": "8765",        # `factory serve`: TCP port
     "serve_hostnames": "",       # `factory serve`: extra Host names accepted besides the bind IP (comma-separated); empty = the bind IP only
+    "serve_show_text": "0",      # 1 = /task/<id> Flow shows instruction text (message bodies, spec, acceptance, verdict summaries); only on a loopback bind (DVDG-544)
     "worktree_reuse": "0",       # 1 = a new coder task reuses a free pooled worktree of its project (docs/worktree-reuse.md); 0 = off
     "worktree_pool_max": "2",    # free pooled worktrees `factory clean` keeps per project when worktree_reuse=1
     "task_clones": "0",          # 1 = a new coder task gets a standalone `git clone --shared` instead of a `git worktree add` (docs/git-hardening.md); 0 = off
@@ -2757,6 +2758,10 @@ def _config_value_rules(key, value):
         a.value = a.value.strip()
         if a.value and not _FACTORY_URL_SHAPE.fullmatch(a.value):
             die(f"factory_remote_url must be https://github.com/<owner>/<repo>.git (no '.' or '..' segments); {a.value!r} is not", 2)
+    if a.key == "serve_show_text":
+        a.value = a.value.strip()
+        if a.value not in ("0", "1"):
+            die(f"serve_show_text must be 0 or 1, not {a.value!r}", 2)
     if a.key == "task_clones":
         a.value = a.value.strip()
         if a.value not in ("0", "1"):

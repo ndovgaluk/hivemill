@@ -38,6 +38,33 @@ def _parse_ts(s):
     return t.astimezone() if t.tzinfo is None else t
 
 
+USAGE_FIELDS = COUNTERS[:5]   # the priced token counts (web.prices.FIELDS)
+USAGE_MARK = b'"usage"'       # cheap pre-filter: only lines holding this are parsed
+ASSISTANT = "assistant"
+
+
+def usage_line(d):
+    """The usage of one parsed assistant log line, or None: {key (dedupe: (message id, request id) or uuid), ts, model,
+    fast, input, output, cache_read, cache_write_5m, cache_write_1h}. The one parser the index and the flow
+    debugger's per-step cost (web/flowcost.py) share."""
+    msg = d.get("message")
+    u = msg.get("usage") if isinstance(msg, dict) else None
+    if not isinstance(u, dict):
+        return None
+    mid, rid = msg.get("id"), d.get("requestId")
+    cc = u.get("cache_creation")
+    cc = cc if isinstance(cc, dict) else {}
+    w1h = _int(cc.get("ephemeral_1h_input_tokens"))
+    w5m = _int(cc.get("ephemeral_5m_input_tokens"))
+    total_w = _int(u.get("cache_creation_input_tokens"))
+    if w5m + w1h < total_w:          # no / partial split: the remainder is billed as 5m
+        w5m = total_w - w1h
+    return {"key": (mid, rid) if mid and rid else d.get("uuid"), "ts": d.get("timestamp"),
+            "model": msg.get("model") if isinstance(msg.get("model"), str) else "unknown",
+            "fast": u.get("speed") == "fast", "input": _int(u.get("input_tokens")), "output": _int(u.get("output_tokens")),
+            "cache_read": _int(u.get("cache_read_input_tokens")), "cache_write_5m": w5m, "cache_write_1h": w1h}
+
+
 def _local_day(ts):
     t = _parse_ts(ts)
     return t.astimezone().date().isoformat() if t else "unknown"
@@ -290,18 +317,16 @@ class TokenIndex:
         return end + 1
 
     def _usage(self, path, fs, owner, d):
-        msg = d.get("message")
-        u = msg.get("usage") if isinstance(msg, dict) else None
-        if not isinstance(u, dict):
+        x = usage_line(d)
+        if x is None:
             return
-        mid, rid = msg.get("id"), d.get("requestId")
-        key = (mid, rid) if mid and rid else d.get("uuid")
+        key = x["key"]
         if key is not None:
             if key in owner:
                 return
             owner[key] = path
             fs.keys.add(key)
-        ts = d.get("timestamp")
+        ts = x["ts"]
         t = _parse_ts(ts)
         if t is not None:
             tu = t.astimezone(dt.timezone.utc).isoformat(timespec="seconds")
@@ -311,21 +336,9 @@ class TokenIndex:
                 fs.last_ts = tu
         if fs.cwd is None and isinstance(d.get("cwd"), str):
             fs.cwd = d["cwd"]
-        cc = u.get("cache_creation")
-        cc = cc if isinstance(cc, dict) else {}
-        w1h = _int(cc.get("ephemeral_1h_input_tokens"))
-        w5m = _int(cc.get("ephemeral_5m_input_tokens"))
-        total_w = _int(u.get("cache_creation_input_tokens"))
-        if w5m + w1h < total_w:          # no / partial split: the remainder is billed as 5m
-            w5m = total_w - w1h
-        model = msg.get("model") if isinstance(msg.get("model"), str) else "unknown"
-        fast = u.get("speed") == "fast"
-        row = fs.contrib.setdefault((model, _local_day(ts), fast), [0, 0, 0, 0, 0, 0])
-        row[0] += _int(u.get("input_tokens"))
-        row[1] += _int(u.get("output_tokens"))
-        row[2] += _int(u.get("cache_read_input_tokens"))
-        row[3] += w5m
-        row[4] += w1h
+        row = fs.contrib.setdefault((x["model"], _local_day(ts), x["fast"]), [0, 0, 0, 0, 0, 0])
+        for i, k in enumerate(USAGE_FIELDS):
+            row[i] += x[k]
         row[5] += 1                      # `iterations[]` is deliberately ignored: it repeats these totals
 
     def _build(self, bytes_read):

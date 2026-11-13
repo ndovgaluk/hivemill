@@ -5,12 +5,14 @@ Every page under `docs/`, grouped by what you want to do. New to the factory? St
 ## Use it
 
 - [SETUP.md](SETUP.md): install the factory on a Linux box and bring up the first agents.
+- [getting-started.md](getting-started.md): the parts, the technology stack, and how to set up, build, test and run it, in one ordered guide.
 - [adopt/ADOPT.md](adopt/ADOPT.md): a prompt you hand to your own Claude Code so it performs the setup for you.
 - [examples/README.md](examples/README.md): overview of three worked examples with real command output.
 - [examples/01-goal-to-merged-pr.md](examples/01-goal-to-merged-pr.md): follows one owner request all the way to a merged PR.
 - [examples/02-handling-a-rejection.md](examples/02-handling-a-rejection.md): what happens when review fails and the judge rejects.
 - [examples/03-digest-and-scorecard.md](examples/03-digest-and-scorecard.md): the morning digest and the per-team scorecard.
 - [web-ui.md](web-ui.md): the dashboard started by `factory serve` and what each panel shows.
+- [flow-debugger.md](flow-debugger.md): the interactive Flow section of goal and task pages: diagram, timeline, instructions, cost per step, findings.
 - [releases/v0.4.0-announcement.md](releases/v0.4.0-announcement.md): what's new in v0.4.0, in plain English, with two screenshots.
 - [images/README.md](images/README.md): light and dark screenshots of the dashboard, built from fictional data.
 - [demo-data.md](demo-data.md): how the fictional demo home used for screenshots and examples is generated.
@@ -117,6 +119,7 @@ Every page under `docs/`, grouped by what you want to do. New to the factory? St
 - [runtimes.md](runtimes.md): agent runtimes (Claude, Cursor) and the two-org model (claude-* and cursor-* side by side).
 - [research/cursor-harness.md](research/cursor-harness.md): research behind the Cursor Agent CLI runtime.
 - [research/cursor-e2e-issues.md](research/cursor-e2e-issues.md): issues found dogfooding Cursor coder, qa, reviewer and judge.
+- [research/windows-port.md](research/windows-port.md): feasibility of running the factory natively on Windows, and the decision to use WSL2 instead.
 - [web-design.md](web-design.md): the design pass behind the web UI styling.
 - [web-redesign-brief.md](web-redesign-brief.md): G-015 SC4 redesign brief: page audit from the before screenshots, decisions, F-27 tree, task split.
 - [web-redesign-review.md](web-redesign-review.md): G-015 SC4 design review: before and after screenshots per page, phone layout, contrast, open visual findings.

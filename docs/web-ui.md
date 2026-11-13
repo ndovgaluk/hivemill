@@ -64,8 +64,8 @@ Orgs (G-028). The factory can run two orgs side by side, a Claude org and a Curs
 The status header has a global org filter, a segmented control "All · Claude · Cursor", carried as `?org=claude` or `?org=cursor`. Any other value means All and is never echoed. The sidebar, tab bar and the in-page links (filters, sort, range, breakdown) keep `?org=`, so the filter follows you from page to page; switching org from the header drops the page's other filters. The box's capacity (agent cap, memory, load, the spawn gate, Claude usage) is shared by both orgs and is never filtered.
 
 - `/` Overview. When both orgs have goals or agents, it starts with two org lanes side by side (stacked on a phone): per org the boss and director (running, queued or not running), active teams (an active team still counts while its lead is parked; the lane shows teams, leads awake, parked, waking, and workers), live workers, active goals and queued agents, each linking to the filtered page, and a health pill (worst first: "Boss not running", "Director not running", "n need you", "n queued", "Idle", "All normal"). With `?org=` only that org's lane shows, and the sections below show only that org's needs-you items, goals, agents, merges and bouncing tasks (System stays shared). Then, in this order: "Needs you" (blocked tasks, escalations and requests, merges waiting for an OK, blocked or proposed goals), "System" (gauges for agents against the cap, available memory, load and Claude usage, with a link to Resources), "Open goals", "Agents running", "Shipped" (recent merges, linking to the changelog) and "Quality" (headline tiles and what is bouncing now, linking to /quality).
-- `/goals` and `/goal/<id>`: an Org facet (All, Claude, Cursor with goal counts; the same `?org=` as the header), open goals with status, priority, org chip and progress, sortable, with "Needs you" and a collapsed "Done" list; one goal shows its org chip next to the status, what is blocking it, its success criteria (met or open, linked to the tasks), its tasks grouped by status, its intent, and a side rail with teams, plan version and dates. **Metrics:** one goal shows a "Cost and time" card with merged PRs, the median wall time per merged PR, the estimated cost of its tasks, of its goal overhead and in total. Rework is the cost of the sessions of agents that started after the task's first rejection; lead and HQ cost is goal overhead and is never split across tasks. Every cost is an estimate at list prices (prices as of the date shown on the page, API-equivalent, not a bill), from the price table in `web/prices.py`; a model without a price shows as unknown, never as 0.
-- `/tasks` and `/task/<id>`: all tasks as a table (status, ID, task, goal with the goal's org chip, assignee, PR with its CI state, rejections, updated), filterable by status and goal (with `?org=`, only that org's goals and tasks); one task shows its meta, verdicts, total time, rejections and attempts, the PR cycle and follow-ups. **Metrics:** the `/tasks` table has sortable Cost, Tokens and Wall time columns (cost and tokens from the Claude session logs, shown as `n/a` for Cursor-org tasks, which report none; wall time is creation to merge for a merged task, `-` otherwise, and a task without a value sorts last in either direction). `/task/<id>` shows a lifecycle by stage, a "Cost and tokens" table per agent (input, output, cache read and write, cost) and a "Rework" line with its cost, its share of the task's cost and its causes. Rework is the cost of the sessions of agents that started after the task's first rejection; lead and HQ cost is goal overhead and is never split across tasks. Every cost is an estimate at list prices (prices as of the date shown on the page, API-equivalent, not a bill), from the price table in `web/prices.py`; a model without a price shows as unknown, never as 0.
+- `/goals` and `/goal/<id>`: an Org facet (All, Claude, Cursor with goal counts; the same `?org=` as the header), open goals with status, priority, org chip and progress, sortable, with "Needs you" and a collapsed "Done" list; one goal shows its org chip next to the status, what is blocking it, its success criteria (met or open, linked to the tasks), its tasks grouped by status, its intent, and a side rail with teams, plan version and dates. **Flow** (DVDG-544, top of `/goal/<id>`): one box per role that worked on the goal (Owner, Boss, Director, System for the CLI's kickoffs, Lead, PM, Coders, Reviewer, QA, Judge) with its agent count and time alive, pulsing while one of its agents is live, and one arc per pair of roles that messaged each other with the counts both ways. Clicking an arc highlights the block listing the messages between the two roles; clicking a box highlights that role's block (its agents, their status and time, and with `serve_show_text` their own summary of the work). Links and CSS `:target`, no JavaScript. **Metrics:** one goal shows a "Cost and time" card with merged PRs, the median wall time per merged PR, the estimated cost of its tasks, of its goal overhead and in total. Rework is the cost of the sessions of agents that started after the task's first rejection; lead and HQ cost is goal overhead and is never split across tasks. Every cost is an estimate at list prices (prices as of the date shown on the page, API-equivalent, not a bill), from the price table in `web/prices.py`; a model without a price shows as unknown, never as 0.
+- `/tasks` and `/task/<id>`: all tasks as a table (status, ID, task, goal with the goal's org chip, assignee, PR with its CI state, rejections, updated), filterable by status and goal (with `?org=`, only that org's goals and tasks); one task shows its meta, verdicts, total time, rejections and attempts, the PR cycle and follow-ups. **Flow** (DVDG-544, top of `/task/<id>`): a diagram of the stages Goal (HQ) → Planned → Coding → Review / QA → Judge → Merged (Goal holds the HQ chain that led to the task: goal-level messages up to the task's creation, boss → director → lead, and the time from goal to task), each marked done, current, pending or skipped, with the time spent in it (an open stage counts until now) and a dashed loop back to Coding with the rejection and attempt counts; the current stage always pulses (stronger, and its incoming arrow moves, while an agent of the task is live; off under reduced motion); every box, arrow and the rejection loop is a link that highlights its block under the diagram (a stage, the instructions the stage received, the review stage). Hovering or focusing a stage shows its notes in a tooltip, oldest first: who did what and when (status changes, agent starts and ends, verdict kinds with the head commit, rejection causes, messages as sender → recipient with their subject); a table under the diagram repeats the same facts for touch and screen readers. A message goes to the stage of the worker it instructs (requests and decisions) or of its sender. With `serve_show_text=1` on a loopback-bound server, each message, the task's spec and acceptance, and each verdict opens to its full text, rendered as Markdown (headings, lists, quotes, code, tables, http(s) links; raw HTML stays text); otherwise that text is never read. Server-rendered SVG and CSS only (no JavaScript). **Metrics:** the `/tasks` table has sortable Cost, Tokens and Wall time columns (cost and tokens from the Claude session logs, shown as `n/a` for Cursor-org tasks, which report none; wall time is creation to merge for a merged task, `-` otherwise, and a task without a value sorts last in either direction). `/task/<id>` shows a lifecycle by stage, a "Cost and tokens" table per agent (input, output, cache read and write, cost) and a "Rework" line with its cost, its share of the task's cost and its causes. Rework is the cost of the sessions of agents that started after the task's first rejection; lead and HQ cost is goal overhead and is never split across tasks. Every cost is an estimate at list prices (prices as of the date shown on the page, API-equivalent, not a bill), from the price table in `web/prices.py`; a model without a price shows as unknown, never as 0.
 - `/agents`: agents running (grouped by org, then team; the group header names the org when both orgs run agents), queued with the reason, teams with their org and lead state, then an "Ended" list; filter chips for status, org, role, goal and **runtime** (Claude Code vs Cursor Agent; shown only when some agent runs on another runtime than its org's, `?runtime=` still works). The summary line splits the running agents per org. Each agent shows its org chip; see [docs/runtimes.md](runtimes.md).
 - `/resources`: the spawn gate (open or closed, derived, not live; its agents check reads "agents live 7/6 (Claude 3 · Cursor 4)"), capacity gauges (agents, memory, load, Claude usage), "Agents by org" (live, workers, leads, HQ, queued and runtime mix per org; only the filtered org with `?org=`), the checks behind the gate, spawns, queued, merges and escalations per day, recent events and the caps and config.
 - `/throughput`: a range of 7, 14 or 30 days (default 14). Tiles for merges (a task counts once, on the day of its last merge), median and p90 time from spawn to merge, and agents running now (workers, leads, HQ); a note under the tiles, "n tasks open now (in progress or in review), m agents working on a task", where tasks open now counts tasks in progress or in review and agents working on a task counts live agents with a task; a column chart of merges per day; where the time goes (coding, review / QA wait, judge, rework); per goal; and the 10 slowest tasks. With `?org=claude` or `?org=cursor` every number on the page counts only that org. An unknown `?org=` means All. **Metrics:** a "Cost per merged PR" tile and a "Cost and tokens per merged PR" group with the median and p90 cost and tokens, over the merged Claude-org tasks that have a price (the page says how many of the merged tasks that is; Cursor reports no tokens). Rework is the cost of the sessions of agents that started after the task's first rejection; lead and HQ cost is goal overhead and is never split across tasks. Every cost is an estimate at list prices (prices as of the date shown on the page, API-equivalent, not a bill), from the price table in `web/prices.py`; a model without a price shows as unknown, never as 0.
@@ -82,7 +82,7 @@ So `/tokens` never shows tokens or $ for the Cursor runtime. Its "Cursor runtime
 
 ## Security
 
-No authentication. Anyone who can reach your-box's LAN address on the port can read every page. The boundary is: bind to a private LAN address only, refuse 0.0.0.0/public addresses, a Host-header allowlist, GET-only, no secrets or message text rendered. Do not port-forward it.
+No authentication. Anyone who can reach your-box's LAN address on the port can read every page. The boundary is: bind to a private LAN address only, refuse 0.0.0.0/public addresses, a Host-header allowlist, GET-only, no secrets or message text rendered. Do not port-forward it. One owner opt-in exception: `serve_show_text=1` shows instruction text (message bodies, task spec and acceptance, verdict summaries) in the task Flow section, and only while the server is bound to a loopback address, so it is never served on the LAN.
 
 ## What "token cost" means
 
@@ -95,6 +95,62 @@ Token cost on `/tokens` is an **estimate**. It is computed from the token counts
 - **"refusing to bind ..."**: `serve_bind` is a wildcard or public address. Use a private LAN address or clear the key.
 - **Page does not load from another machine**: check that you are on the LAN, that the IP is right (`ip -4 addr` on your-box), and that no firewall blocks the port.
 - **Cannot open the database**: the factory home has no `db/factory.db` yet. Check `FACTORY_HOME`.
+
+## Flow debugger bundle (React, DVDG-554)
+
+How to use the debugger itself: [flow-debugger.md](flow-debugger.md). This section is about building it.
+
+The Flow section of the goal and task pages is a small React app in `web/flowapp/` (TypeScript, Vite, React Flow). Its built files are committed under `web/static/flow/` (`flow.js`, `flow.css`, `manifest.json`), so `factory serve`, the tests and CI need no Node. It reads `/api/flow/goal/<id>.json` and `/api/flow/task/<id>.json`.
+
+To change it you need Node LTS (for example through `nvm` inside WSL or Linux):
+
+```
+cd web/flowapp
+npm ci             # once, from package-lock.json
+npm test           # Vitest + React Testing Library
+npm run typecheck
+npm run build      # type check, Vite build to ../static/flow/, then python3 ../flowbundle.py writes manifest.json
+```
+
+Commit `web/static/flow/` together with the source change. `manifest.json` holds a SHA-256 of the files that shape the bundle (`src/` without tests, `package.json`, `package-lock.json`, `vite.config.ts`, `tsconfig.json`; computed by `web/flowbundle.py`), and `tests/test_web_flow_bundle.py` fails when it no longer matches the source: rebuild and commit.
+
+The bundle obeys the server's content security policy: no inline script or style, no CDN, styles from `flow.css` only.
+
+### Handing a step to an agent: "Copy for investigation" (DVDG-564)
+
+Every selected step, box or arrow has a key chip (`M62` a message, `V12` a verdict, `E457` an event-log row, `S-T-0003` a task's spec, `box:coders`, `arrow:rw`) and a "Copy for investigation" button; `c` on the focused diagram does the same. The chip copies one line, for example `T-0003 V12`; the button copies a block with the scope, the key and its database row (`verdicts.id=12`), when, who to whom, the title and a link that reopens the page with that item selected (`?sel=V12`). It never contains message text. Look the row up with the `factory` CLI or a read-only query on that table and id. The page address always mirrors the selection, the timeline tab and the lens.
+
+### Development page with hot reload and the Agentation toolbar (DVDG-563)
+
+The dashboard's content security policy blocks hot reload and the feedback toolbar, so both live on Vite's own development page, never on `factory serve`:
+
+```
+cd web/flowapp
+npm run dev        # http://localhost:5180/?scope=goal&id=G-001   (or ?fixture=goal / ?fixture=task)
+```
+
+- `/api`, `/static/app.css`, `/static/theme.js` and `/static/fonts` are proxied to a running `factory serve`, by default `http://127.0.0.1:18624` (set `VITE_FACTORY_URL` to change it). With no server running, `?fixture=goal` or `?fixture=task` shows the sample payloads in `src/fixtures/`.
+- Editing a component updates the page in place (React Fast Refresh).
+- `npm run build:watch` rebuilds `web/static/flow/` on every save, for checking a change on the real dashboard page with a manual refresh.
+
+The Agentation toolbar (npm package `agentation`) (bottom right of the dev page) lets you click any element, write a note, and send it to the coding agent. It exists only on the dev page: the production build leaves it out, and `tests/test_web_flow_bundle.py` checks that. Both packages (`agentation`, `agentation-mcp`) are dev dependencies under the PolyForm Shield 1.0.0 licence (source-available; fine as a personal development tool).
+
+- Live sync (default): the toolbar posts to the Agentation server at `http://localhost:4747` (`VITE_AGENTATION_ENDPOINT` overrides it). Copy-and-paste mode instead: `VITE_AGENTATION_MODE=copy npm run dev`.
+- Start the server: `npm run agentation`. Check it: `node node_modules/agentation-mcp/dist/cli.js doctor`.
+- Register it for your coding agent once, at **user** scope (never as a committed `.mcp.json`: factory agents run Claude Code in checkouts of this repo and would all be offered it):
+
+  ```
+  claude mcp add --scope user agentation -- node /home/user/src/hivemill/web/flowapp/node_modules/agentation-mcp/dist/cli.js server
+  ```
+
+  (use the absolute path of your clone)
+
+Round trip, four steps:
+
+1. `npm run agentation` in one terminal, `npm run dev` in another.
+2. Open `http://localhost:5180/?fixture=goal`, click the toolbar, click a box and add a note.
+3. In a new Claude Code session (one started after the `claude mcp add`), ask it to call `agentation_get_all_pending`.
+4. The note, the page and the element it names come back.
 
 ## Token index: sandboxed worker transcripts (T-0163)
 

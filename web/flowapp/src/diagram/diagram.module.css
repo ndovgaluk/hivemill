@@ -1,0 +1,97 @@
+/* Colours from web/static/app.css only; light and dark follow its variables. */
+.wrap { display: flex; flex-direction: column; height: 100%; min-height: 360px; outline: none; }
+.wrap:focus-visible { box-shadow: inset 0 0 0 2px var(--accent); }
+.controls { display: flex; flex-wrap: wrap; gap: 4px 12px; align-items: center; padding: 0 0 6px; font-size: 13px; color: var(--text-2); }
+.heading { margin: 0; font-size: 15px; font-weight: 600; color: var(--text-1); }
+.hint { flex: 1 1 200px; font-size: 12px; color: var(--text-3); }
+.segmented { padding: 2px; gap: 2px; border-radius: 8px; background: var(--fill); }
+.group.segmented button { border: 0; background: transparent; border-radius: 6px; padding: 2px 10px; font-weight: 600; }
+.group.segmented button[aria-pressed="true"] { background: var(--surface-1); color: var(--text-1); box-shadow: var(--e1); }
+.group { display: inline-flex; gap: 4px; align-items: center; }
+.group button {
+  font: inherit; color: var(--text-1); background: var(--surface-2); border: 1px solid var(--border);
+  border-radius: var(--r-sm); padding: 2px 8px; cursor: pointer;
+}
+.group button[aria-pressed="true"] { background: var(--accent); color: var(--surface-0); border-color: var(--accent); }
+.canvas { height: 340px; position: relative; }   /* fixed: the grid cell no longer stretches, so 100% would be 0 */
+
+.box { position: relative; width: 140px; height: 64px; }
+.box[data-dim="true"] { opacity: 0.35; }
+.boxButton {
+  position: relative; overflow: hidden;
+  display: flex; flex-direction: column; justify-content: space-between; width: 100%; height: 100%; padding: 7px 10px 10px; text-align: left;
+  font: inherit; color: var(--text-1); background: var(--surface-1); border: 1px solid var(--border);
+  border-radius: var(--r-md); cursor: pointer;
+}
+.boxButton:hover { border-color: var(--accent); }
+.box[data-top="true"] .boxButton { border-color: var(--warning-solid); background: var(--warning-bg); }
+.selected { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent); }
+/* the selected box: a light accent tint behind it (beats the top-cost tint) */
+.box .boxButton.selected { background: var(--info-bg); }
+.boxHead { display: flex; align-items: center; gap: 6px; }
+.name { font-size: 15px; line-height: 20px; font-weight: 600; white-space: nowrap; }
+.values { display: flex; align-items: baseline; gap: 6px; white-space: nowrap; }
+.main { font: 600 14px/18px var(--mono); }
+.second { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; font: 12px/18px var(--mono); color: var(--text-2); }
+.bar { position: absolute; left: 0; bottom: 0; height: 3px; background: var(--info-solid); }
+.barBad { background: var(--danger-solid); }
+.barCost { background: var(--warning-solid); }
+.legend {
+  position: absolute; top: 8px; right: 8px; z-index: 4; max-width: 150px; padding: 6px 10px; pointer-events: none;
+  font-size: 12px; line-height: 17px; color: var(--text-3); border: 1px dashed var(--hairline); border-radius: var(--r-md); background: var(--surface-1);
+}
+.dot { width: 9px; height: 9px; border-radius: 50%; background: var(--neutral-solid); flex: none; }
+.done { background: var(--success-solid); }
+.live { background: var(--info-solid); }
+.fail { background: var(--danger-solid); }
+.idle { background: var(--neutral-solid); }
+.pending { background: transparent; border: 1px dashed var(--neutral-solid); }
+
+.badge {
+  position: absolute; top: -8px; right: -8px; min-width: 20px; height: 20px; border-radius: 10px; padding: 0 5px;
+  font: 600 12px/20px var(--font); color: var(--surface-0); background: var(--warning-solid); border: none; cursor: pointer;
+}
+.badgeBad { background: var(--danger-solid); }
+.toolbar { position: absolute; top: 40px; left: 146px; display: flex; gap: 4px; z-index: 2; }
+.toolbar button {
+  width: 28px; height: 24px; padding: 0; display: flex; align-items: center; justify-content: center;
+  color: var(--info-fg); background: var(--surface-1); border: 1px solid var(--accent); border-radius: var(--r-sm); cursor: pointer;
+}
+
+.edges { position: absolute; left: 0; top: 0; overflow: visible; pointer-events: none; }
+.head path { fill: var(--text-3); stroke: none; }
+.head_warn path { fill: var(--warning-solid); }
+.head_bad path { fill: var(--danger-solid); }
+.head_accent path { fill: var(--accent-solid); }
+.edge { fill: none; stroke: var(--text-3); stroke-width: 1.5; }
+.ok { stroke: var(--text-3); }
+.warn { stroke: var(--warning-solid); stroke-width: 3; }
+.bad { stroke: var(--danger-solid); stroke-width: 4; }
+.pendingEdge { stroke-dasharray: 4 4; opacity: 0.6; }
+.dimEdge { opacity: 0.25; }
+.chip {
+  position: absolute; transform: translate(-50%, -50%); font: 12px var(--mono); padding: 1px 6px; white-space: nowrap;
+  pointer-events: all;   /* React Flow's viewport portal sets pointer-events: none on its content */
+  color: var(--text-1); background: var(--surface-1); border: 1px solid var(--border); border-radius: 10px; cursor: pointer;
+}
+.chip.warn { color: var(--warning-fg); background: var(--warning-bg); border-color: var(--warning-solid); }
+.chip.bad { color: var(--danger-fg); background: var(--danger-bg); border-color: var(--danger-solid); }
+.chip[aria-pressed="true"] { box-shadow: 0 0 0 2px var(--accent); background: var(--info-bg); color: var(--info-fg); }
+
+.animated { animation: pulse 1.2s ease-in-out infinite; }
+path.animated { stroke-dasharray: 6 6; animation: dash 0.8s linear infinite; }
+path.animated[data-flow="reverse"] { animation-direction: reverse; }
+@keyframes dash { to { stroke-dashoffset: -12; } }
+@keyframes pulse { 50% { opacity: 0.45; } }
+/* the selected element glows: a selected arrow's dashes march toward its target, a selected box or label pulses */
+path.picked { stroke: var(--accent-solid); stroke-dasharray: 8 6; filter: drop-shadow(0 0 3px var(--accent-solid)); }
+path.picked.bad { stroke: var(--danger-solid); filter: drop-shadow(0 0 3px var(--danger-solid)); }
+path.picked.warn { stroke: var(--warning-solid); filter: drop-shadow(0 0 3px var(--warning-solid)); }
+path.glow { animation: dash 0.8s linear infinite, edgeGlow 1.6s ease-in-out infinite; }
+@keyframes edgeGlow { 50% { stroke-width: 5; opacity: 0.75; } }
+.glowBox { animation: boxGlow 1.6s ease-in-out infinite; }
+@keyframes boxGlow {
+  0%, 100% { box-shadow: 0 0 0 2px var(--accent); }
+  50% { box-shadow: 0 0 0 2px var(--accent), 0 0 14px 4px color-mix(in srgb, var(--accent) 55%, transparent); }
+}
+@media (prefers-reduced-motion: reduce) { .animated, path.animated, path.glow, .glowBox { animation: none; } }
