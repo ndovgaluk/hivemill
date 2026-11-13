@@ -1,0 +1,13 @@
+/* Markdown preview: inline code in blue instead of grey (used via VS Code setting markdown.styles). */
+:not(pre) > code {
+  background-color: rgba(56, 139, 253, 0.18) !important;
+  color: #79c0ff !important;
+  border-radius: 4px;
+  padding: 1px 5px;
+}
+
+/* light themes */
+.vscode-light :not(pre) > code {
+  background-color: rgba(9, 105, 218, 0.12) !important;
+  color: #0550ae !important;
+}
