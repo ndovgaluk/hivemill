@@ -409,3 +409,29 @@ Go: no, it is installed. The coder for factory task T-0013 ran `go test` and `go
 C compiler: not needed for the run, useful afterwards. `go test -race` needs cgo and therefore gcc; without it coders run the Go tests without the race detector locally, and CI runs the race detector for them. The first run had the same gap (a coder reported "no -race run (no cgo)"), so installing gcc now would change the conditions mid-run. Recommended: leave it for this run, then install with `sudo apt install gcc` (needs the owner's password). Not checked: whether CI's race job would have caught something earlier if run locally.
 
 Seen in the same screenshots, all normal: "No such tool: bash" (the model wrote the tool name in lower case and retried); the worker guard blocking inline Python that names the CLI (the coder moved its edit script to a file); the coder fixing the `goldenEnv` compile error in its own PR (the same pre-existing break the first run started with). Checked at 23:33: the coder works in `~/factory/worktrees/G-002-T-0013`, whose origin is `hivemill-ref`; the installed factory checkout is clean. Planning (T-0012) took about 4 minutes and produced four coder tasks, T-0013 to T-0016; 11 messages since the start.
+
+## Q: There is too much waiting for the PR of each task. We should do a PR only for the entire story. 38 minutes of waiting is not acceptable. (2026-11-14 00:55, owner decision restated with evidence)
+
+Agreed, and it is the decision already taken for the new workflows ("one PR per story"); the second reference run now shows why with numbers. At 1 h 32 m into G-002 (owner's screenshots, figures from the flow debugger): Waiting (no agent running) 38 m 47 s, about 42 % of the elapsed time, for one factory task out of four, and that task is not merged yet. The two long stretches are CI runs on the task's PR. The plan has four tasks, each with its own PR, so the same waits come at least four times, and again after every fix round.
+
+Why the current factory cannot avoid it: a factory task is the unit that owns a branch and a PR, the reviewer and QA start only at green CI on that PR, and the next task of a serial plan starts only after the merge. The switches turned on for this run make each wait free of agents, not shorter. (The task-to-PR mapping code has not been read in full yet; this is from the run's behaviour and `docs/prcheck.md`.)
+
+What the new workflow does instead (decided earlier, unchanged):
+
+| Step | Per-task PR (today) | One PR per story (new) |
+|---|---|---|
+| Builder finishes a child | opens a PR, CI runs (about 20 min here), nobody works | commits on the story branch and starts the next child at once |
+| Review of a child | after green CI on its PR | on the child's commits, as soon as it is In Review, while the builder continues |
+| Tests while building | full CI per PR | the builder and reviewer run the affected tests locally |
+| Full CI | once per task, plus once per fix round | once for the story, plus fix rounds |
+| QA | per task | once, when all children are In Review |
+
+Expected effect for a four-child story like this one: one CI wait instead of at least four, and no idle builder between children. Not measured yet; the reference run is the "before" figure.
+
+Open point this raises: CI itself takes about 20 minutes per run on these changes because schema and default-config changes force the full suite. One PR per story does not shorten a single run. Whether to trust a local affected-tests run for the child reviews, with full CI only at the end, is the design as written; if the final CI fails late, the fix round costs one more full run.
+
+Recommendation given: let G-002 finish in the background as the baseline (it needs nothing from the owner) and start the build tasks for the new workflow now; the open decision that blocks them is Go or Python for the engine.
+
+### Owner decision, 2026-11-14 01:00: the workflow engine is written in Go
+
+"We'll use Go for the engine." This closes open question 1 of file 40. It follows upstream ADR 0001 (all new code in Go, no new Python files).
