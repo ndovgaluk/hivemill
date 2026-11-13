@@ -6,6 +6,7 @@ None (JSON null) with a `*_note` reason where it matters, never 0 or a guess. In
 verdict summaries, the task's spec and acceptance, an agent's end summary) is selected from the DB only when
 `show_text` (web/server.show_text_allowed); otherwise those columns are never read.
 """
+from web.html import is_pr_url
 from web import queries as q
 from web.html import md
 
@@ -17,12 +18,18 @@ class Scope:
 
 class Node:
     BOSS, DIRECTOR, LEAD, SYSTEM = "boss", "director", "lead", "system"
-    PM, CODERS, GATE, JUDGE, MAIN = "pm", "coders", "gate", "judge", "main"
+    PM, CODERS, REVIEWER, QA, JUDGE, MAIN = "pm", "coders", "reviewer", "qa", "judge", "main"
+    WAIT = "wait"   # no role: live while the scope is open and no agent of it runs (HM-13)
+    GATE = "gate"   # HM-17: not a node any more, the id of the group (frame) holding REVIEWER and QA
 
 
 NODES = ((Node.BOSS, "Boss"), (Node.DIRECTOR, "Director"), (Node.LEAD, "Lead"), (Node.SYSTEM, "System"), (Node.PM, "PM"),
-         (Node.CODERS, "Coders"), (Node.GATE, "Review gate"), (Node.JUDGE, "Judge"), (Node.MAIN, "Merged"))
-WORKERS = (Node.PM, Node.CODERS, Node.GATE, Node.JUDGE)
+         (Node.CODERS, "Coders"), (Node.REVIEWER, "Reviewer"), (Node.QA, "QA"), (Node.JUDGE, "Judge"), (Node.MAIN, "Merged"),
+         (Node.WAIT, "Waiting"))
+GATE_NODES = (Node.REVIEWER, Node.QA)
+# HM-17: every actor has its own box; boxes that act as one step sit in a group (drawn as a dashed frame)
+GROUPS = ((Node.GATE, "Review gate", GATE_NODES),)
+WORKERS = (Node.PM, Node.CODERS, *GATE_NODES, Node.JUDGE)
 
 
 class Edge:
@@ -36,16 +43,18 @@ EDGES = ((Edge.BD, Node.BOSS, (Node.DIRECTOR,), "requests"),
          (Edge.SL, Node.SYSTEM, (Node.LEAD,), "kickoff"),
          (Edge.BUS, Node.LEAD, WORKERS, "brief ↓ report ↑"),
          (Edge.PC, Node.PM, (Node.CODERS,), "queued"),
-         (Edge.CG, Node.CODERS, (Node.GATE,), "review"),
-         (Edge.GJ, Node.GATE, (Node.JUDGE,), "verdict"),
+         (Edge.CG, Node.CODERS, GATE_NODES, "review"),
+         (Edge.GJ, Node.GATE, (Node.JUDGE,), "verdict"),      # from the group: the frame's edge, either role
          (Edge.JM, Node.JUDGE, (Node.MAIN,), "merge"),
          (Edge.RW, Node.GATE, (Node.CODERS,), "rework"))
 _EDGE_OF = {(Node.BOSS, Node.DIRECTOR): (Edge.BD, 1), (Node.DIRECTOR, Node.BOSS): (Edge.BD, -1),
             (Node.DIRECTOR, Node.LEAD): (Edge.DL, 1), (Node.LEAD, Node.DIRECTOR): (Edge.DL, -1),
             (Node.SYSTEM, Node.LEAD): (Edge.SL, 1),
             (Node.PM, Node.CODERS): (Edge.PC, 1), (Node.CODERS, Node.GATE): (Edge.CG, 1),
-            (Node.GATE, Node.JUDGE): (Edge.GJ, 1), (Node.JUDGE, Node.MAIN): (Edge.JM, 1),
-            (Node.GATE, Node.CODERS): (Edge.RW, 1),
+            (Node.JUDGE, Node.MAIN): (Edge.JM, 1),
+            **{(Node.CODERS, g): (Edge.CG, 1) for g in GATE_NODES},
+            **{(g, Node.JUDGE): (Edge.GJ, 1) for g in GATE_NODES},
+            **{(g, Node.CODERS): (Edge.RW, 1) for g in GATE_NODES},
             **{(src, w): (Edge.BUS, 1) for w in WORKERS for src in (Node.LEAD, Node.SYSTEM)},
             **{(w, Node.LEAD): (Edge.BUS, -1) for w in WORKERS}}
 
@@ -53,15 +62,17 @@ _EDGE_OF = {(Node.BOSS, Node.DIRECTOR): (Edge.BD, 1), (Node.DIRECTOR, Node.BOSS)
 class Lane:
     BOSS, DIRECTOR, SYSTEM, LEAD, PM = "boss", "director", "system", "lead", "pm"
     CODERS, REVIEWER, QA, JUDGE = "coders", "reviewer", "qa", "judge"
+    WAIT = "wait"   # no role: the stretches in which no agent of the scope ran (HM-18)
 
 
 LANES = ((Lane.BOSS, Node.BOSS, "Boss"), (Lane.DIRECTOR, Node.DIRECTOR, "Director"), (Lane.SYSTEM, Node.SYSTEM, "System"),
          (Lane.LEAD, Node.LEAD, "Lead"), (Lane.PM, Node.PM, "PM"), (Lane.CODERS, Node.CODERS, "Coders"),
-         (Lane.REVIEWER, Node.GATE, "Reviewer"), (Lane.QA, Node.GATE, "QA"), (Lane.JUDGE, Node.JUDGE, "Judge"))
+         (Lane.REVIEWER, Node.REVIEWER, "Reviewer"), (Lane.QA, Node.QA, "QA"), (Lane.JUDGE, Node.JUDGE, "Judge"),
+         (Lane.WAIT, Node.WAIT, "Waiting"))
 _LANE_NODE = {lane: node for lane, node, _ in LANES}
 _NODE_LANE = {Node.BOSS: Lane.BOSS, Node.DIRECTOR: Lane.DIRECTOR, Node.SYSTEM: Lane.SYSTEM, Node.LEAD: Lane.LEAD,
-              Node.PM: Lane.PM, Node.CODERS: Lane.CODERS, Node.GATE: Lane.REVIEWER, Node.JUDGE: Lane.JUDGE,
-              Node.MAIN: Lane.JUDGE}
+              Node.PM: Lane.PM, Node.CODERS: Lane.CODERS, Node.REVIEWER: Lane.REVIEWER, Node.QA: Lane.QA,
+              Node.JUDGE: Lane.JUDGE, Node.MAIN: Lane.JUDGE, Node.WAIT: Lane.WAIT}
 
 
 class Role:
@@ -74,6 +85,7 @@ _ROLE_LANE = {Role.OWNER: Lane.BOSS, Role.BOSS: Lane.BOSS, Role.DIRECTOR: Lane.D
               Role.PM: Lane.PM, Role.CODER: Lane.CODERS, Role.REVIEWER: Lane.REVIEWER, Role.QA: Lane.QA,
               Role.JUDGE: Lane.JUDGE}
 GATE_ROLES = (Role.REVIEWER, Role.QA)
+VERDICT_NODE = {Role.REVIEWER: Node.REVIEWER, Role.QA: Node.QA, Role.JUDGE: Node.JUDGE}   # who a verdict comes from
 SYSTEM_SENDERS = ("factory", "tick")   # the CLI itself (kickoffs, notices); same list as queries._SYSTEM_SENDERS
 
 
@@ -135,6 +147,12 @@ NOTE_RUNNING = "running"
 NOTE_NO_END = "end not recorded"
 NOTE_QUEUED = "queued before coding"
 NOTE_NO_CODER_START = "left the queue without a recorded coder start"
+# what the Waiting box says nobody is running for (HM-13); the first two are followed by the task ids
+WAIT_REVIEW = "PR checks, then review"   # a PR is open and no reviewer or QA has started on it: CI runs first
+WAIT_QUEUE = "next task not started"
+WAIT_UNKNOWN = "no agent running"
+WAIT_LINK_LABEL = "PR"
+WAIT_ROW = "no agent running"   # the one row of the Waiting lane
 
 
 def _sev_max(*sevs):
@@ -155,7 +173,7 @@ def build(con, scope, oid, now=None, show_text=False):
         head = con.execute("SELECT id, title, status, created FROM goals WHERE id=?", (oid,)).fetchone()
         if head is None:
             return None
-        tasks = q._dicts(con.execute("SELECT rowid, id, goal_id, status, created FROM tasks WHERE goal_id=? ORDER BY created, id",
+        tasks = q._dicts(con.execute("SELECT rowid, id, goal_id, status, created, pr_url FROM tasks WHERE goal_id=? ORDER BY created, id",
                                      (oid,)))
         agents = q._dicts(con.execute(
             "SELECT name, role, status, task_id, goal_id, session_id, started, ended FROM agents WHERE goal_id=? "
@@ -163,7 +181,7 @@ def build(con, scope, oid, now=None, show_text=False):
         start = head["created"]
         goal_id = oid
     else:
-        head = con.execute("SELECT rowid, id, goal_id, title, status, created FROM tasks WHERE id=?", (oid,)).fetchone()
+        head = con.execute("SELECT rowid, id, goal_id, title, status, created, pr_url FROM tasks WHERE id=?", (oid,)).fetchone()
         if head is None:
             return None
         tasks = [dict(head)]
@@ -324,7 +342,7 @@ def build(con, scope, oid, now=None, show_text=False):
                   m["kind"] in INSTRUCTION_KINDS, m["body"] if show_text else None)
     rejections = 0
     for v in verdicts:
-        fn = Node.GATE if v["role"] in GATE_ROLES else Node.JUDGE if v["role"] == Role.JUDGE else None
+        fn = VERDICT_NODE.get(v["role"])
         sha = f" @{v['head_sha'][:8]}" if v["head_sha"] else ""
         title = f"{v['role']} {v['verdict'].upper()}{sha}"
         ref = {"table": Table.VERDICTS, "rowid": v["id"]}
@@ -334,7 +352,7 @@ def build(con, scope, oid, now=None, show_text=False):
             coder = coder_of.get(v["task_id"])
             add_event(f"{Key.VERDICT}{v['id']}", ref, v["created"], v["task_id"], v["author"] or v["role"], coder or v["task_id"],
                       fn, Node.CODERS, EventKind.VERDICT, title, Severity.BAD, True, body,
-                      edge=(Edge.RW, 1) if fn == Node.GATE else (None, None))
+                      edge=(Edge.RW, 1) if fn in GATE_NODES else (None, None))
         else:
             tn = Node.MAIN if v["verdict"] == MERGE_VERDICT else Node.JUDGE
             add_event(f"{Key.VERDICT}{v['id']}", ref, v["created"], v["task_id"], v["author"] or v["role"], tn, fn, tn,
@@ -376,7 +394,8 @@ def build(con, scope, oid, now=None, show_text=False):
         elif act == Action.MERGED:
             add_event(key, ref, e["ts"], tid, e["actor"], None, Node.JUDGE, Node.MAIN, EventKind.STATUS, f"{who} merged {det}".strip())
         elif act in VERDICT_ACTIONS:   # the verdict row is the arrow; this log line is a marker on the timeline only
-            add_event(key, ref, e["ts"], tid, e["actor"], None, Node.GATE, None, EventKind.STATUS, f"{who}: {act} {det}".strip(),
+            role_node = Node.QA if act in (Action.QA_PASS, Action.QA_FAIL) else Node.REVIEWER
+            add_event(key, ref, e["ts"], tid, e["actor"], None, role_node, None, EventKind.STATUS, f"{who}: {act} {det}".strip(),
                       Severity.BAD if act in (Action.REVIEWER_FAIL, Action.QA_FAIL) else Severity.OK, edge=(None, None))
         else:   # task done
             add_event(key, ref, e["ts"], tid, e["actor"], None, node_of(e["actor"]), None, EventKind.STATUS, f"{who} {act}")
@@ -419,21 +438,59 @@ def build(con, scope, oid, now=None, show_text=False):
                       "waits": per_edge.get(eid, [])})
 
     # ── nodes ──
-    last_gate = {}
+    # HM-17: a review box fails while its own role's last verdict on some unmerged task rejects
+    last_by = {g: {} for g in GATE_NODES}
     for v in verdicts:
         if v["role"] in GATE_ROLES:
-            last_gate[v["task_id"]] = v["verdict"]
-    open_fail = any(vd in REJECT_VERDICTS and tid not in merged for tid, vd in last_gate.items())
+            last_by[VERDICT_NODE[v["role"]]][v["task_id"]] = v["verdict"]
+    open_fail = {g: any(vd in REJECT_VERDICTS and tid not in merged for tid, vd in last.items()) for g, last in last_by.items()}
+    terminal = head["status"] in (TERMINAL_GOAL if scope == Scope.GOAL else TERMINAL_TASK)
+    # the Waiting box (HM-13): the scope is open, it had agents, and none of them runs now
+    waiting = not terminal and bool(agents) and not any(a["status"] in LIVE_STATUSES for a in agents)
+    wait_s = wait_note = wait_total = None
+    wait_links = []
+    # all the time since the first session in which no agent of the scope ran (a session with no known end counts as zero)
+    runs = sorted((s[0], s[1] if s[1] is not None else s[0]) for spans in sess.values() for s in spans)
+    gaps = []   # (start, end) of every such stretch, for the Waiting lane (HM-18)
+    if runs:
+        horizon = max(e for _, e in runs) if terminal else max(now_e, runs[0][0])
+        covered, (cur0, cur1) = 0, runs[0]
+        for s0, s1 in runs[1:]:
+            if s0 > cur1:
+                gaps.append((cur1, s0))
+                covered += cur1 - cur0
+                cur0, cur1 = s0, s1
+            else:
+                cur1 = max(cur1, s1)
+        covered += min(cur1, horizon) - cur0
+        wait_total = max(0, round(horizon - runs[0][0] - covered))
+        if horizon > cur1:
+            gaps.append((cur1, horizon))
+    if waiting:
+        ends = [s[1] for spans in sess.values() for s in spans if s[1] is not None]
+        wait_s = round(now_e - max(ends)) if ends and now_e >= max(ends) else None
+        in_ci = [w["task_id"] for w in cg_waits if w["open"]]
+        in_queue = [w["task_id"] for w in pc_waits if w["open"]]
+        wait_note = (f"{WAIT_REVIEW}: {', '.join(in_ci)}" if in_ci
+                     else f"{WAIT_QUEUE}: {', '.join(in_queue)}" if in_queue else WAIT_UNKNOWN)
+        pr_of = {t["id"]: t["pr_url"] for t in tasks}
+        wait_links = [{"label": f"{WAIT_LINK_LABEL} {tid}", "url": pr_of[tid]} for tid in in_ci if is_pr_url(pr_of.get(tid))]
+    if gaps:   # the lane list above holds this same rows list
+        rows_by_lane[Lane.WAIT].append({"name": WAIT_ROW, "task_id": None, "spans": [
+            {"start_s": off(g0), "end_s": off(g1), "kind": SpanKind.WAIT,
+             "note": wait_note if waiting and i == len(gaps) - 1 else None} for i, (g0, g1) in enumerate(gaps)]})
     nodes = []
     for nid, label in NODES:
         mine = [a for a in agents if _LANE_NODE.get(_ROLE_LANE.get(a["role"])) == nid]
         works = [work_of(a["name"]) for a in mine]
         live = any(a["status"] in LIVE_STATUSES for a in mine)
-        if nid == Node.MAIN:
+        if nid == Node.WAIT:
+            state = State.LIVE if waiting else State.IDLE
+        elif nid == Node.MAIN:
             state = State.DONE if merged else State.PENDING
         elif live:
             state = State.LIVE
-        elif nid == Node.GATE and open_fail:
+        elif open_fail.get(nid):
             state = State.FAIL
         elif mine:
             state = State.DONE
@@ -442,13 +499,15 @@ def build(con, scope, oid, now=None, show_text=False):
         else:
             state = State.IDLE
         nodes.append({"id": nid, "label": label, "state": state,
-                      "work_s": sum(works) if mine and all(w is not None for w in works) else None,
+                      "work_s": wait_total if nid == Node.WAIT else sum(works) if mine and all(w is not None for w in works) else None,
+                      "current_s": wait_s if nid == Node.WAIT else None,   # the wait going on now; work_s is every wait so far
+                      "note": wait_note if nid == Node.WAIT else None,
+                      "links": wait_links if nid == Node.WAIT else [],
                       "tokens": None, "cost": None, "cost_note": COST_NOTE,
                       "agents": [{"name": a["name"], "status": a["status"], "work_s": w, "cost": None, "task_id": a["task_id"],
                                   "session_id": a["session_id"], "after_last_event": None} for a, w in zip(mine, works)]})
 
     status = head["status"]
-    terminal = status in (TERMINAL_GOAL if scope == Scope.GOAL else TERMINAL_TASK)
     last_e = max((q._epoch(ev["ts"]) for ev in events if q._epoch(ev["ts"]) is not None), default=None)
     end_e = (last_e if terminal else now_e)
     known = [w for n in nodes for w in (a["work_s"] for a in n["agents"]) if w is not None]
@@ -458,4 +517,5 @@ def build(con, scope, oid, now=None, show_text=False):
             "totals": {"agent_s": sum(known) if known else None,
                        "tokens": None, "cost": None, "cost_as_of": None, "cost_note": COST_NOTE, "unattributed_cost": None,
                        "rejections": rejections, "messages": n_msgs},
-            "nodes": nodes, "edges": edges, "lanes": lanes, "events": events, "findings": [], "phases": []}
+            "nodes": nodes, "groups": [{"id": gid, "label": label, "nodes": list(members)} for gid, label, members in GROUPS],
+            "edges": edges, "lanes": lanes, "events": events, "findings": [], "phases": []}

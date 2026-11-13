@@ -37,8 +37,8 @@ def nav_item(text, href):
 
 
 class TestEveryRouteRenders(ServerCase):
-    def test_eleven_routes_have_the_shell(self):
-        self.assertEqual(len(PAGES), 11)
+    def test_twelve_routes_have_the_shell(self):
+        self.assertEqual(len(PAGES), 12)   # HM-1 added /settings
         for path in PAGES:
             with self.subTest(path):
                 code, _, body = self.get(path)
@@ -50,19 +50,19 @@ class TestEveryRouteRenders(ServerCase):
                 self.assertEqual(text.count('aria-current="page"'), 1)
                 self.assertIn('<main id="content"', text)
 
-    def test_nav_has_all_nine_links_without_js(self):
+    def test_nav_has_all_ten_links_without_js(self):
         text = self.get("/")[2].decode()
         nav = main_nav(text)
         hrefs = re.findall(r'<a href="([^"]+)"', nav)
         self.assertEqual(hrefs[0], "/")   # the wordmark
         self.assertEqual(hrefs[1:], [p for p, _ in wh.NAV])
-        self.assertEqual(len(hrefs[1:]), 9)
+        self.assertEqual(len(hrefs[1:]), 10)
         self.assertEqual(re.findall(r"<script\b[^>]*>", text), ['<script src="/static/theme.js" defer>'])
 
     def test_phone_more_nav_lists_every_page_and_tabbar_has_five_items(self):
         text = self.get("/tasks")[2].decode()
         more = re.search(r'<nav id="more".*?</nav>', text, re.S).group(0)
-        self.assertEqual(len(re.findall(r'<a href="/[a-z]*"', more)), 9)
+        self.assertEqual(len(re.findall(r'<a href="/[a-z]*"', more)), 10)
         tabs = re.search(r'<nav aria-label="Primary tabs".*?</nav>', text, re.S).group(0)
         self.assertEqual(len(re.findall(r"<a ", tabs)), 5)
         self.assertIn('href="#more"', tabs)

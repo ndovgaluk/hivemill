@@ -3,6 +3,14 @@
 .kpis { display: flex; flex-wrap: wrap; gap: 8px 24px; margin: 0; }
 .kpi dt { font-size: 11px; line-height: 14px; color: var(--text-3); }
 .kpi dd { margin: 0; font: 600 15px/20px var(--mono); }
+/* HM-12: the Longest wait value is a button that selects its arrow; it keeps the KPI look */
+.kpiLink { padding: 0; border: 0; background: none; font: inherit; color: inherit; cursor: pointer;
+  text-decoration: underline dotted; text-underline-offset: 3px; }
+/* the whole KPI cell (label too) is the click target, with the hand cursor */
+.kpi { position: relative; }
+.kpiLink::after { content: ""; position: absolute; inset: -4px; }
+.kpi:hover .kpiLink, .kpiLink[aria-pressed="true"] { text-decoration-style: solid; }
+.kpiLink:focus-visible { outline: 2px solid var(--focus, var(--info-solid)); outline-offset: 2px; border-radius: 2px; }
 .fg_warn { color: var(--warning-fg); }
 .fg_bad { color: var(--danger-fg); }
 .findings { flex: 1 1 520px; min-width: 0; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }

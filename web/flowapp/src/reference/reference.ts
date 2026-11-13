@@ -1,5 +1,6 @@
 // "Copy for investigation" (DVDG-564): ids and facts only, never message text, so it is safe to paste anywhere.
 import { RefPrefix, Scope, SelectionKind, UrlParam } from "../constants";
+import { nodeLabel } from "../groups";
 import type { Selection } from "../selection";
 import type { FlowData } from "../types";
 
@@ -54,7 +55,7 @@ export function buildReference(data: FlowData, s: Selection, href?: string): str
     ? `${RefLabel.Scope} ${data.scope} ${data.id} (goal ${data.goal_id})`
     : `${RefLabel.Scope} ${data.scope} ${data.id}`;
   const lines = [RefLabel.Head, scope];
-  const label = (id: string | null | undefined) => data.nodes.find((n) => n.id === id)?.label ?? id ?? "?";
+  const label = (id: string | null | undefined) => nodeLabel(data, id);
   if (s.kind === SelectionKind.Event) {
     const e = data.events.find((x) => x.id === s.id);
     lines.push(`${RefLabel.Item} ${qualifiedKey(data, s)}${e ? ` (${e.ref.table}.id=${e.ref.rowid})` : ""}`);

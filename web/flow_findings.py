@@ -79,19 +79,26 @@ def long_wait(d):
 
 
 def rejections(d):
+    """HM-17: one finding per role that rejected (Reviewer, QA, Judge), on that role's box."""
     rej = [e for e in d["events"] if e["kind"] == F.EventKind.VERDICT and e["severity"] == F.Severity.BAD]
     if not rej:
         return []
     merged = {e["task_id"] for e in d["events"] if e["edge"] == F.Edge.JM}
-    last = {}
-    for e in d["events"]:      # events are in time order: the last gate verdict per task wins
-        if e["kind"] == F.EventKind.VERDICT and e["from_node"] == F.Node.GATE:
-            last[e["task_id"]] = e["severity"]
-    still = sorted(t for t, sev in last.items() if sev == F.Severity.BAD and t not in merged)
-    n = len(rej)
-    text = f"{n} rejection{'s' if n != 1 else ''}, " + (f"{len(still)} still open ({', '.join(still)})" if still else "all resolved")
-    return [_finding(F.Severity.BAD if still else F.Severity.WARN, text, F.FindingTarget.EDGE, F.Edge.RW, F.Node.GATE,
-                     Kind.REJECTIONS, float(n))]
+    labels = dict(F.NODES)
+    out = []
+    for node in dict.fromkeys(e["from_node"] for e in rej):   # first-rejection order
+        last = {}
+        for e in d["events"]:      # events are in time order: this role's last verdict per task wins
+            if e["kind"] == F.EventKind.VERDICT and e["from_node"] == node:
+                last[e["task_id"]] = e["severity"]
+        still = sorted(t for t, sev in last.items() if sev == F.Severity.BAD and t not in merged)
+        n = sum(e["from_node"] == node for e in rej)
+        by = f" by {labels[node]}" if node in labels else ""
+        text = (f"{n} rejection{'s' if n != 1 else ''}{by}, "
+                + (f"{len(still)} still open ({', '.join(still)})" if still else "all resolved"))
+        target = (F.FindingTarget.EDGE, F.Edge.RW) if node in F.GATE_NODES else (F.FindingTarget.NODE, node)
+        out.append(_finding(F.Severity.BAD if still else F.Severity.WARN, text, *target, node, Kind.REJECTIONS, float(n)))
+    return out
 
 
 def unstaffed_review(d):
@@ -105,7 +112,8 @@ def unstaffed_review(d):
     text = f"PR of {w['task_id']} waited {fmt_s(w['wait_s'])} with no reviewer or QA started"
     text += " (still waiting)" if w["open"] else (" until the director nudged the lead" if nudge else "")
     target = (F.FindingTarget.EVENT, nudge["id"]) if nudge else (F.FindingTarget.EDGE, F.Edge.CG)
-    return [_finding(F.Severity.WARN, text, *target, F.Node.GATE, Kind.UNSTAFFED_REVIEW,
+    # the wait is "no reviewer or QA started": both are unstaffed, the badge goes on the first box of the gate
+    return [_finding(F.Severity.WARN, text, *target, F.Node.REVIEWER, Kind.UNSTAFFED_REVIEW,
                      _share(w["wait_s"], d["elapsed_s"]) or DEFAULT_SIZE)]
 
 
@@ -192,7 +200,8 @@ def _phase_list(d, groups):
         lo, hi = (min(ts), max(ts)) if ts else (None, None)
         refs = [{"lane": lane["id"], "row": row["name"], "index": i}
                 for lane in d["lanes"] for row in lane["rows"] for i, sp in enumerate(row["spans"])
-                if lo is not None and sp["start_s"] is not None and lo <= sp["start_s"] <= hi
+                if lane["id"] != F.Lane.WAIT   # a wait is not a session (HM-18)
+                and lo is not None and sp["start_s"] is not None and lo <= sp["start_s"] <= hi
                 and (task is ANY_TASK or row["task_id"] == task)]
         out.append({"id": PHASE_ID.format(n=len(out) + 1), "title": title,
                     "summary": _summary(evs, hi - lo if ts else None), "event_ids": [e["id"] for e in evs], "span_refs": refs})

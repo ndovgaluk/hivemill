@@ -7,7 +7,8 @@ import { fmtDuration } from "../format";
 import { useSelection } from "../selection";
 import type { FlowData, FlowEdge } from "../types";
 import styles from "./diagram.module.css";
-import { BUS_BRANCHES, BUS_LABEL, CANVAS_H, CANVAS_W, EDGES, toPath } from "./layout";
+import { groupOf, nodeLabel } from "../groups";
+import { BUS_BRANCHES, BUS_LABEL, CANVAS_H, CANVAS_W, EDGES, FRAMES, toPath } from "./layout";
 
 const FLOW_FORWARD = "forward";
 const HEAD_ACCENT = "accent";   // the selected arrow's head when its severity is ok
@@ -48,6 +49,16 @@ export function Edges({ data, motion, onOpenInstructions }: {
 
   return (
     <>
+      {/* HM-17: a dashed frame around boxes that act as one step, labelled on its top border; not clickable */}
+      {(data.groups ?? []).map((g) => {
+        const f = FRAMES[g.id];
+        return f ? (
+          <div key={g.id} className={styles.frame} style={{ left: f.x, top: f.y, width: f.w, height: f.h }}
+               data-testid={`flow-group-${g.id}`} aria-hidden="true">
+            <span className={styles.frameLabel}>{g.label}</span>
+          </div>
+        ) : null;
+      })}
       <svg className={styles.edges} width={CANVAS_W} height={CANVAS_H} aria-hidden="true">
         <defs>
           {HEADS.map((k) => (
@@ -64,7 +75,9 @@ export function Edges({ data, motion, onOpenInstructions }: {
           const hot = sel.hot.edges.has(e.id);
           const cls = `${styles.edge} ${styles[e.severity] ?? ""} ${e.pending ? styles.pendingEdge : ""} ${dim && !hot ? styles.dimEdge : ""}`;
           if (e.id === EdgeId.Bus) {
-            const worker = [event?.from_node, event?.to_node].find((n) => n && n in BUS_BRANCHES) as NodeId | undefined;
+            // a box in a group (Reviewer, QA) has its branch on the group's frame
+            const worker = [event?.from_node, event?.to_node].map((n) => (n ? groupOf(data, n) ?? n : n))
+              .find((n) => n && n in BUS_BRANCHES) as NodeId | undefined;
             return Object.entries(BUS_BRANCHES).map(([node, pts]) => {
               const on = active && node === worker;
               return <path key={`${e.id}-${node}`} d={toPath(pts!)} {...heads(e)} className={`${cls} ${on && motion ? styles.animated : ""} ${glow(e.id)}`}
@@ -88,7 +101,7 @@ export function Edges({ data, motion, onOpenInstructions }: {
                   data-testid={`flow-edge-${e.id}`} data-severity={e.severity} data-pending={e.pending}
                   data-flow={active ? (event?.dir === Dir.Back ? FLOW_REVERSE : FLOW_FORWARD) : undefined}
                   aria-pressed={sel.selection?.kind === SelectionKind.Edge && sel.selection.id === e.id}
-                  aria-label={`${e.from} to ${e.to.join(", ")}: ${labelOf(e)}`}
+                  aria-label={`${nodeLabel(data, e.from)} to ${e.to.map((t) => nodeLabel(data, t)).join(", ")}: ${labelOf(e)}`}
                   onClick={() => click(e)}>
             {labelOf(e)}
           </button>

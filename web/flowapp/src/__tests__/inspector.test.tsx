@@ -56,6 +56,39 @@ describe("summary bar", () => {
     expect(kpi.className).toMatch(/fg_bad/);
   });
 
+  it("clicking the longest wait selects its arrow (HM-12)", () => {
+    const d = fresh();
+    for (const e of d.edges) e.wait_s = null;
+    Object.assign(d.edges[0]!, { wait_s: 60 });
+    Object.assign(d.edges[1]!, { wait_s: 7200 });
+    show(d);
+    const btn = within(document.querySelector('[data-kpi="Longest wait"]') as HTMLElement).getByRole("button");
+    expect(btn.getAttribute("aria-pressed")).toBe("false");
+    fireEvent.click(btn);
+    expect(api!.selection).toEqual({ kind: SelectionKind.Edge, id: d.edges[1]!.id });
+    expect(btn.getAttribute("aria-pressed")).toBe("true");
+  });
+
+  it("rejections open their list when there are any, and are plain text at zero (HM-16)", () => {
+    const d = fresh();
+    d.totals.rejections = 2;
+    const onOpen = vi.fn();
+    const { unmount } = render(<SelectionProvider data={d}><SummaryBar data={d} onOpenRejections={onOpen} /></SelectionProvider>);
+    fireEvent.click(within(document.querySelector('[data-kpi="Rejections"]') as HTMLElement).getByRole("button"));
+    expect(onOpen).toHaveBeenCalledTimes(1);
+    unmount();
+    d.totals.rejections = 0;
+    render(<SelectionProvider data={d}><SummaryBar data={d} onOpenRejections={onOpen} /></SelectionProvider>);
+    expect(document.querySelector('[data-kpi="Rejections"] button')).toBeNull();
+  });
+
+  it("longest wait is plain text when no arrow has a wait", () => {
+    const d = fresh();
+    for (const e of d.edges) e.wait_s = null;
+    show(d);
+    expect(document.querySelector('[data-kpi="Longest wait"] button')).toBeNull();
+  });
+
   it("findings render as chips and select their target", () => {
     const d = fresh();
     const f = d.findings[0]!;

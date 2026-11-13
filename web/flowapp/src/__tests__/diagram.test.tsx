@@ -1,9 +1,10 @@
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { Dir, EdgeId, FindingTarget, NodeId, SelectionKind, Severity } from "../constants";
-import { MSGS_ONLY, NO_SESSIONS } from "../diagram/BoxNode";
+import { Dir, EdgeId, FindingTarget, NodeId, NodeState, SelectionKind, Severity } from "../constants";
+import { MSGS_ONLY, NO_SESSIONS, WAITED_TOTAL } from "../diagram/BoxNode";
 import { Diagram, type DiagramHandlers } from "../diagram/Diagram";
+import { NODE_H, NODE_W, POSITIONS } from "../diagram/layout";
 import goalFixture from "../fixtures/goal.json";
 import { fmtCost, fmtDuration, UNKNOWN } from "../format";
 import { SelectionProvider, useSelection, type SelectionApi } from "../selection";
@@ -53,10 +54,10 @@ describe("diagram", () => {
 
   it("a box with no sessions says so instead of unknown figures", () => {
     const data = fresh();
-    for (const id of [NodeId.Boss, NodeId.Gate]) Object.assign(data.nodes.find((n) => n.id === id)!, { agents: [], work_s: null, cost: null });
+    for (const id of [NodeId.Boss, NodeId.Reviewer]) Object.assign(data.nodes.find((n) => n.id === id)!, { agents: [], work_s: null, cost: null });
     show(data);
     expect(node(NodeId.Boss).textContent).toContain(MSGS_ONLY);
-    expect(node(NodeId.Gate).textContent).toContain(NO_SESSIONS);
+    expect(node(NodeId.Reviewer).textContent).toContain(NO_SESSIONS);
     expect(node(NodeId.Boss).textContent).not.toContain(UNKNOWN);
   });
 
@@ -96,25 +97,54 @@ describe("diagram", () => {
   it("cost lens swaps the main number and marks the most expensive box", () => {
     const data = fresh();
     data.nodes.find((n) => n.id === NodeId.Coders)!.cost = 1.5;
-    data.nodes.find((n) => n.id === NodeId.Gate)!.cost = 2.5;
+    data.nodes.find((n) => n.id === NodeId.Reviewer)!.cost = 2.5;
     show(data);
     fireEvent.click(screen.getByRole("button", { name: "Cost" }));
-    const gate = node(NodeId.Gate);
+    const gate = node(NodeId.Reviewer);
     expect(gate.querySelector('[data-value="main"]')?.textContent).toBe(fmtCost(2.5));
     expect(gate.querySelector('[data-value="second"]')?.textContent).toBe(
-      fmtDuration(data.nodes.find((n) => n.id === NodeId.Gate)!.work_s));
+      fmtDuration(data.nodes.find((n) => n.id === NodeId.Reviewer)!.work_s));
     expect(document.querySelectorAll('[data-top="true"]')).toHaveLength(1);
     expect(gate.getAttribute("data-top")).toBe("true");
   });
 
   it("badge shows the finding count and opens the findings list", () => {
     const data = fresh();
-    const f = { severity: Severity.Warn, text: "x", target: { kind: FindingTarget.Node, id: NodeId.Gate }, node: NodeId.Gate };
+    const f = { severity: Severity.Warn, text: "x", target: { kind: FindingTarget.Node, id: NodeId.Qa }, node: NodeId.Qa };
     data.findings = [f, { ...f, severity: Severity.Bad }];
     const onOpenFindings = vi.fn();
     show(data, { onOpenFindings });
-    fireEvent.click(screen.getByRole("button", { name: "2 findings on Review gate", ...H }));
-    expect(onOpenFindings).toHaveBeenCalledWith(NodeId.Gate);
+    fireEvent.click(screen.getByRole("button", { name: "2 findings on QA", ...H }));   // on the role's own box (HM-17)
+    expect(onOpenFindings).toHaveBeenCalledWith(NodeId.Qa);
+  });
+
+  it("Reviewer and QA are two boxes inside a dashed Review gate frame (HM-17)", () => {
+    const data = fresh();
+    show(data);
+    const frame = screen.getByTestId(`flow-group-${NodeId.Gate}`);
+    expect(frame.textContent).toBe(data.groups![0]!.label);
+    expect(screen.queryByTestId(`flow-node-${NodeId.Gate}`)).toBeNull();
+    const at = (el: HTMLElement) => [parseFloat(el.style.left), parseFloat(el.style.top), parseFloat(el.style.width), parseFloat(el.style.height)];
+    const [fx, fy, fw, fh] = at(frame);
+    for (const id of [NodeId.Reviewer, NodeId.Qa]) {
+      const pos = POSITIONS[id]!;
+      expect(pos.x).toBeGreaterThan(fx!);
+      expect(pos.y).toBeGreaterThan(fy!);
+      expect(pos.x + NODE_W).toBeLessThan(fx! + fw!);
+      expect(pos.y + NODE_H).toBeLessThan(fy! + fh!);
+      expect(node(id)).toBeTruthy();
+    }
+    expect(POSITIONS[NodeId.Reviewer]!.y).toBeLessThan(POSITIONS[NodeId.Qa]!.y);   // Reviewer above QA, the lane order
+  });
+
+  it("only the box whose role runs pulses (HM-17)", () => {
+    const data = fresh();
+    for (const n of data.nodes) if (n.state === NodeState.Live) n.state = NodeState.Done;
+    data.nodes.find((n) => n.id === NodeId.Reviewer)!.state = NodeState.Live;
+    data.nodes.find((n) => n.id === NodeId.Qa)!.state = NodeState.Done;
+    show(data);
+    expect(node(NodeId.Reviewer).querySelector('[class*="liveBox"]')).not.toBeNull();
+    expect(node(NodeId.Qa).querySelector('[class*="liveBox"]')).toBeNull();
   });
 
   it("node toolbar appears for the selected box", () => {
@@ -142,6 +172,17 @@ describe("diagram", () => {
     expect(label.textContent).toBe("100%");
   });
 
+  it("a plain wheel leaves the page to scroll; only a ctrl wheel is taken for zoom (HM-6)", () => {
+    show(fresh());
+    const pane = document.querySelector(".react-flow__pane") ?? document.querySelector(".react-flow")!;
+    const plain = new WheelEvent("wheel", { deltaY: -100, bubbles: true, cancelable: true });
+    pane.dispatchEvent(plain);
+    expect(plain.defaultPrevented).toBe(false);
+    const ctrl = new WheelEvent("wheel", { deltaY: -100, ctrlKey: true, bubbles: true, cancelable: true });
+    pane.dispatchEvent(ctrl);
+    expect(ctrl.defaultPrevented).toBe(true);
+  });
+
   it("clicking an edge label with instructions selects it and opens the viewer", () => {
     const data = fresh();
     const ev = data.events.find((e) => e.is_instruction && e.edge)!;
@@ -160,6 +201,50 @@ describe("diagram", () => {
     const { container } = show(data);
     act(() => api!.select({ kind: SelectionKind.Event, id: ev.id }));
     expect(container.querySelector('[class*="animated"]')).toBeNull();
+  });
+
+  it("the box working now pulses and shows a turning cog, also with reduced motion; a selected or idle box does not pulse", () => {
+    const data = fresh();
+    for (const n of data.nodes) n.state = n.id === NodeId.Coders ? NodeState.Live : NodeState.Done;
+    const button = () => screen.getByRole("button", { name: data.nodes.find((n) => n.id === NodeId.Coders)!.label, ...H });
+    const cog = () => screen.getByTestId(`flow-node-working-${NodeId.Coders}`);
+    const first = show(data);
+    expect(button().className).toMatch(/liveBox/);
+    expect(first.container.querySelectorAll('[class*="liveBox"]')).toHaveLength(1);
+    expect(cog().getAttribute("class")).toMatch(/spin/);
+    expect(first.container.querySelectorAll('[data-testid^="flow-node-working-"]')).toHaveLength(1);
+    first.unmount();
+    vi.spyOn(window, "matchMedia").mockImplementation((q: string) =>
+      ({ matches: q.includes("reduce"), media: q, addEventListener() {}, removeEventListener() {} }) as unknown as MediaQueryList);
+    show(data);
+    expect(button().className).toMatch(/liveBox/);   // the owner's choice: "working now" shows also with reduced motion
+    expect(cog().getAttribute("class")).toMatch(/spin/);
+    act(() => api!.select({ kind: SelectionKind.Node, id: NodeId.Coders }));
+    expect(button().className).not.toMatch(/liveBox/);   // a selected box shows the selection instead
+    expect(cog()).toBeTruthy();
+  });
+
+  it("the Waiting box shows how long, what for, and a link to the PR that opens in a new tab", () => {
+    const data = fresh();
+    const url = "https://github.com/example/repo/pull/7";
+    const wait = data.nodes.find((n) => n.id === NodeId.Wait)!;
+    Object.assign(wait, { state: NodeState.Live, work_s: 4000, current_s: 600, note: "PR checks, then review: T-1", links: [{ label: "PR T-1", url }] });
+    show(data);
+    const box = node(NodeId.Wait);
+    expect(box.textContent).toContain(fmtDuration(600));
+    expect(box.textContent).toContain("PR checks, then review: T-1");
+    const a = box.querySelector("a")!;
+    expect([a.getAttribute("href"), a.getAttribute("target"), a.getAttribute("rel")]).toEqual([url, "_blank", "noopener noreferrer"]);
+    expect(box.querySelector("button a")).toBeNull();
+    expect(box.querySelector("button")!.getAttribute("title")).toContain(`${fmtDuration(4000)} ${WAITED_TOTAL}`);
+  });
+
+  it("a node the bundle has no position for is left out, the rest still render", () => {
+    const data = fresh();
+    data.nodes.push({ ...data.nodes[0]!, id: "from-a-newer-server" as NodeId, label: "Newer" });
+    show(data);
+    expect(screen.queryByTestId("flow-node-from-a-newer-server")).toBeNull();
+    expect(node(NodeId.Coders)).toBeTruthy();
   });
 
   it("the selected arrow, its label and the selected box glow", () => {

@@ -1,6 +1,7 @@
 // The side panel: overview rankings with nothing selected, else the detail of the selected box, arrow or step.
 import { Lens, Scope, SelectionKind, Severity } from "../constants";
 import { fmtCost, fmtCount, fmtDuration, fmtTokens } from "../format";
+import { nodeLabel as nameOf } from "../groups";
 import { timeOrder, useSelection } from "../selection";
 import { Body } from "../instructions/Body";
 import { CopyReference, RefChip } from "../reference/CopyReference";
@@ -62,7 +63,7 @@ function Overview({ data }: { data: FlowData }) {
     ...data.nodes.filter((n) => n.work_s !== null && n.work_s > 0)
       .map((n) => ({ label: nodeLabel(n), value: n.work_s!, shown: fmtDuration(n.work_s), select: { kind: SelectionKind.Node, id: n.id } })),
     ...data.edges.filter((e) => e.wait_s !== null && e.wait_s > 0).map((e) => ({
-      label: `Wait: ${e.from} → ${e.to.join(", ")}`, value: e.wait_s!, shown: fmtDuration(e.wait_s),
+      label: `Wait: ${nameOf(data, e.from)} → ${e.to.map((t) => nameOf(data, t)).join(", ")}`, value: e.wait_s!, shown: fmtDuration(e.wait_s),
       select: { kind: SelectionKind.Edge, id: e.id },
     })),
   ];
@@ -175,7 +176,7 @@ function EdgeDetail({ data, edge, onOpenInstructions }: { data: FlowData; edge: 
   return (
     <>
       <p className={styles.kicker}>Arrow · {edge.label}</p>
-      <h2 className={styles.title}>{edge.from} → {edge.to.join(", ")}</h2>
+      <h2 className={styles.title}>{nameOf(data, edge.from)} → {edge.to.map((t) => nameOf(data, t)).join(", ")}</h2>
       <dl className={`${styles.facts} ${styles.table}`}>
         <div><dt>Wait</dt><dd>{edge.wait_s === null ? "not a wait" : fmtDuration(edge.wait_s)}</dd></div>
         <div><dt>Forward</dt><dd>{edge.counts.forward}</dd></div>

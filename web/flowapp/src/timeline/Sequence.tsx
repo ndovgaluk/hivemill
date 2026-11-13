@@ -104,13 +104,14 @@ export function Sequence({ data, open, toggle, onOpenInstructions }: {
               <div className={styles.card}>
                 <button type="button" className={styles.phaseHead} aria-expanded={isOpen} onClick={() => toggle(p.id)}>
                   <span className={styles.caret} aria-hidden="true">{isOpen ? "▾" : "▸"}</span>
+                  <span className={`${styles.mono} ${styles.phaseWhen}`} data-testid={`flow-phase-when-${p.id}`}>{range}</span>
                   <span className={styles.phaseText}>
                     <span className={styles.phaseTitle}>{p.title}</span>
                     <span className={styles.summary}>{p.summary}</span>
                   </span>
                   <span className={styles.phaseMeta}>
                     {flags(evs).map((f) => <span key={f.text} className={`${styles.pill} ${f.cls}`}>{f.n} {f.text}</span>)}
-                    <span className={styles.mono}>{range}{range ? " · " : ""}{items.length} {items.length === 1 ? "action" : "actions"}</span>
+                    <span className={styles.mono}>{items.length} {items.length === 1 ? "action" : "actions"}</span>
                   </span>
                 </button>
                 {isOpen ? (
@@ -159,7 +160,10 @@ export function Sequence({ data, open, toggle, onOpenInstructions }: {
                               <button type="button" className={styles.peek} aria-expanded={bodyOpen}
                                       aria-label={bodyOpen ? COLLAPSE : EXPAND} title={bodyOpen ? COLLAPSE : EXPAND}
                                       onClick={toggleBody}>
-                                <span aria-hidden="true">{bodyOpen ? "▴" : "▾"}</span>
+                                {/* HM-15: a plain chevron, down to expand, up to collapse */}
+                                <svg viewBox="0 0 12 12" width="12" height="12" aria-hidden="true">
+                                  <path d={bodyOpen ? "M2.5 7.5 6 4l3.5 3.5" : "M2.5 4.5 6 8l3.5-3.5"} />
+                                </svg>
                               </button>
                             ) : null}
                             {e ? (

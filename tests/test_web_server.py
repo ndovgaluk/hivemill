@@ -32,9 +32,9 @@ from web.views import ROUTES  # noqa: E402
 
 XSS = "<script>alert(1)</script>"
 PAGES = ["/", "/goals", "/goal/G-1", "/tasks", "/task/T-1", "/agents", "/resources", "/throughput", "/quality",
-         "/changelog", "/tokens"]
+         "/changelog", "/tokens", "/settings"]
 APIS = ["/api/home.json", "/api/goals.json", "/api/tasks.json", "/api/agents.json", "/api/resources.json",
-        "/api/throughput.json", "/api/quality.json", "/api/changelog.json", "/api/tokens.json"]
+        "/api/throughput.json", "/api/quality.json", "/api/changelog.json", "/api/tokens.json", "/api/settings.json"]
 ALL_ROUTES = PAGES + APIS + ["/healthz", "/static/app.css", "/static/favicon.svg"]
 
 
@@ -146,7 +146,10 @@ class TestRoutes(ServerCase):
             self.assertEqual(h["X-Content-Type-Options"], "nosniff")
             self.assertEqual(h["Referrer-Policy"], "no-referrer")
         self.assertEqual(self.get("/")[1]["Cache-Control"], "no-store")
-        self.assertEqual(self.get("/static/app.css")[1]["Cache-Control"], "max-age=3600")
+        self.assertEqual(self.get("/static/app.css")[1]["Cache-Control"], server.STATIC_CACHE)
+        for name in ("flow.js", "flow.css"):   # the flow bundle is never served from an hour-old browser copy (HM-13)
+            self.assertEqual(self.get(f"/static/flow/{name}")[1]["Cache-Control"], server.FLOW_CACHE)
+        self.assertNotEqual(server.FLOW_CACHE, server.STATIC_CACHE)
 
     def test_static_traversal_404(self):
         for p in ["/static/../server.py", "/static/%2e%2e/x", "/static/%2e%2e%2fserver.py", "/static/..%5cserver.py",
@@ -379,7 +382,7 @@ class TestVocabularyAndStubs(ServerCase):
     def test_every_page_has_nav_to_all_pages(self):
         want = [p for p, _ in wh.NAV]
         self.assertEqual(want, ["/", "/goals", "/tasks", "/agents", "/throughput", "/quality",
-                                "/tokens", "/changelog", "/resources"])
+                                "/tokens", "/changelog", "/resources", "/settings"])   # HM-1: Settings under System
         for path in PAGES:
             with self.subTest(path):
                 text = self.get(path)[2].decode()
@@ -417,7 +420,8 @@ class TestVocabularyAndStubs(ServerCase):
 
     def test_registry_complete(self):
         self.assertEqual(set(ROUTES), {"/", "/goals", "/goal/<id>", "/tasks", "/task/<id>", "/agents", "/resources",
-                                       "/throughput", "/quality", "/changelog", "/tokens"})
+                                       "/throughput", "/quality", "/changelog", "/tokens",
+                                       "/settings"})
         for v in ROUTES.values():
             self.assertTrue(callable(v.data) and callable(v.render))
 

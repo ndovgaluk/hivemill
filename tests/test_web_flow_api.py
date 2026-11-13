@@ -13,17 +13,18 @@ sys.path.insert(0, str(ROOT / "tests"))
 
 import test_web_detail as wd  # noqa: E402
 from harness import FactoryTestCase  # noqa: E402
-from test_web_detail import A_INS, E_INS, T_INS  # noqa: E402
+from test_web_detail import A_INS, E_INS, T_INS, V_INS  # noqa: E402
 from test_web_queries import ts  # noqa: E402
 from web import flow, server  # noqa: E402
 
 CONTRACT_KEYS = {"scope", "id", "title", "status", "start", "now", "elapsed_s", "show_text", "totals", "nodes", "edges", "lanes",
-                 "events", "findings", "phases"}
+                 "events", "findings", "phases", "groups"}
 EVENT_KEYS = {"id", "key", "ref", "task_id", "goal_id", "t_s", "ts", "lane", "row", "edge", "dir", "from", "to", "from_node",
               "to_node", "kind", "severity", "title", "is_instruction", "body_html", "tokens", "cost", "cost_note", "cost_exact"}
 SECRETS = ("BODY-SECRET", "FIX-BODY", "SUMMARY-SECRET", "SPEC-SECRET", "ACC-SECRET")
 TEXT_COLUMNS = re.compile(r"\b(body|summary|spec|acceptance)\b")
 NOW = dt.datetime(2026, 10, 24, 12, 0).astimezone()
+WAIT_PR = "https://github.com/example/repo/pull/7"
 NON_LOOPBACK = "203.0.113.5"   # documentation range: never bound, only set on the app the handler reads
 
 
@@ -51,6 +52,13 @@ class FlowCase(wd.DetailCase):
 
     def agents(self, node):
         return self.by_id(node["agents"], "name")
+
+
+def flow_findings_phases(d, con):
+    """The phases the server attaches to payload `d` (web/flow_findings.attach)."""
+    from web import flow_findings
+    flow_findings.attach(d, con, NOW)
+    return d["phases"]
 
 
 def flow_json_type():
@@ -103,6 +111,57 @@ class TestWaitsAndRework(FlowCase):
         self.assertEqual(edges[flow.Edge.CG]["wait_s"], 30 * 60)         # PR at 11:30, no reviewer yet: until now
         self.assertEqual(edges[flow.Edge.CG]["severity"], flow.Severity.WARN)
 
+    def test_waiting_box_is_live_when_no_agent_runs_and_says_what_for(self):
+        x = self.con.execute
+        x("INSERT INTO goals VALUES('G-81','p1','Open','i','1. a','active',2,'owner',NULL,?,?)", (ts(8, 0), ts(8, 0)))
+        x(T_INS, ("T-81", "G-81", None, "queued", "s", "a", "coder", "todo", None, None, 0, ts(11, 0), ts(11, 0)))
+        x(T_INS, ("T-82", "G-81", None, "unreviewed", "s", "a", "coder", "in_review", "coder-82", "u", 1, ts(9, 0), ts(9, 0)))
+        x(A_INS, ("coder-82", "coder", "G-81", None, "T-82", "done", "m", ts(9, 5), ts(11, 20)))
+        x(E_INS, (ts(11, 30), "coder-82", "task", "T-82", "update", "status=in_review pr=u"))
+        self.con.commit()
+        x("UPDATE tasks SET pr_url=? WHERE id='T-82'", (WAIT_PR,))
+        self.con.commit()
+        wait = self.by_id(self.build(flow.Scope.GOAL, "G-81")["nodes"])[flow.Node.WAIT]
+        self.assertEqual(wait["state"], flow.State.LIVE)
+        self.assertEqual(wait["links"], [{"label": f"{flow.WAIT_LINK_LABEL} T-82", "url": WAIT_PR}])
+        d = self.build(flow.Scope.GOAL, "G-81")
+        self.assertEqual(d["lanes"][-1]["id"], flow.Lane.WAIT)          # HM-18: the same waits as a lane
+        (row,) = d["lanes"][-1]["rows"]
+        self.assertEqual((row["name"], row["task_id"]), (flow.WAIT_ROW, None))
+        start = (11 * 60 + 20 - 8 * 60) * 60                              # 11:20, counted from the goal's 08:00
+        self.assertEqual(row["spans"], [{"start_s": start, "end_s": start + 40 * 60, "kind": flow.SpanKind.WAIT,
+                                         "note": f"{flow.WAIT_REVIEW}: T-82"}])
+        refs = [r for p in flow_findings_phases(d, self.con) for r in p["span_refs"]]
+        self.assertNotIn(flow.Lane.WAIT, [r["lane"] for r in refs])
+        self.assertEqual(wait["current_s"], 40 * 60)                    # the last session ended 11:20, now 12:00
+        self.assertEqual(wait["work_s"], 40 * 60)                       # every wait so far: there was only this one
+        self.assertEqual(wait["note"], f"{flow.WAIT_REVIEW}: T-82")     # an open PR outranks the queued task
+        self.assertEqual(wait["agents"], [])
+        x("UPDATE tasks SET status='in_progress' WHERE id='T-82'")
+        x("DELETE FROM events WHERE entity_id='T-82'")
+        self.con.commit()
+        wait = self.by_id(self.build(flow.Scope.GOAL, "G-81")["nodes"])[flow.Node.WAIT]
+        self.assertEqual(wait["note"], f"{flow.WAIT_QUEUE}: T-81")
+        self.assertEqual(wait["links"], [])
+        x("UPDATE agents SET status='live', ended=NULL WHERE name='coder-82'")   # somebody runs: not waiting
+        self.con.commit()
+        wait = self.by_id(self.build(flow.Scope.GOAL, "G-81")["nodes"])[flow.Node.WAIT]
+        self.assertEqual((wait["state"], wait["current_s"], wait["note"]), (flow.State.IDLE, None, None))
+        self.assertEqual(wait["work_s"], 0)                             # the coder has run since 09:05 without a gap
+        self.assertEqual(self.build(flow.Scope.GOAL, "G-81")["lanes"][-1]["rows"], [])
+        x(A_INS, ("qa-82", "qa", "G-81", None, "T-82", "done", "m", ts(9, 0), ts(9, 1)))   # 09:01 to 09:05 nobody ran
+        self.con.commit()
+        wait = self.by_id(self.build(flow.Scope.GOAL, "G-81")["nodes"])[flow.Node.WAIT]
+        self.assertEqual(wait["work_s"], 4 * 60)
+        spans = self.build(flow.Scope.GOAL, "G-81")["lanes"][-1]["rows"][0]["spans"]
+        self.assertEqual([(s["end_s"] - s["start_s"], s["note"]) for s in spans], [(4 * 60, None)])   # a past wait has no reason
+        x("DELETE FROM agents WHERE name='qa-82'")
+        x("UPDATE agents SET status='done', ended=? WHERE name='coder-82'", (ts(11, 20),))
+        x("UPDATE goals SET status='done' WHERE id='G-81'")                       # a closed goal waits for nothing
+        self.con.commit()
+        wait = self.by_id(self.build(flow.Scope.GOAL, "G-81")["nodes"])[flow.Node.WAIT]
+        self.assertEqual(wait["state"], flow.State.IDLE)
+
     def test_reviewer_fail_then_restart_is_one_rework_instruction(self):
         self.seed()
         d = self.build(flow.Scope.TASK, "T-80")
@@ -112,9 +171,52 @@ class TestWaitsAndRework(FlowCase):
         fail = [e for e in d["events"] if e["edge"] == flow.Edge.RW]
         self.assertEqual(len(fail), 1)
         self.assertTrue(fail[0]["is_instruction"])
-        self.assertEqual(fail[0]["from_node"], flow.Node.GATE)
+        self.assertEqual(fail[0]["from_node"], flow.Node.REVIEWER)   # HM-17: the role that rejected
         self.assertEqual(fail[0]["to_node"], flow.Node.CODERS)
         self.assertEqual(d["totals"]["rejections"], 1)
+
+    def test_reviewer_and_qa_are_separate_nodes_and_the_rejecting_one_fails(self):
+        """HM-17: two boxes in a "Review gate" group; a box fails only on its own role's open rejection."""
+        self.seed()   # T-80: reviewer FAIL 09:50, reviewer PASS 10:30, QA PASS 10:35, not merged
+        self.con.execute(A_INS, ("qa-80", "qa", "G-80", "g-80-a", "T-80", "done", "m", ts(10, 32), ts(10, 36)))
+        self.con.commit()
+        d = self.build(flow.Scope.TASK, "T-80")
+        ids = [n["id"] for n in d["nodes"]]
+        self.assertIn(flow.Node.REVIEWER, ids)
+        self.assertIn(flow.Node.QA, ids)
+        self.assertNotIn(flow.Node.GATE, ids)
+        self.assertEqual(d["groups"], [{"id": flow.Node.GATE, "label": "Review gate",
+                                        "nodes": [flow.Node.REVIEWER, flow.Node.QA]}])
+        self.assertEqual([la["node"] for la in d["lanes"] if la["id"] in (flow.Lane.REVIEWER, flow.Lane.QA)],
+                         [flow.Node.REVIEWER, flow.Node.QA])
+
+        def states():
+            nodes = self.by_id(self.build(flow.Scope.TASK, "T-80")["nodes"])
+            return nodes[flow.Node.REVIEWER]["state"], nodes[flow.Node.QA]["state"]
+
+        self.assertNotIn(flow.State.FAIL, states())                     # the reviewer's later PASS cleared its FAIL
+        x = self.con.execute
+        x(V_INS, ("T-80", "u", "cc", "qa", "fail", "s", "qa-80", ts(10, 40)))
+        self.con.commit()
+        rev, qa = states()
+        self.assertEqual(qa, flow.State.FAIL)                           # QA rejects: only QA
+        self.assertNotEqual(rev, flow.State.FAIL)
+        x(V_INS, ("T-80", "u", "dd", "reviewer", "fail", "s", "reviewer-80", ts(10, 45)))
+        self.con.commit()
+        self.assertEqual(states(), (flow.State.FAIL, flow.State.FAIL))  # both reject: both
+        x(V_INS, ("T-80", "u", "ee", "qa", "pass", "s", "qa-80", ts(10, 50)))
+        self.con.commit()
+        rev, qa = states()
+        self.assertEqual(rev, flow.State.FAIL)                          # QA passed after the fix: only the reviewer left
+        self.assertNotEqual(qa, flow.State.FAIL)
+        d = self.build(flow.Scope.TASK, "T-80")
+        nodes = self.by_id(d["nodes"])
+        roles = {a["name"]: a["role"] for a in self.con.execute("SELECT name, role FROM agents")}
+        for nid, role in ((flow.Node.REVIEWER, "reviewer"), (flow.Node.QA, "qa")):
+            self.assertTrue(nodes[nid]["agents"])
+            self.assertEqual({roles[a["name"]] for a in nodes[nid]["agents"]}, {role})   # each box: its own agents only
+        rw = [e for e in d["events"] if e["edge"] == flow.Edge.RW]
+        self.assertEqual([e["from_node"] for e in rw], [flow.Node.REVIEWER, flow.Node.QA, flow.Node.REVIEWER])
 
     def test_missing_start_is_unknown_not_zero(self):
         self.seed()

@@ -61,10 +61,16 @@ class TestDetectors(FindingsCase):
         x(V_INS, ("T-951", "u", "a1", "reviewer", "fail", "s", "reviewer-1", ts(10, 0)))
         x(V_INS, ("T-952", "u", "b1", "qa", "fail", "s", "qa-2", ts(10, 10)))
         x(V_INS, ("T-951", "u", "a2", "reviewer", "pass", "s", "reviewer-1", ts(10, 30)))
-        f = self.kinds(self.build())[ff.Kind.REJECTIONS]
-        self.assertEqual(f["text"], "2 rejections, 1 still open (T-952)")
-        self.assertEqual(f["target"], {"kind": flow.FindingTarget.EDGE, "id": flow.Edge.RW})
-        self.assertEqual(f["severity"], flow.Severity.BAD)
+        # HM-17: one finding per role that rejected, on that role's box
+        got = {f["node"]: f for f in ff.findings(self.build()) if f["kind"] == ff.Kind.REJECTIONS}
+        self.assertEqual(set(got), {flow.Node.REVIEWER, flow.Node.QA})
+        qa, rev = got[flow.Node.QA], got[flow.Node.REVIEWER]
+        self.assertEqual(qa["text"], "1 rejection by QA, 1 still open (T-952)")
+        self.assertEqual(qa["severity"], flow.Severity.BAD)
+        self.assertEqual(rev["text"], "1 rejection by Reviewer, all resolved")
+        self.assertEqual(rev["severity"], flow.Severity.WARN)
+        for f in (qa, rev):
+            self.assertEqual(f["target"], {"kind": flow.FindingTarget.EDGE, "id": flow.Edge.RW})
 
     def test_no_rejection_no_finding(self):
         self.task("T-951")
@@ -138,7 +144,8 @@ class TestDetectors(FindingsCase):
         ranks = [ff.SEV_RANK[f["severity"]] for f in got]
         self.assertEqual(ranks, sorted(ranks))
         bad = [f["kind"] for f in got if f["severity"] == flow.Severity.BAD]
-        self.assertEqual(bad, [ff.Kind.REJECTIONS, ff.Kind.LONG_WAIT])     # 3 rejections outrank a 2h wait share
+        # reviewer (2) and QA (1) rejections, one finding each (HM-17), both outrank a 2h wait share
+        self.assertEqual(bad, [ff.Kind.REJECTIONS, ff.Kind.REJECTIONS, ff.Kind.LONG_WAIT])
         warn = [f["kind"] for f in got if f["severity"] == flow.Severity.WARN]
         self.assertEqual(warn, [ff.Kind.UNATTRIBUTED, ff.Kind.OVERHEAD])   # 90% before 50%
         self.assertTrue(all(ff.SIZE not in f for f in got))

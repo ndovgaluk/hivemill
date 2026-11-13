@@ -25,7 +25,7 @@ const noop = () => {};
 const LEGEND_TIME = "Box = work time, cost";
 const LEGEND_COST = "Box = cost, share bar";
 const LEGEND_ARROWS = "Arrow label = wait. Thicker, red = slower";
-export const FLOW_HINT = "Select a box, a badge or a timeline mark. Click an arrow label to read the instructions sent over that link.";
+export const FLOW_HINT = "Select a box, a badge or a timeline mark. Click an arrow label to read the instructions sent over that link. Ctrl + wheel zooms.";
 
 export function Diagram(props: { data: FlowData } & DiagramHandlers) {
   return (
@@ -48,13 +48,14 @@ function DiagramInner({ data, onOpenFindings = noop, onExpandLanes = noop, onOpe
     const total = cost ? data.totals.cost : data.elapsed_s;
     const known = data.nodes.filter((n) => n.cost !== null);
     const topId = cost && known.length ? known.reduce((a, b) => ((b.cost ?? 0) > (a.cost ?? 0) ? b : a)).id : null;
-    return data.nodes.map((n) => {
+    // a node this bundle has no place for (a newer server) is left out instead of breaking the page
+    return data.nodes.filter((n) => n.id in POSITIONS).map((n) => {
       const mine = data.findings.filter((f) => f.node === n.id);
       const value = cost ? n.cost : n.work_s;
       return {
         id: n.id,
         type: BOX,
-        position: POSITIONS[n.id as NodeId],
+        position: POSITIONS[n.id as NodeId]!,
         width: NODE_W,
         height: NODE_H,
         draggable: false,
@@ -133,6 +134,8 @@ function DiagramInner({ data, onOpenFindings = noop, onExpandLanes = noop, onOpe
           nodesConnectable={false}
           elementsSelectable={false}
           zoomOnDoubleClick={false}
+          // HM-6: a plain wheel scrolls the page; React Flow then zooms only on a ctrl wheel (and trackpad pinch)
+          preventScrolling={false}
           // React Flow sets pointer-events:none on nodes that are neither selectable nor draggable unless a node
           // handler exists; the box's own button does the selecting
           onNodeClick={noop}

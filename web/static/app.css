@@ -730,8 +730,33 @@ details.flow-note[open] > summary { color: var(--text-1); }
 .flow-blocks { display: grid; gap: var(--s2); margin-top: var(--s2); }
 /* DVDG-561: a page holding the React flow debugger drops the 1240px cap; the debugger uses the full content width */
 .page:has(.flow-full) { max-width: none; }
+/* HM-10: and its header scrolls away (a sticky one covered the diagram) and spans the same full width */
+.main:has(.flow-full) > .shellbar { position: static; max-width: none; }
 .flow-full, .flow-root { width: 100%; }
 .flow-stage { padding: var(--s2); border: 1px solid var(--hairline); border-radius: var(--r-sm); scroll-margin-top: var(--s4); }
 .flow-stage > h4 { font: 600 13px/18px var(--font); margin: 0 0 var(--s1); }
 .flow-in { margin: 0 0 var(--s1); padding: var(--s1) var(--s2); border-left: 3px solid var(--info-solid); scroll-margin-top: var(--s4); }
 .flow-stage:target, .flow-in:target { background: var(--info-bg); border-color: var(--info-solid); box-shadow: var(--e2); }
+/* HM-1 settings page: one row per setting (text left, current value and its form or command right) */
+.settings { display: grid; gap: var(--s4); }
+.set-intro { margin: 0; color: var(--text-2); }
+.set-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(220px, auto); gap: var(--s2) var(--s4); align-items: start;
+  padding: var(--s3) 0; border-top: 1px solid var(--hairline); scroll-margin-top: var(--s4); }
+.set-text { min-width: 0; }
+.set-name { font: 600 14px/20px var(--font); }
+.set-key { margin-left: var(--s2); font: 400 12px/18px var(--mono); color: var(--text-3); }
+.set-help { margin: var(--s1) 0 0; color: var(--text-2); font-size: 13px; }
+.set-ctl { display: grid; gap: var(--s1); justify-items: end; }
+.set-now { display: flex; gap: var(--s2); align-items: baseline; }
+.set-value { font: 600 14px/20px var(--mono); }
+.set-default { font-size: 12px; color: var(--text-3); }
+.set-form { display: flex; gap: var(--s2); align-items: center; }
+.set-input { font: inherit; padding: 4px 8px; min-width: 80px; color: var(--text-1); background: var(--surface-0);
+  border: 1px solid var(--border); border-radius: var(--r-sm); }
+.set-btn { font: 600 13px/18px var(--font); padding: 5px 14px; cursor: pointer; color: var(--surface-1); background: var(--accent-solid);
+  border: 1px solid var(--accent-solid); border-radius: var(--r-sm); }
+.set-cmd { font: 400 12.5px/18px var(--mono); padding: 4px 8px; background: var(--fill); border-radius: var(--r-sm); }
+.set-note { margin: 0; font-size: 12px; }
+.set-note--ok { color: var(--success-fg); }
+.set-note--bad { color: var(--danger-fg); }
+@media (max-width: 700px) { .set-row { grid-template-columns: 1fr; } .set-ctl { justify-items: start; } }
