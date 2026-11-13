@@ -572,6 +572,9 @@ class TestFlowMount(DetailCase):
         mount = page[page.index('id="flow-root"'):page.index('<link rel="stylesheet" href="/static/flow/flow.css">')]
         self.assertIn('class="flow-svg"', mount)
         self.assertIn('class="flow-blocks"', mount)
+        # HM-8: only without JavaScript, so the old diagram never flashes before the app mounts
+        self.assertTrue(mount.split(">", 1)[1].startswith("<noscript>"), mount[:120])
+        self.assertTrue(mount.rstrip().endswith("</noscript></div>"), mount[-120:])
 
     def test_unknown_goal_and_task_still_404(self):
         for path in ("/goal/G-404", "/task/T-404"):

@@ -74,8 +74,9 @@ FLOW_MODULE = "module"
 
 def flow_mount(scope, oid, *fallback):
     """DVDG-561: the Flow section as the React flow debugger, full width. The server-rendered flow (`fallback`) sits
-    inside the mount element: shown without JavaScript, replaced when the app mounts (grilling DVDG-552)."""
-    return el("div", section("Flow", el("div", *fallback, id=FLOW_MOUNT_ID, data_scope=scope, data_id=oid, class_="flow-root"),
+    inside the mount element: shown without JavaScript, replaced when the app mounts (grilling DVDG-552). It sits in
+    <noscript> (HM-8) so a browser with JavaScript never paints it for the moment before the bundle mounts."""
+    return el("div", section("Flow", el("div", el("noscript", *fallback), id=FLOW_MOUNT_ID, data_scope=scope, data_id=oid, class_="flow-root"),
                              el("link", rel="stylesheet", href=FLOW_CSS), el("script", "", type=FLOW_MODULE, src=FLOW_JS)),
               class_="flow-full")
 
