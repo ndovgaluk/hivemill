@@ -175,6 +175,21 @@ describe("timeline: sequence", () => {
     expect(screen.queryAllByText(/with no new action starting/).length).toBeGreaterThan(0);
   });
 
+  it("a phase row starts with its time range, before the title", () => {
+    const d = fresh();
+    show(d);
+    toSequence();
+    const timed = d.phases.filter((p) => p.event_ids.some((id) => d.events.find((e) => e.id === id)?.t_s != null));
+    expect(timed.length).toBeGreaterThan(0);
+    for (const p of timed) {
+      const when = screen.getByTestId(`flow-phase-when-${p.id}`);
+      expect(when.textContent).toMatch(/^\d{2}:\d{2}/);
+      const title = within(screen.getByTestId(`flow-phase-${p.id}`)).getByText(p.title);
+      expect(when.compareDocumentPosition(title) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    }
+    expect(screen.queryByText(/ · \d+ actions?$/)).toBeNull();   // the range is no longer at the end of the row
+  });
+
   it("selecting an event elsewhere opens the phase that contains it", () => {
     const d = fresh();
     const p = d.phases[d.phases.length - 1]!;

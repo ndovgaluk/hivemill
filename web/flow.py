@@ -6,6 +6,7 @@ None (JSON null) with a `*_note` reason where it matters, never 0 or a guess. In
 verdict summaries, the task's spec and acceptance, an agent's end summary) is selected from the DB only when
 `show_text` (web/server.show_text_allowed); otherwise those columns are never read.
 """
+from web.html import is_pr_url
 from web import queries as q
 from web.html import md
 
@@ -18,10 +19,11 @@ class Scope:
 class Node:
     BOSS, DIRECTOR, LEAD, SYSTEM = "boss", "director", "lead", "system"
     PM, CODERS, GATE, JUDGE, MAIN = "pm", "coders", "gate", "judge", "main"
+    WAIT = "wait"   # no role: live while the scope is open and no agent of it runs (HM-13)
 
 
 NODES = ((Node.BOSS, "Boss"), (Node.DIRECTOR, "Director"), (Node.LEAD, "Lead"), (Node.SYSTEM, "System"), (Node.PM, "PM"),
-         (Node.CODERS, "Coders"), (Node.GATE, "Review gate"), (Node.JUDGE, "Judge"), (Node.MAIN, "Merged"))
+         (Node.CODERS, "Coders"), (Node.GATE, "Review gate"), (Node.JUDGE, "Judge"), (Node.MAIN, "Merged"), (Node.WAIT, "Waiting"))
 WORKERS = (Node.PM, Node.CODERS, Node.GATE, Node.JUDGE)
 
 
@@ -135,6 +137,11 @@ NOTE_RUNNING = "running"
 NOTE_NO_END = "end not recorded"
 NOTE_QUEUED = "queued before coding"
 NOTE_NO_CODER_START = "left the queue without a recorded coder start"
+# what the Waiting box says nobody is running for (HM-13); the first two are followed by the task ids
+WAIT_REVIEW = "PR checks, then review"   # a PR is open and no reviewer or QA has started on it: CI runs first
+WAIT_QUEUE = "next task not started"
+WAIT_UNKNOWN = "no agent running"
+WAIT_LINK_LABEL = "PR"
 
 
 def _sev_max(*sevs):
@@ -155,7 +162,7 @@ def build(con, scope, oid, now=None, show_text=False):
         head = con.execute("SELECT id, title, status, created FROM goals WHERE id=?", (oid,)).fetchone()
         if head is None:
             return None
-        tasks = q._dicts(con.execute("SELECT rowid, id, goal_id, status, created FROM tasks WHERE goal_id=? ORDER BY created, id",
+        tasks = q._dicts(con.execute("SELECT rowid, id, goal_id, status, created, pr_url FROM tasks WHERE goal_id=? ORDER BY created, id",
                                      (oid,)))
         agents = q._dicts(con.execute(
             "SELECT name, role, status, task_id, goal_id, session_id, started, ended FROM agents WHERE goal_id=? "
@@ -163,7 +170,7 @@ def build(con, scope, oid, now=None, show_text=False):
         start = head["created"]
         goal_id = oid
     else:
-        head = con.execute("SELECT rowid, id, goal_id, title, status, created FROM tasks WHERE id=?", (oid,)).fetchone()
+        head = con.execute("SELECT rowid, id, goal_id, title, status, created, pr_url FROM tasks WHERE id=?", (oid,)).fetchone()
         if head is None:
             return None
         tasks = [dict(head)]
@@ -424,12 +431,41 @@ def build(con, scope, oid, now=None, show_text=False):
         if v["role"] in GATE_ROLES:
             last_gate[v["task_id"]] = v["verdict"]
     open_fail = any(vd in REJECT_VERDICTS and tid not in merged for tid, vd in last_gate.items())
+    terminal = head["status"] in (TERMINAL_GOAL if scope == Scope.GOAL else TERMINAL_TASK)
+    # the Waiting box (HM-13): the scope is open, it had agents, and none of them runs now
+    waiting = not terminal and bool(agents) and not any(a["status"] in LIVE_STATUSES for a in agents)
+    wait_s = wait_note = wait_total = None
+    wait_links = []
+    # all the time since the first session in which no agent of the scope ran (a session with no known end counts as zero)
+    runs = sorted((s[0], s[1] if s[1] is not None else s[0]) for spans in sess.values() for s in spans)
+    if runs:
+        horizon = max(e for _, e in runs) if terminal else max(now_e, runs[0][0])
+        covered, (cur0, cur1) = 0, runs[0]
+        for s0, s1 in runs[1:]:
+            if s0 > cur1:
+                covered += cur1 - cur0
+                cur0, cur1 = s0, s1
+            else:
+                cur1 = max(cur1, s1)
+        covered += min(cur1, horizon) - cur0
+        wait_total = max(0, round(horizon - runs[0][0] - covered))
+    if waiting:
+        ends = [s[1] for spans in sess.values() for s in spans if s[1] is not None]
+        wait_s = round(now_e - max(ends)) if ends and now_e >= max(ends) else None
+        in_ci = [w["task_id"] for w in cg_waits if w["open"]]
+        in_queue = [w["task_id"] for w in pc_waits if w["open"]]
+        wait_note = (f"{WAIT_REVIEW}: {', '.join(in_ci)}" if in_ci
+                     else f"{WAIT_QUEUE}: {', '.join(in_queue)}" if in_queue else WAIT_UNKNOWN)
+        pr_of = {t["id"]: t["pr_url"] for t in tasks}
+        wait_links = [{"label": f"{WAIT_LINK_LABEL} {tid}", "url": pr_of[tid]} for tid in in_ci if is_pr_url(pr_of.get(tid))]
     nodes = []
     for nid, label in NODES:
         mine = [a for a in agents if _LANE_NODE.get(_ROLE_LANE.get(a["role"])) == nid]
         works = [work_of(a["name"]) for a in mine]
         live = any(a["status"] in LIVE_STATUSES for a in mine)
-        if nid == Node.MAIN:
+        if nid == Node.WAIT:
+            state = State.LIVE if waiting else State.IDLE
+        elif nid == Node.MAIN:
             state = State.DONE if merged else State.PENDING
         elif live:
             state = State.LIVE
@@ -442,13 +478,15 @@ def build(con, scope, oid, now=None, show_text=False):
         else:
             state = State.IDLE
         nodes.append({"id": nid, "label": label, "state": state,
-                      "work_s": sum(works) if mine and all(w is not None for w in works) else None,
+                      "work_s": wait_total if nid == Node.WAIT else sum(works) if mine and all(w is not None for w in works) else None,
+                      "current_s": wait_s if nid == Node.WAIT else None,   # the wait going on now; work_s is every wait so far
+                      "note": wait_note if nid == Node.WAIT else None,
+                      "links": wait_links if nid == Node.WAIT else [],
                       "tokens": None, "cost": None, "cost_note": COST_NOTE,
                       "agents": [{"name": a["name"], "status": a["status"], "work_s": w, "cost": None, "task_id": a["task_id"],
                                   "session_id": a["session_id"], "after_last_event": None} for a, w in zip(mine, works)]})
 
     status = head["status"]
-    terminal = status in (TERMINAL_GOAL if scope == Scope.GOAL else TERMINAL_TASK)
     last_e = max((q._epoch(ev["ts"]) for ev in events if q._epoch(ev["ts"]) is not None), default=None)
     end_e = (last_e if terminal else now_e)
     known = [w for n in nodes for w in (a["work_s"] for a in n["agents"]) if w is not None]

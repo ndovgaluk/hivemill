@@ -1,8 +1,8 @@
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { Dir, EdgeId, FindingTarget, NodeId, SelectionKind, Severity } from "../constants";
-import { MSGS_ONLY, NO_SESSIONS } from "../diagram/BoxNode";
+import { Dir, EdgeId, FindingTarget, NodeId, NodeState, SelectionKind, Severity } from "../constants";
+import { MSGS_ONLY, NO_SESSIONS, WAITED_TOTAL } from "../diagram/BoxNode";
 import { Diagram, type DiagramHandlers } from "../diagram/Diagram";
 import goalFixture from "../fixtures/goal.json";
 import { fmtCost, fmtDuration, UNKNOWN } from "../format";
@@ -171,6 +171,50 @@ describe("diagram", () => {
     const { container } = show(data);
     act(() => api!.select({ kind: SelectionKind.Event, id: ev.id }));
     expect(container.querySelector('[class*="animated"]')).toBeNull();
+  });
+
+  it("the box working now pulses and shows a turning cog, also with reduced motion; a selected or idle box does not pulse", () => {
+    const data = fresh();
+    for (const n of data.nodes) n.state = n.id === NodeId.Coders ? NodeState.Live : NodeState.Done;
+    const button = () => screen.getByRole("button", { name: data.nodes.find((n) => n.id === NodeId.Coders)!.label, ...H });
+    const cog = () => screen.getByTestId(`flow-node-working-${NodeId.Coders}`);
+    const first = show(data);
+    expect(button().className).toMatch(/liveBox/);
+    expect(first.container.querySelectorAll('[class*="liveBox"]')).toHaveLength(1);
+    expect(cog().getAttribute("class")).toMatch(/spin/);
+    expect(first.container.querySelectorAll('[data-testid^="flow-node-working-"]')).toHaveLength(1);
+    first.unmount();
+    vi.spyOn(window, "matchMedia").mockImplementation((q: string) =>
+      ({ matches: q.includes("reduce"), media: q, addEventListener() {}, removeEventListener() {} }) as unknown as MediaQueryList);
+    show(data);
+    expect(button().className).toMatch(/liveBox/);   // the owner's choice: "working now" shows also with reduced motion
+    expect(cog().getAttribute("class")).toMatch(/spin/);
+    act(() => api!.select({ kind: SelectionKind.Node, id: NodeId.Coders }));
+    expect(button().className).not.toMatch(/liveBox/);   // a selected box shows the selection instead
+    expect(cog()).toBeTruthy();
+  });
+
+  it("the Waiting box shows how long, what for, and a link to the PR that opens in a new tab", () => {
+    const data = fresh();
+    const url = "https://github.com/example/repo/pull/7";
+    const wait = data.nodes.find((n) => n.id === NodeId.Wait)!;
+    Object.assign(wait, { state: NodeState.Live, work_s: 4000, current_s: 600, note: "PR checks, then review: T-1", links: [{ label: "PR T-1", url }] });
+    show(data);
+    const box = node(NodeId.Wait);
+    expect(box.textContent).toContain(fmtDuration(600));
+    expect(box.textContent).toContain("PR checks, then review: T-1");
+    const a = box.querySelector("a")!;
+    expect([a.getAttribute("href"), a.getAttribute("target"), a.getAttribute("rel")]).toEqual([url, "_blank", "noopener noreferrer"]);
+    expect(box.querySelector("button a")).toBeNull();
+    expect(box.querySelector("button")!.getAttribute("title")).toContain(`${fmtDuration(4000)} ${WAITED_TOTAL}`);
+  });
+
+  it("a node the bundle has no position for is left out, the rest still render", () => {
+    const data = fresh();
+    data.nodes.push({ ...data.nodes[0]!, id: "from-a-newer-server" as NodeId, label: "Newer" });
+    show(data);
+    expect(screen.queryByTestId("flow-node-from-a-newer-server")).toBeNull();
+    expect(node(NodeId.Coders)).toBeTruthy();
   });
 
   it("the selected arrow, its label and the selected box glow", () => {

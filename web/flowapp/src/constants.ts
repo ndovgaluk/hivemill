@@ -17,6 +17,7 @@ export const NodeId = {
   Gate: "gate",
   Judge: "judge",
   Main: "main",
+  Wait: "wait",
 } as const;
 export type NodeId = (typeof NodeId)[keyof typeof NodeId];
 

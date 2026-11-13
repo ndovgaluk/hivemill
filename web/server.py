@@ -48,6 +48,9 @@ REQUEST_TIMEOUT_S = 10
 _ID_RE = re.compile(r"^/(goal|task)/([A-Z]-\d+)$")
 _FLOW_RE = re.compile(r"^/api/flow/(goal|task)/([A-Z]-\d+)\.json$")   # DVDG-553
 JSON_TYPE = "application/json"
+STATIC_CACHE = "max-age=3600"
+FLOW_CACHE = "no-cache"            # revalidate on every load
+FLOW_STATIC_PREFIX = "flow/"
 _STATIC_NAME_RE = re.compile(r"^(?:fonts/|flow/)?[\w][\w.-]*$")  # one level: static/fonts/, static/flow/ (DVDG-554 bundle)
 RELOAD_INTERVAL_S = 60     # FACTORY_SERVE_RELOAD_INTERVAL overrides it (tests)
 SHOW_TEXT_KEY = "serve_show_text"   # config key (bin/factory_cli.py DEFAULT_CONFIG), read per request
@@ -295,7 +298,9 @@ class Handler(BaseHTTPRequestHandler):
         ctype = STATIC_TYPES.get(f.suffix)
         if STATIC.resolve() not in f.parents or ctype is None or not f.is_file():
             return self._error(404, "not found")
-        self._send(200, f.read_bytes(), ctype, cache="max-age=3600")
+        # the flow bundle is rebuilt in place under a fixed name and must match the JSON contract of the same checkout:
+        # a copy cached for an hour breaks the page after an update (HM-13)
+        self._send(200, f.read_bytes(), ctype, cache=FLOW_CACHE if name.startswith(FLOW_STATIC_PREFIX) else STATIC_CACHE)
 
 
 class _App:

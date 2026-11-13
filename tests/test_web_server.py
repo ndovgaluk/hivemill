@@ -146,7 +146,10 @@ class TestRoutes(ServerCase):
             self.assertEqual(h["X-Content-Type-Options"], "nosniff")
             self.assertEqual(h["Referrer-Policy"], "no-referrer")
         self.assertEqual(self.get("/")[1]["Cache-Control"], "no-store")
-        self.assertEqual(self.get("/static/app.css")[1]["Cache-Control"], "max-age=3600")
+        self.assertEqual(self.get("/static/app.css")[1]["Cache-Control"], server.STATIC_CACHE)
+        for name in ("flow.js", "flow.css"):   # the flow bundle is never served from an hour-old browser copy (HM-13)
+            self.assertEqual(self.get(f"/static/flow/{name}")[1]["Cache-Control"], server.FLOW_CACHE)
+        self.assertNotEqual(server.FLOW_CACHE, server.STATIC_CACHE)
 
     def test_static_traversal_404(self):
         for p in ["/static/../server.py", "/static/%2e%2e/x", "/static/%2e%2e%2fserver.py", "/static/..%5cserver.py",

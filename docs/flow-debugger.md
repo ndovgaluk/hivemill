@@ -50,11 +50,16 @@ npm run build
 
 ## 3. How to use it
 
-- **Summary bar:** Elapsed, Agent time, Rejections, Tokens, Cost (est.), and the findings as chips; a chip selects what it is about.
+- **Summary bar:** Elapsed, Agent time, Longest wait, Rejections, Tokens, Cost (est.), and the findings as chips; a chip selects what it is about. Clicking the Longest wait value selects the arrow with that wait.
 - **Boxes:** name, state dot (green done, blue live and blinking, red failed, grey idle, dashed pending), work time and cost, a share bar. A numbered badge counts the findings on the box; it opens the findings list. A selected box shows **Expand on timeline** and **Messages and events**.
+- **Share bar** (the strip along the bottom of a box): how much of the whole run the box accounts for; its width is the box's value divided by the run's total.
+  - Time view (blue): the box's work time divided by the elapsed time of the run, from its first event to its last. A nearly full Coders bar means coders were working for almost the whole run.
+  - Cost view (amber): the box's estimated cost divided by the run's total cost.
+  - Red: the box's last session ended in FAIL (either view).
+  - It stops at 100%: agents of one box can work in parallel, so a box's work time can exceed the elapsed time; the bar is then full. No bar: the value is unknown (for example, cost not recorded) or zero.
 - **Arrows:** click the label chip to select the arrow; if it carries instructions, the **instruction viewer** opens: the list of that link's instructions on the left, and for the chosen one the **From** and **To** cards (agent and role), subject, time, tokens and cost, and the text. **Show on diagram and timeline** closes it and keeps the step selected.
 - **Time / Cost:** switches the main value of every box; in the Cost view the most expensive box gets an amber border.
-- **Zoom:** wheel or **+** / **−** (50 to 200%), **Fit** goes back to 100%; drag to pan.
+- **Zoom:** **Ctrl** + wheel (or a trackpad pinch) or **+** / **−**; a plain wheel scrolls the page (50 to 200%), **Fit** goes back to 100%; drag to pan.
 - **Timeline, Lanes:** one lane per role with work bars, hatched waits, red bars for a run that ended in a failing verdict, and a mark per step (dot message, square status, circle verdict). A lane label selects the role and opens one row per agent. **Prev event** / **Next event** step through all steps in time order ("12 / 116"). Zoom 1x to 8x keeps the labels in place.
 - **Timeline, Sequence:** the run grouped into phases: on a goal, "Goal setup", one phase per task, "Wrap-up"; on a task, Spec, Coding attempt N, Review and QA attempt N, Merge. Each phase shows its failed, passed and to-check counts and a summary; a long silence before a phase is noted.
 - **Inspector:** with nothing selected, "Where the time went" and "Where the cost went"; a box shows its figures, its input, output, cache-read and cache-write tokens, its agents (on a goal page with **Open task flow** to the task's own page) and its steps; a step shows route, time, its own tokens and cost, its text, and "Around this event".

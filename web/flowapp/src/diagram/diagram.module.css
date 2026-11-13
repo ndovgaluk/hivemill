@@ -94,4 +94,29 @@ path.glow { animation: dash 0.8s linear infinite, edgeGlow 1.6s ease-in-out infi
   0%, 100% { box-shadow: 0 0 0 2px var(--accent); }
   50% { box-shadow: 0 0 0 2px var(--accent), 0 0 14px 4px color-mix(in srgb, var(--accent) 55%, transparent); }
 }
+/* the box working right now: its outline breathes (the selected glow and the sender pulse win) */
+/* same shape as Taskosaur's board-card-flash (ring, glow, slight grow), about half its size, and it repeats while the box is live */
+/* the live pulse and the cog run also with reduced motion, like Taskosaur's card flash (owner's choice): they are the only sign of "working now" */
+.liveBox { animation: liveOutline 1.4s ease-in-out infinite; }
+@keyframes liveOutline {
+  0%, 100% { box-shadow: 0 0 0 0 transparent; transform: scale(1); }
+  50% {
+    box-shadow: 0 0 0 2px var(--info-solid), 0 0 10px 3px color-mix(in srgb, var(--info-solid) 50%, transparent);
+    transform: scale(1.015);
+  }
+}
+.links { position: absolute; top: 70px; left: 0; display: flex; flex-direction: column; align-items: flex-start; gap: 4px; }
+.linkChip {
+  font: 12px var(--mono); padding: 1px 8px; white-space: nowrap; text-decoration: none; pointer-events: all;
+  color: var(--info-fg); background: var(--surface-1); border: 1px solid var(--accent); border-radius: 10px;
+}
+.linkChip:hover { background: var(--info-bg); }
+.cog { flex: none; margin-left: auto; color: var(--info-solid); }
+.spin { animation: spin 2.4s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) { .animated, path.animated, path.glow, .glowBox { animation: none; } }
+/* web/static/app.css turns every animation off with !important under reduced motion; these two are the exception */
+@media (prefers-reduced-motion: reduce) {
+  .liveBox { animation: liveOutline 1.4s ease-in-out infinite !important; }
+  .spin { animation: spin 2.4s linear infinite !important; }
+}

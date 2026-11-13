@@ -51,6 +51,12 @@ export interface FlowNode {
   tokens: Tokens | null;
   cost: number | null;
   cost_note: string | null;
+  /** The Waiting box only: what nobody is running for. */
+  /** The Waiting box only: the wait going on now (work_s is every wait so far). */
+  current_s?: number | null;
+  note?: string | null;
+  /** The Waiting box only: the pull requests it waits on. */
+  links?: { label: string; url: string }[];
   agents: Agent[];
 }
 

@@ -21,8 +21,12 @@ export interface BoxData extends Record<string, unknown> {
 
 export const MSGS_ONLY = "msgs only";
 export const NO_SESSIONS = "no sessions";
+export const WAITED_TOTAL = "waited in total";
+export const NOT_WAITING = "agents running";   // the Waiting box while somebody works, or the goal is closed
 export const MESSAGE_ONLY = new Set<string>([NodeId.Boss, NodeId.Director, NodeId.System]);
 
+const NEW_TAB = "_blank";
+const NEW_TAB_REL = "noopener noreferrer";
 const EXPAND_LABEL = "Expand on timeline";
 const EVENTS_LABEL = "Messages and events";
 
@@ -46,7 +50,12 @@ export function BoxNode({ data }: NodeProps<BoxNodeType>) {
   const time = fmtDuration(node.work_s);
   const cost = fmtCost(node.cost);
   let [main, second] = sel.lens === Lens.Cost ? [cost, time] : [time, cost];
-  if (!node.agents.length && node.work_s === null && node.cost === null) {
+  if (node.id === NodeId.Wait) {
+    // the Waiting box: how long nobody has been running, and what for; no cost, whatever the lens
+    // waiting now: this wait and what for; otherwise every wait so far
+    [main, second] = node.state === NodeState.Live ? [fmtDuration(node.current_s ?? node.work_s), node.note ?? ""]
+      : node.work_s ? [time, WAITED_TOTAL] : ["", NOT_WAITING];
+  } else if (!node.agents.length && node.work_s === null && node.cost === null) {
     // no sessions at all: say why the figures are empty instead of "unknown unknown"
     [main, second] = ["", MESSAGE_ONLY.has(node.id) ? MSGS_ONLY : node.id === NodeId.Main ? "" : NO_SESSIONS];
   }
@@ -55,14 +64,23 @@ export function BoxNode({ data }: NodeProps<BoxNodeType>) {
          data-state={node.state}>
       <button
         type="button"
-        className={`${styles.boxButton} ${selected ? styles.selected : ""} ${selected && motion ? styles.glowBox : pulse && motion ? styles.animated : ""}`}
+        className={`${styles.boxButton} ${selected ? styles.selected : ""} ${selected && motion ? styles.glowBox : pulse && motion ? styles.animated : node.state === NodeState.Live && !selected && !pulse ? styles.liveBox : ""}`}
         aria-label={node.label}
+        title={node.id === NodeId.Wait && node.work_s !== null ? `${node.note ? `${node.note} · ` : ""}${time} ${WAITED_TOTAL}` : undefined}
         aria-pressed={selected}
         onClick={() => sel.select({ kind: SelectionKind.Node, id: node.id })}
       >
         <span className={styles.boxHead}>
           <span className={`${styles.dot} ${STATE_CLASS[node.state] ?? ""} ${node.state === NodeState.Live && motion ? styles.animated : ""}`} />
           <span className={styles.name}>{node.label}</span>
+          {node.state === NodeState.Live ? (
+            // working now: a small turning cog in the top right corner
+            <svg className={`${styles.cog} ${styles.spin}`} data-testid={`flow-node-working-${node.id}`} aria-hidden="true"
+                 width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor">
+              <circle cx="7" cy="7" r="4.6" strokeWidth="2.6" strokeDasharray="1.806 1.806" />
+              <circle cx="7" cy="7" r="3.1" strokeWidth="1.6" />
+            </svg>
+          ) : null}
         </span>
         <span className={styles.values}>
           <span className={styles.main} data-value="main">{main}</span>
@@ -77,6 +95,14 @@ export function BoxNode({ data }: NodeProps<BoxNodeType>) {
                 onClick={() => data.onOpenFindings(node.id)}>
           {findings}
         </button>
+      ) : null}
+      {node.links?.length ? (
+        // outside the button (an anchor cannot sit in one), under the box; nodrag/nopan keep React Flow off the click
+        <span className={`${styles.links} nodrag nopan`}>
+          {node.links.map((l) => (
+            <a key={l.url} className={styles.linkChip} href={l.url} target={NEW_TAB} rel={NEW_TAB_REL} title={l.url}>{l.label} ↗</a>
+          ))}
+        </span>
       ) : null}
       {selected ? (
         <span className={styles.toolbar}>

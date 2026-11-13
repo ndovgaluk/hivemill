@@ -730,6 +730,8 @@ details.flow-note[open] > summary { color: var(--text-1); }
 .flow-blocks { display: grid; gap: var(--s2); margin-top: var(--s2); }
 /* DVDG-561: a page holding the React flow debugger drops the 1240px cap; the debugger uses the full content width */
 .page:has(.flow-full) { max-width: none; }
+/* HM-10: and its header scrolls away (a sticky one covered the diagram) and spans the same full width */
+.main:has(.flow-full) > .shellbar { position: static; max-width: none; }
 .flow-full, .flow-root { width: 100%; }
 .flow-stage { padding: var(--s2); border: 1px solid var(--hairline); border-radius: var(--r-sm); scroll-margin-top: var(--s4); }
 .flow-stage > h4 { font: 600 13px/18px var(--font); margin: 0 0 var(--s1); }

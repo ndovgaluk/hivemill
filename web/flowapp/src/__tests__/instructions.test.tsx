@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { NodeId, SelectionKind } from "../constants";
 import goalFixture from "../fixtures/goal.json";
 import { HIDDEN_TEXT } from "../instructions/Body";
+import { Dialog } from "../instructions/Dialog";
 import { DialogsProvider, useDialogs, type DialogsApi } from "../instructions/Dialogs";
 import { SelectionProvider, timeOrder, useSelection, type SelectionApi } from "../selection";
 import type { FlowData } from "../types";
@@ -129,6 +130,27 @@ describe("instruction viewer", () => {
     fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Close" }));
     expect(screen.queryByRole("dialog")).toBeNull();
     expect(document.activeElement).toBe(opener);
+  });
+
+  it("Escape closes it when focus has left the dialog, e.g. after a click on plain text (HM-14)", () => {
+    show(fresh());
+    fireEvent.click(screen.getByRole("button", { name: "opener" }));
+    expect(screen.getByRole("dialog")).toBeTruthy();
+    (document.activeElement as HTMLElement | null)?.blur();
+    fireEvent.keyDown(document.body, { key: "Escape" });
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it("with two dialogs open, Escape closes only the top one (HM-14)", () => {
+    const closed: string[] = [];
+    render(
+      <>
+        <Dialog title="first" onClose={() => closed.push("first")}><p>a</p></Dialog>
+        <Dialog title="second" onClose={() => closed.push("second")}><p>b</p></Dialog>
+      </>,
+    );
+    fireEvent.keyDown(document.body, { key: "Escape" });
+    expect(closed).toEqual(["second"]);
   });
 });
 

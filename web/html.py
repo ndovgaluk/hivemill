@@ -182,10 +182,21 @@ def bar(pct, label=None, aria=None):
               aria_label=f"{v}%" if aria is None and label is None else aria)
 
 
+NEW_TAB = "_blank"
+NEW_TAB_REL = "noopener noreferrer"   # the opened page gets no handle on this one
+
+
+def is_pr_url(href):
+    """True for a github pull request URL: the only outside address the UI links to."""
+    return bool(_PR_RE.match("" if href is None else str(href)))
+
+
 def link(href, text):
-    """Anchor for a relative path or a github PR URL; anything else is plain text."""
+    """Anchor for a relative path or a github PR URL; anything else is plain text. A PR opens in a new tab (HM-13)."""
     href = "" if href is None else str(href)
-    if _REL_RE.match(href) or _PR_RE.match(href):
+    if is_pr_url(href):
+        return el("a", text, href=href, target=NEW_TAB, rel=NEW_TAB_REL)
+    if _REL_RE.match(href):
         return el("a", text, href=href)
     return Safe(h(text))
 

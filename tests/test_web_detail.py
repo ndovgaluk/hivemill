@@ -557,6 +557,9 @@ class TestFlowMount(DetailCase):
         self.assertLess(goal.index('class="flow-full"'), goal.index('class="gd"'))   # above the two-column grid, not in it
         css = (ROOT / "web/static/app.css").read_text()
         self.assertIn(".page:has(.flow-full) { max-width: none; }", css)
+        # HM-10: the header of a flow page is not sticky and full width; other pages keep the sticky one
+        self.assertIn(".main:has(.flow-full) > .shellbar { position: static; max-width: none; }", css)
+        self.assertIn(".shellbar { position: sticky; top: 0;", css)
 
     def test_no_page_reload_on_flow_pages(self):
         TestFlow.seed_flow(self)

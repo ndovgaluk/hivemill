@@ -56,6 +56,26 @@ describe("summary bar", () => {
     expect(kpi.className).toMatch(/fg_bad/);
   });
 
+  it("clicking the longest wait selects its arrow (HM-12)", () => {
+    const d = fresh();
+    for (const e of d.edges) e.wait_s = null;
+    Object.assign(d.edges[0]!, { wait_s: 60 });
+    Object.assign(d.edges[1]!, { wait_s: 7200 });
+    show(d);
+    const btn = within(document.querySelector('[data-kpi="Longest wait"]') as HTMLElement).getByRole("button");
+    expect(btn.getAttribute("aria-pressed")).toBe("false");
+    fireEvent.click(btn);
+    expect(api!.selection).toEqual({ kind: SelectionKind.Edge, id: d.edges[1]!.id });
+    expect(btn.getAttribute("aria-pressed")).toBe("true");
+  });
+
+  it("longest wait is plain text when no arrow has a wait", () => {
+    const d = fresh();
+    for (const e of d.edges) e.wait_s = null;
+    show(d);
+    expect(document.querySelector('[data-kpi="Longest wait"] button')).toBeNull();
+  });
+
   it("findings render as chips and select their target", () => {
     const d = fresh();
     const f = d.findings[0]!;

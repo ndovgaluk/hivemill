@@ -48,7 +48,8 @@ function DiagramInner({ data, onOpenFindings = noop, onExpandLanes = noop, onOpe
     const total = cost ? data.totals.cost : data.elapsed_s;
     const known = data.nodes.filter((n) => n.cost !== null);
     const topId = cost && known.length ? known.reduce((a, b) => ((b.cost ?? 0) > (a.cost ?? 0) ? b : a)).id : null;
-    return data.nodes.map((n) => {
+    // a node this bundle has no place for (a newer server) is left out instead of breaking the page
+    return data.nodes.filter((n) => n.id in POSITIONS).map((n) => {
       const mine = data.findings.filter((f) => f.node === n.id);
       const value = cost ? n.cost : n.work_s;
       return {

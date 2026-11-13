@@ -24,6 +24,7 @@ EVENT_KEYS = {"id", "key", "ref", "task_id", "goal_id", "t_s", "ts", "lane", "ro
 SECRETS = ("BODY-SECRET", "FIX-BODY", "SUMMARY-SECRET", "SPEC-SECRET", "ACC-SECRET")
 TEXT_COLUMNS = re.compile(r"\b(body|summary|spec|acceptance)\b")
 NOW = dt.datetime(2026, 10, 24, 12, 0).astimezone()
+WAIT_PR = "https://github.com/example/repo/pull/7"
 NON_LOOPBACK = "203.0.113.5"   # documentation range: never bound, only set on the app the handler reads
 
 
@@ -102,6 +103,45 @@ class TestWaitsAndRework(FlowCase):
         edges = self.by_id(self.build(flow.Scope.TASK, "T-82")["edges"])
         self.assertEqual(edges[flow.Edge.CG]["wait_s"], 30 * 60)         # PR at 11:30, no reviewer yet: until now
         self.assertEqual(edges[flow.Edge.CG]["severity"], flow.Severity.WARN)
+
+    def test_waiting_box_is_live_when_no_agent_runs_and_says_what_for(self):
+        x = self.con.execute
+        x("INSERT INTO goals VALUES('G-81','p1','Open','i','1. a','active',2,'owner',NULL,?,?)", (ts(8, 0), ts(8, 0)))
+        x(T_INS, ("T-81", "G-81", None, "queued", "s", "a", "coder", "todo", None, None, 0, ts(11, 0), ts(11, 0)))
+        x(T_INS, ("T-82", "G-81", None, "unreviewed", "s", "a", "coder", "in_review", "coder-82", "u", 1, ts(9, 0), ts(9, 0)))
+        x(A_INS, ("coder-82", "coder", "G-81", None, "T-82", "done", "m", ts(9, 5), ts(11, 20)))
+        x(E_INS, (ts(11, 30), "coder-82", "task", "T-82", "update", "status=in_review pr=u"))
+        self.con.commit()
+        x("UPDATE tasks SET pr_url=? WHERE id='T-82'", (WAIT_PR,))
+        self.con.commit()
+        wait = self.by_id(self.build(flow.Scope.GOAL, "G-81")["nodes"])[flow.Node.WAIT]
+        self.assertEqual(wait["state"], flow.State.LIVE)
+        self.assertEqual(wait["links"], [{"label": f"{flow.WAIT_LINK_LABEL} T-82", "url": WAIT_PR}])
+        self.assertEqual(wait["current_s"], 40 * 60)                    # the last session ended 11:20, now 12:00
+        self.assertEqual(wait["work_s"], 40 * 60)                       # every wait so far: there was only this one
+        self.assertEqual(wait["note"], f"{flow.WAIT_REVIEW}: T-82")     # an open PR outranks the queued task
+        self.assertEqual(wait["agents"], [])
+        x("UPDATE tasks SET status='in_progress' WHERE id='T-82'")
+        x("DELETE FROM events WHERE entity_id='T-82'")
+        self.con.commit()
+        wait = self.by_id(self.build(flow.Scope.GOAL, "G-81")["nodes"])[flow.Node.WAIT]
+        self.assertEqual(wait["note"], f"{flow.WAIT_QUEUE}: T-81")
+        self.assertEqual(wait["links"], [])
+        x("UPDATE agents SET status='live', ended=NULL WHERE name='coder-82'")   # somebody runs: not waiting
+        self.con.commit()
+        wait = self.by_id(self.build(flow.Scope.GOAL, "G-81")["nodes"])[flow.Node.WAIT]
+        self.assertEqual((wait["state"], wait["current_s"], wait["note"]), (flow.State.IDLE, None, None))
+        self.assertEqual(wait["work_s"], 0)                             # the coder has run since 09:05 without a gap
+        x(A_INS, ("qa-82", "qa", "G-81", None, "T-82", "done", "m", ts(9, 0), ts(9, 1)))   # 09:01 to 09:05 nobody ran
+        self.con.commit()
+        wait = self.by_id(self.build(flow.Scope.GOAL, "G-81")["nodes"])[flow.Node.WAIT]
+        self.assertEqual(wait["work_s"], 4 * 60)
+        x("DELETE FROM agents WHERE name='qa-82'")
+        x("UPDATE agents SET status='done', ended=? WHERE name='coder-82'", (ts(11, 20),))
+        x("UPDATE goals SET status='done' WHERE id='G-81'")                       # a closed goal waits for nothing
+        self.con.commit()
+        wait = self.by_id(self.build(flow.Scope.GOAL, "G-81")["nodes"])[flow.Node.WAIT]
+        self.assertEqual(wait["state"], flow.State.IDLE)
 
     def test_reviewer_fail_then_restart_is_one_rework_instruction(self):
         self.seed()

@@ -7,6 +7,9 @@ const FOCUSABLE = 'button, [href], input, select, textarea, [tabindex]:not([tabi
 const ESCAPE = "Escape";
 const TAB = "Tab";
 
+// HM-14: open dialogs, newest last; Escape anywhere on the page closes only the top one
+const openStack: string[] = [];
+
 export function Dialog({ title, onClose, children, wide = false, aside }: {
   title: string;
   onClose: () => void;
@@ -24,12 +27,25 @@ export function Dialog({ title, onClose, children, wide = false, aside }: {
     return () => (opener.current as HTMLElement | null)?.focus?.();
   }, []);
 
-  const onKey = (e: KeyboardEvent) => {
-    if (e.key === ESCAPE) {
+  // Escape is caught on the document, not only on the dialog: after a click on plain text inside it focus sits on
+  // the body and a dialog-level handler never sees the key
+  const closeRef = useRef(onClose);
+  closeRef.current = onClose;
+  useEffect(() => {
+    openStack.push(id);
+    const onDocKey = (e: globalThis.KeyboardEvent) => {
+      if (e.key !== ESCAPE || openStack[openStack.length - 1] !== id) return;
       e.stopPropagation();
-      onClose();
-      return;
-    }
+      closeRef.current();
+    };
+    document.addEventListener("keydown", onDocKey);
+    return () => {
+      document.removeEventListener("keydown", onDocKey);
+      openStack.splice(openStack.indexOf(id), 1);
+    };
+  }, [id]);
+
+  const onKey = (e: KeyboardEvent) => {
     if (e.key !== TAB || !ref.current) return;
     const items = [...ref.current.querySelectorAll<HTMLElement>(FOCUSABLE)];
     if (!items.length) return;

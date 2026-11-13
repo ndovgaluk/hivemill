@@ -16,6 +16,7 @@ export const POSITIONS: Record<NodeId, { x: number; y: number }> = {
   [NodeId.Gate]: { x: 426, y: 176 },
   [NodeId.Judge]: { x: 634, y: 176 },
   [NodeId.Main]: { x: 842, y: 176 },
+  [NodeId.Wait]: { x: 842, y: 16 },   // top right, clear of the arrows: it belongs to no role
 };
 
 type Pt = [number, number];

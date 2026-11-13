@@ -9,6 +9,7 @@ from web.components import (data_table, disclosure, empty_state, filter_bar, ago
                             GROUP_ORDER, COLLAPSED)
 from web.prices import PRICES_AS_OF
 from web.tokens import attribute, rollup, task_usage
+from web.html import is_pr_url
 from web.html import LABELS, badge, card, dur, el, empty, kpi, link, md, table, ts
 from web.views.goals import status_badge, task_badge
 
@@ -335,8 +336,9 @@ def _detail_data(ctx, id=None, **params):
         tone = _fkind(i)
         if not pr_seen and i["kind"] == "event" and i["label"] == "update" and _PR_SET_RE.search(i.get("detail") or ""):
             pr_seen = True
-            text, tone = "PR opened", "info"
+            text, tone = PR_OPENED, "info"
         steps.append({"ts": i["ts"], "actor": i["actor"], "kind": i["kind"], "label": i["label"], "text": text, "sha": sha, "tone": tone,
+                      "url": t["pr_url"] if text == PR_OPENED and is_pr_url(t["pr_url"]) else None,
                       "links": sorted(set(_TASK_RE.findall(i.get("detail") or ""))) if i["label"] == "follow-up" else []})
     return {"id": id, "found": True, "title": t["title"], "goal_id": t["goal_id"], "role": t["role"], "status": t["status"], "waits": t["waits"],
             "assignee": t["assignee"], "team_id": t["team_id"], "pr_url": t["pr_url"], "follow_up_of": t["follow_up_of"], "follow_ups": follow,
@@ -377,6 +379,9 @@ def _role(r):
 
 def _is_reject(s):
     return s["label"] == "judge-reject" or (s["kind"] == "verdict" and s["label"].split(" ", 1)[1] in ("fail", "reject"))
+
+
+PR_OPENED = "PR opened"
 
 
 def _verb(s):
@@ -490,7 +495,10 @@ def _attempt(n, block, last, now):
         step = f"+{dur((at - was).total_seconds())}" if at and was and at >= was else None
         extra = [el("span", f" @{s['sha']}", class_="mono")] if s["sha"] else []
         extra += [el("span", " ", link(f"/task/{x}", x)) for x in s["links"]]
-        items.append(el("li", ts(s["ts"]), " ", badge(_verb(s), s["tone"]), " ", el("span", s["actor"] or "", class_="muted"), *extra,
+        chip = badge(_verb(s), s["tone"])
+        if s.get("url"):   # "PR opened" goes to the PR, in a new tab (HM-13)
+            chip = link(s["url"], chip)
+        items.append(el("li", ts(s["ts"]), " ", chip, " ", el("span", s["actor"] or "", class_="muted"), *extra,
                         " ", el("span", step, class_="muted") if step else None, class_="timeline-item",
                         data_actor=s["actor"] or "", data_kind=s["label"], data_ts=s["ts"]))
     first, end = parse_ts(block[0]["ts"]), parse_ts(block[-1]["ts"])

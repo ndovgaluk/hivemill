@@ -67,6 +67,7 @@
 }
 .phaseHead:hover { background: var(--fill); }
 .caret { flex: none; width: 10px; font-size: 10px; color: var(--text-3); }
+.phaseWhen { flex: none; min-width: 94px; color: var(--text-2); }   /* the time range leads the row, like the clock of an action below */
 .phaseText { flex: 1 1 260px; min-width: 0; display: flex; flex-direction: column; }
 .phaseTitle { font-size: 13px; line-height: 18px; font-weight: 600; }
 .summary { font-size: 12px; line-height: 16px; color: var(--text-3); }
@@ -88,9 +89,12 @@
 }
 .peek {
   flex: none; margin-top: 6px; width: 20px; height: 20px; padding: 0; display: flex; align-items: center; justify-content: center;
-  font-size: 10px; color: var(--accent); background: var(--surface-1); border: 1px solid var(--accent); border-radius: 50%; cursor: pointer;
+  color: var(--text-2); background: none; border: 0; border-radius: 4px; cursor: pointer;
   opacity: 0;   /* shown on row hover, keyboard focus, or while its text is open */
 }
+.peek svg { fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
+.peek:hover { color: var(--accent); }
+.peek:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .itemRow:hover .peek, .peek:focus-visible, .peek[aria-expanded="true"] { opacity: 1; }
 @media (hover: none) { .peek { display: none; } }
 .when { display: flex; flex-direction: column; font-family: var(--mono); font-size: 11px; line-height: 18px; color: var(--text-2); }
