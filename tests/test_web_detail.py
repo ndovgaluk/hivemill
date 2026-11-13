@@ -13,7 +13,7 @@ sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "tests"))
 
 from test_web_queries import ts  # noqa: E402
-from test_web_server import ServerCase  # noqa: E402
+from test_web_server import FLOW_SCRIPT, ServerCase  # noqa: E402
 from web import html as wh  # noqa: E402
 
 T_INS = "INSERT INTO tasks(id,goal_id,team_id,title,spec,acceptance,role,status,assignee,pr_url,attempts,created,updated) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)"
@@ -400,7 +400,7 @@ class TestFlow(DetailCase):
         page = self.page("/task/T-80")
         sec = page[page.index("<h2>Flow"):page.index("<h2>Verdicts")]
         self.assertNotIn("style=", sec)
-        self.assertNotIn("<script", sec)
+        self.assertNotIn("<script", sec.replace(FLOW_SCRIPT, ""))   # only the flow bundle's module tag (DVDG-561)
         used = {c for m in re.findall(r'class="([^"]*)"', page) for c in m.split()}
         self.assertEqual(used - wh.CLASSES, set())
 
@@ -433,7 +433,7 @@ class TestFlow(DetailCase):
         self.assertIn("SUMMARY-SECRET", page)                # verdict summaries
         self.assertIn("BODY-SECRET", page)
         sec = page[page.index("<h2>Flow"):page.index("<h2>Verdicts")]
-        self.assertNotIn("<script", sec)
+        self.assertNotIn("<script", sec.replace(FLOW_SCRIPT, ""))   # only the flow bundle's module tag (DVDG-561)
         self.assertNotIn("style=", sec)
 
     def test_show_text_needs_loopback(self):
@@ -523,3 +523,59 @@ class TestFlowTimes(DetailCase):
         states = {label: state for state, label in re.findall(r'class="flow-node flow-node--(\w+)[^"]*"><title>([^:<]+):', page)}
         self.assertEqual(states["Planned"], "current")
         self.assertEqual(self.node_time(page, "Review / QA"), "1h 17m")   # 09:40-10:42 + 11:00-11:15, not "until now"
+
+
+class TestFlowMount(DetailCase):
+    """DVDG-561: the Flow section of /goal and /task is the React flow debugger's mount, full width, no page reload."""
+
+    def flow_part(self, page):
+        start = page.index('class="flow-full"')
+        return page[start:page.index("</section>", start)]
+
+    def test_goal_page_mounts_flow_debugger(self):
+        TestFlow.seed_flow(self)
+        page = self.page("/goal/G-80")
+        self.assertEqual(page.count('id="flow-root"'), 1)
+        self.assertIn('id="flow-root" data-scope="goal" data-id="G-80"', page)
+        self.assertIn('<script type="module" src="/static/flow/flow.js"></script>', page)
+        self.assertIn('<link rel="stylesheet" href="/static/flow/flow.css">', page)
+        self.assertNotIn(" style=", self.flow_part(page))
+        self.assertNotIn("<script", self.flow_part(page).replace(FLOW_SCRIPT, ""))   # no inline script
+
+    def test_task_page_mounts_flow_debugger(self):
+        TestFlow.seed_flow(self)
+        page = self.page("/task/T-80")
+        self.assertEqual(page.count('id="flow-root"'), 1)
+        self.assertIn('id="flow-root" data-scope="task" data-id="T-80"', page)
+        self.assertIn('<script type="module" src="/static/flow/flow.js"></script>', page)
+
+    def test_flow_section_is_full_width(self):
+        TestFlow.seed_flow(self)
+        page = self.page("/task/T-80")
+        self.assertRegex(page, r'<div class="flow-full"><section class="sect"><h2>Flow')
+        goal = self.page("/goal/G-80")
+        self.assertLess(goal.index('class="flow-full"'), goal.index('class="gd"'))   # above the two-column grid, not in it
+        css = (ROOT / "web/static/app.css").read_text()
+        self.assertIn(".page:has(.flow-full) { max-width: none; }", css)
+
+    def test_no_page_reload_on_flow_pages(self):
+        TestFlow.seed_flow(self)
+        for path in ("/goal/G-80", "/task/T-80"):
+            with self.subTest(path):
+                self.assertNotIn('http-equiv="refresh"', self.page(path))
+        self.assertIn('http-equiv="refresh"', self.page("/goals"))
+
+    def test_fallback_as_decided(self):
+        """Grilling DVDG-552: the old SVG flow stays as the no-JavaScript fallback inside the mount element."""
+        TestFlow.seed_flow(self)
+        page = self.page("/task/T-80")
+        mount = page[page.index('id="flow-root"'):page.index('<link rel="stylesheet" href="/static/flow/flow.css">')]
+        self.assertIn('class="flow-svg"', mount)
+        self.assertIn('class="flow-blocks"', mount)
+
+    def test_unknown_goal_and_task_still_404(self):
+        for path in ("/goal/G-404", "/task/T-404"):
+            with self.subTest(path):
+                body = self.page(path)
+                self.assertIn("No ", body)
+                self.assertNotIn('id="flow-root"', body)

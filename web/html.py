@@ -45,6 +45,7 @@ CLASSES = frozenset({
     "flow", "flow-svg", "flow-node", "flow-node--live", "flow-box", "flow-label", "flow-time", "flow-badge", "flow-edge",
     "flow-edge--done", "flow-edge--active", "flow-arrow", "flow-loop", "flow-loop-label", "flow-note", "flow-text",
     "flow-link", "flow-hit", "flow-blocks", "flow-stage", "flow-in", "gflow-arc", "gflow-count",
+    "flow-full", "flow-root",   # DVDG-561: the React flow debugger's full-width section and mount element
     *(f"flow-node--{s}" for s in ("done", "current", "pending", "skipped")),
 })
 

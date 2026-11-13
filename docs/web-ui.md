@@ -96,6 +96,62 @@ Token cost on `/tokens` is an **estimate**. It is computed from the token counts
 - **Page does not load from another machine**: check that you are on the LAN, that the IP is right (`ip -4 addr` on your-box), and that no firewall blocks the port.
 - **Cannot open the database**: the factory home has no `db/factory.db` yet. Check `FACTORY_HOME`.
 
+## Flow debugger bundle (React, DVDG-554)
+
+How to use the debugger itself: [flow-debugger.md](flow-debugger.md). This section is about building it.
+
+The Flow section of the goal and task pages is a small React app in `web/flowapp/` (TypeScript, Vite, React Flow). Its built files are committed under `web/static/flow/` (`flow.js`, `flow.css`, `manifest.json`), so `factory serve`, the tests and CI need no Node. It reads `/api/flow/goal/<id>.json` and `/api/flow/task/<id>.json`.
+
+To change it you need Node LTS (for example through `nvm` inside WSL or Linux):
+
+```
+cd web/flowapp
+npm ci             # once, from package-lock.json
+npm test           # Vitest + React Testing Library
+npm run typecheck
+npm run build      # type check, Vite build to ../static/flow/, then python3 ../flowbundle.py writes manifest.json
+```
+
+Commit `web/static/flow/` together with the source change. `manifest.json` holds a SHA-256 of the files that shape the bundle (`src/` without tests, `package.json`, `package-lock.json`, `vite.config.ts`, `tsconfig.json`; computed by `web/flowbundle.py`), and `tests/test_web_flow_bundle.py` fails when it no longer matches the source: rebuild and commit.
+
+The bundle obeys the server's content security policy: no inline script or style, no CDN, styles from `flow.css` only.
+
+### Handing a step to an agent: "Copy for investigation" (DVDG-564)
+
+Every selected step, box or arrow has a key chip (`M62` a message, `V12` a verdict, `E457` an event-log row, `S-T-0003` a task's spec, `box:coders`, `arrow:rw`) and a "Copy for investigation" button; `c` on the focused diagram does the same. The chip copies one line, for example `T-0003 V12`; the button copies a block with the scope, the key and its database row (`verdicts.id=12`), when, who to whom, the title and a link that reopens the page with that item selected (`?sel=V12`). It never contains message text. Look the row up with the `factory` CLI or a read-only query on that table and id. The page address always mirrors the selection, the timeline tab and the lens.
+
+### Development page with hot reload and the Agentation toolbar (DVDG-563)
+
+The dashboard's content security policy blocks hot reload and the feedback toolbar, so both live on Vite's own development page, never on `factory serve`:
+
+```
+cd web/flowapp
+npm run dev        # http://localhost:5180/?scope=goal&id=G-001   (or ?fixture=goal / ?fixture=task)
+```
+
+- `/api`, `/static/app.css`, `/static/theme.js` and `/static/fonts` are proxied to a running `factory serve`, by default `http://127.0.0.1:18624` (set `VITE_FACTORY_URL` to change it). With no server running, `?fixture=goal` or `?fixture=task` shows the sample payloads in `src/fixtures/`.
+- Editing a component updates the page in place (React Fast Refresh).
+- `npm run build:watch` rebuilds `web/static/flow/` on every save, for checking a change on the real dashboard page with a manual refresh.
+
+The Agentation toolbar (npm package `agentation`) (bottom right of the dev page) lets you click any element, write a note, and send it to the coding agent. It exists only on the dev page: the production build leaves it out, and `tests/test_web_flow_bundle.py` checks that. Both packages (`agentation`, `agentation-mcp`) are dev dependencies under the PolyForm Shield 1.0.0 licence (source-available; fine as a personal development tool).
+
+- Live sync (default): the toolbar posts to the Agentation server at `http://localhost:4747` (`VITE_AGENTATION_ENDPOINT` overrides it). Copy-and-paste mode instead: `VITE_AGENTATION_MODE=copy npm run dev`.
+- Start the server: `npm run agentation`. Check it: `node node_modules/agentation-mcp/dist/cli.js doctor`.
+- Register it for your coding agent once, at **user** scope (never as a committed `.mcp.json`: factory agents run Claude Code in checkouts of this repo and would all be offered it):
+
+  ```
+  claude mcp add --scope user agentation -- node /home/user/src/hivemill/web/flowapp/node_modules/agentation-mcp/dist/cli.js server
+  ```
+
+  (use the absolute path of your clone)
+
+Round trip, four steps:
+
+1. `npm run agentation` in one terminal, `npm run dev` in another.
+2. Open `http://localhost:5180/?fixture=goal`, click the toolbar, click a box and add a note.
+3. In a new Claude Code session (one started after the `claude mcp add`), ask it to call `agentation_get_all_pending`.
+4. The note, the page and the element it names come back.
+
 ## Token index: sandboxed worker transcripts (T-0163)
 
 `web.tokens.TokenIndex` scans `~/.claude/projects` and, when no explicit `root` is given, every

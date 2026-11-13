@@ -1,0 +1,33 @@
+{
+  "name": "hivemill-flowapp",
+  "private": true,
+  "type": "module",
+  "description": "Flow debugger for the factory web UI (DVDG-551). Built into web/static/flow/; the server needs no Node.",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build && python3 ../flowbundle.py",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit",
+    "build:watch": "vite build --watch",
+    "agentation": "node node_modules/agentation-mcp/dist/cli.js server"
+  },
+  "dependencies": {
+    "@xyflow/react": "^12.12.1",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1"
+  },
+  "devDependencies": {
+    "@testing-library/dom": "^10.4.2",
+    "@testing-library/react": "^16.3.3",
+    "@types/node": "^26.6.6",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@vitejs/plugin-react": "^6.3.0",
+    "agentation": "^3.1.2",
+    "agentation-mcp": "^1.3.2",
+    "jsdom": "^31.0.0",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.8",
+    "vitest": "^5.1.0"
+  }
+}

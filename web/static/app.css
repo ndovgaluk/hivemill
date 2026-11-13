@@ -728,6 +728,9 @@ details.flow-note[open] > summary { color: var(--text-1); }
 .gflow-arc { fill: none; stroke: var(--info-solid); stroke-width: 1.5; }
 .gflow-count { fill: var(--text-2); font: 600 11px var(--font); }
 .flow-blocks { display: grid; gap: var(--s2); margin-top: var(--s2); }
+/* DVDG-561: a page holding the React flow debugger drops the 1240px cap; the debugger uses the full content width */
+.page:has(.flow-full) { max-width: none; }
+.flow-full, .flow-root { width: 100%; }
 .flow-stage { padding: var(--s2); border: 1px solid var(--hairline); border-radius: var(--r-sm); scroll-margin-top: var(--s4); }
 .flow-stage > h4 { font: 600 13px/18px var(--font); margin: 0 0 var(--s1); }
 .flow-in { margin: 0 0 var(--s1); padding: var(--s1) var(--s2); border-left: 3px solid var(--info-solid); scroll-margin-top: var(--s4); }

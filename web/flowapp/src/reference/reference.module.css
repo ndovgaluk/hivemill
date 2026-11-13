@@ -1,0 +1,14 @@
+.wrap { display: inline-flex; flex-direction: column; gap: 4px; }
+.button {
+  font: inherit; font-size: 12px; padding: 2px 8px; cursor: pointer; color: var(--text-1);
+  background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--r-sm);
+}
+.icon { font: inherit; font-size: 12px; padding: 0 4px; cursor: pointer; color: var(--text-2); background: none; border: none; }
+.fallback { width: 100%; min-width: 260px; font: 12px var(--mono); color: var(--text-1); background: var(--surface-0); }
+.chip {
+  display: inline-flex; align-items: center; gap: 2px; padding: 0 1px 0 5px; font-size: 11px; line-height: 16px;
+  background: var(--surface-2); border: 1px solid var(--border); border-radius: 8px; white-space: nowrap;
+}
+.chip code { font-family: var(--mono); font-size: inherit; }
+/* two classes: must win over toolbar rules such as the diagram's `.group button` (border, padding) */
+.chip .chipCopy { font: inherit; line-height: inherit; min-height: 0; padding: 0 3px; cursor: pointer; color: var(--text-2); background: none; border: none; }

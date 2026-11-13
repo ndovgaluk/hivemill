@@ -248,7 +248,8 @@ def render(ctx, d):
 
 # ── detail ──
 
-from web.components import section, tile                    # noqa: E402  (the list part above is B3's and keeps its imports)
+from web.components import flow_mount, section, tile        # noqa: E402  (the list part above is B3's and keeps its imports)
+from web.flow import Scope as FlowScope                      # noqa: E402
 from web.html import crumbs, glyph, status                  # noqa: E402
 from web.views.goals import DetailView, not_found           # noqa: E402
 
@@ -632,7 +633,7 @@ def _flow_section(d):
                          id=charts.flow_stage_id(st["key"]), class_="flow-stage"))
     head = el("p", f"Total {dur(fl['total_s'])}" + (" so far" if fl["open"] else "") + f" · {flow_hint(d.get('show_text'))}",
               class_="muted")
-    return section("Flow", head, charts.flow_diagram(fl), el("div", *blocks, class_="flow-blocks"))
+    return flow_mount(FlowScope.TASK, fl["task_id"], head, charts.flow_diagram(fl), el("div", *blocks, class_="flow-blocks"))
 
 
 def _detail_render(ctx, d):

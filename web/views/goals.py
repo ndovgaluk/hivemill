@@ -8,7 +8,8 @@ from web import charts, queries, tokens as wtokens
 from web.prices import PRICES_AS_OF
 from scout import orgs as _orgs
 from web.components import (AGENT_COLS, COLLAPSED, agent_row, GROUP_ORDER, ago, chip, chips, ctx_org, data_table, disclosure, empty_state, filter_bar, needs_you_row,
-                            org_badge, org_href, row_status, section, segmented)
+                            org_badge, org_href, row_status, section, segmented, flow_mount)
+from web.flow import Scope as FlowScope
 from web.html import CLASSES, LABELS, badge, card, crumbs, dur, el, link, table, ts
 from web.views.home import _needs, goal_row, needs_by_goal
 
@@ -26,6 +27,8 @@ INTENT_OPEN_MAX =480   # a longer intent collapses behind a disclosure
 class DetailView:
     """A detail page whose h1 is the subject's own title. The server reads `TITLE` after `data()` on the same thread, so
     data() leaves the title in a thread-local and web/server.py needs no change."""
+
+    REFRESH = False   # DVDG-561: the flow debugger polls its own data (30 s); a full-page reload would lose its state
 
     def __init__(self, fallback, data, render):
         self._fallback, self._data, self.render, self._local = fallback, data, render, _thread_local()
@@ -344,7 +347,7 @@ def _goal_flow_section(d):
                          id=charts.goal_link_id(l["a"], l["b"]), class_="flow-stage"))
     head = el("p", f"{len(gf['nodes'])} roles · {sum(l['ab'] + l['ba'] for l in gf['links'])} messages · "
                    f"{flow_hint(d.get('show_text'))}", class_="muted")
-    return section("Flow", head, charts.goal_diagram(gf), el("div", *blocks, class_="flow-blocks"))
+    return flow_mount(FlowScope.GOAL, gf["goal_id"], head, charts.goal_diagram(gf), el("div", *blocks, class_="flow-blocks"))
 
 
 def _detail_render(ctx, d):
@@ -358,9 +361,10 @@ def _detail_render(ctx, d):
     meta = el("p", status_badge(d["status"]), " ", org_badge(d.get("org")), " · ",
               f"P{d['priority']}" if d["priority"] is not None else "no priority",
               " · ", team or "no team", " · updated ", ts(d["updated"]), class_="metarow")
-    main = el("div", meta, _goal_flow_section(d), _intent(d), _teams(d, ctx.now), charts.meter(done, total, summary), _cost_time_card(d),
+    main = el("div", _intent(d), _teams(d, ctx.now), charts.meter(done, total, summary), _cost_time_card(d),
               _blocking(d, ctx.now), _criteria(d), _tasks_table(d, ctx.now), class_="gd-main")
-    return el("div", _crumb(d["id"]), el("div", main, _rail(d), class_="gd"))
+    # DVDG-561: the flow debugger sits above the two columns, so it gets the full content width
+    return el("div", _crumb(d["id"]), meta, _goal_flow_section(d), el("div", main, _rail(d), class_="gd"))
 
 
 detail = DetailView("Goal", _detail_data, _detail_render)
