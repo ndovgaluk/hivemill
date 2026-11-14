@@ -480,28 +480,59 @@ def _nav_goal(g, org, current):
               class_="navgoal is-current" if g["id"] == current else "navgoal")
 
 
-def _nav_goals(shell, org, current):
-    """The sidebar's goal lists under "Goals" (HM-36): the active goals, and a "+" disclosure (native details, so it works
-    without script) with the last done goals, open when the current goal is one of them or no goal is active (owner,
-    2026-11-14). Nothing without shell data or without goals."""
-    active, done = (shell or {}).get("goals") or [], (shell or {}).get("goals_done") or []
-    parts = [el("ul", [_nav_goal(g, org, current) for g in active], class_="navsub")] if active else []
+def _nav_lists(active, done, entry, current, key, show, hide):
+    """A sidebar sub-list pair (HM-36, HM-43): the `active` entries, and a "+" disclosure (native details, so it works
+    without script) with the `done` ones, open when the current item is one of them or nothing is active (owner,
+    2026-11-14). theme.js keeps its open state under `key` and swaps the `show`/`hide` names. Nothing when both are empty."""
+    parts = [el("ul", [entry(x) for x in active], class_="navsub")] if active else []
     if done:
-        opened = not active or any(g["id"] == current for g in done)
+        opened = not active or any(x["id"] == current for x in done)
         summary = el("summary", el("span", "+", class_="nav-off", aria_hidden="true"), el("span", "−", class_="nav-on", aria_hidden="true"),
-                     class_="navplus", aria_label="Hide done goals" if opened else "Show the last 5 done goals",
-                     aria_expanded="true" if opened else "false")
-        parts.append(el("details", summary, el("ul", [_nav_goal(g, org, current) for g in done], class_="navsub navsub--done"),
-                        class_="navdone", data_key=_NAV_DONE_KEY, open=opened or None))
+                     class_="navplus", aria_label=hide if opened else show, aria_expanded="true" if opened else "false")
+        parts.append(el("details", summary, el("ul", [entry(x) for x in done], class_="navsub navsub--done"),
+                        class_="navdone", data_key=key, data_show=show, data_hide=hide, open=opened or None))
     return parts
 
 
-def _shell_navs(active, shell, org=None, current_goal=None):
+def _nav_goals(shell, org, current):
+    """The sidebar's goal lists under "Goals" (HM-36): active goals, and under the "+" the last done goals followed by
+    the last blocked or cancelled ones (HM-48)."""
+    s = shell or {}
+    return _nav_lists(s.get("goals") or [], (s.get("goals_done") or []) + (s.get("goals_stopped") or []),
+                      lambda g: _nav_goal(g, org, current), current, _NAV_DONE_KEY,
+                      "Show done and stopped goals", "Hide done and stopped goals")
+
+
+NAV_TASKS_PATH = "/tasks"
+TASK_PAGE_PREFIX = "/task/"
+_NAV_DONE_TASKS_KEY = "nav-done-tasks"
+
+
+def _nav_task(t, org, current):
+    """One sidebar task (HM-43): line 1 the status glyph, id and title; line 2 its goal. One link to the task page."""
+    from web.components import row_status
+
+    name = f"{LABELS.get(t['status'], t['status'])}, {t['id']}, {t['title']}" + (f", goal {t['goal_id']}" if t["goal_id"] else "")
+    line1 = el("div", row_status(t["status"]), el("span", t["id"], class_="mono lrow-id"), el("span", t["title"], class_="navgoal-t"),
+               class_="navgoal-l1")
+    line2 = el("div", el("span", t["goal_id"] or "no goal", class_="lbl"), class_="navgoal-l2")
+    return el("li", el("a", line1, line2, href=_with_org(f"{TASK_PAGE_PREFIX}{t['id']}", org), aria_label=name),
+              class_="navgoal is-current" if t["id"] == current else "navgoal")
+
+
+def _nav_tasks(shell, org, current):
+    """The sidebar's task lists under "Tasks" (HM-43): tasks in work, and the last finished tasks under the "+"."""
+    return _nav_lists((shell or {}).get("tasks") or [], (shell or {}).get("tasks_done") or [],
+                      lambda t: _nav_task(t, org, current), current, _NAV_DONE_TASKS_KEY,
+                      "Show the last 3 finished tasks", "Hide finished tasks")
+
+
+def _shell_navs(active, shell, org=None, current_goal=None, current_task=None):
+    subs_for = {NAV_GOALS_PATH: lambda: _nav_goals(shell, org, current_goal), NAV_TASKS_PATH: lambda: _nav_tasks(shell, org, current_task)}
+
     def side_li(p, label, ic):
         link_ = _item_link(p, label, ic, active, shell, "nav-item", org=org)
-        if p != NAV_GOALS_PATH:
-            return el("li", link_)
-        subs = _nav_goals(shell, org, current_goal)
+        subs = subs_for[p]() if p in subs_for else None
         return el("li", link_, subs, class_="navgoals") if subs else el("li", link_)
 
     groups = [el("div", el("h2", g), el("ul", [side_li(p, label, ic) for p, label, ic in items]),
@@ -524,7 +555,8 @@ def page(title, body, active="/", refresh=True, shell=None, crumb_trail=None, or
     request's query dict, kept on the filter's links."""
     org = org if org in _orgs.ORGS else None
     current_goal = path[len(GOAL_PAGE_PREFIX):] if path and str(path).startswith(GOAL_PAGE_PREFIX) else None
-    side, more, tabs = _shell_navs(active, shell, org, current_goal)
+    current_task = path[len(TASK_PAGE_PREFIX):] if path and str(path).startswith(TASK_PAGE_PREFIX) else None
+    side, more, tabs = _shell_navs(active, shell, org, current_goal, current_task)
     head = el("head",
               el("meta", charset="utf-8"),
               el("meta", name="viewport", content="width=device-width, initial-scale=1"),
