@@ -27,7 +27,7 @@ KEY = "worktree_reuse"
 MECH_MERGE = "mech_merge"
 REVIEW_AUTOSPAWN = "review_autospawn"
 AUTOMATION_KEYS = ("lead_parking", "lead_less_dispatch", REVIEW_AUTOSPAWN, "coder_ci_handoff", "prcheck_required",
-                   "risk_tiers", MECH_MERGE)
+                   "risk_tiers", MECH_MERGE, "workflow_engine", "workflow_reviewer_session")
 TOKEN_RE = re.compile(rb'name="token" value="([^"]+)"')
 
 

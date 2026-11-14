@@ -55,6 +55,7 @@ Every page under `docs/`, grouped by what you want to do. New to the factory? St
 - [judge-train.md](judge-train.md): `factory judge --train ... --dry-run`, the batch merge train planner (step 1: plan only).
 - [risk-tiers.md](risk-tiers.md): `factory task tier`, the T0 to T3 risk classifier and its stored, raise-only tier.
 - [mech-merge.md](mech-merge.md): the tick's mechanical merger for T0-T2 PRs (`mech_merge` off/shadow/on), same gate as the judge.
+- [workflow-engine.md](workflow-engine.md): the Go workflow engine that runs a Taskosaur story (`workflow_engine` off/on, `factory wf`, its state file and seams).
 - [prcheck.md](prcheck.md): `factory prcheck`, the coder's pre-PR check, and the `prcheck_required` gate on `factory done` (G-022).
 - [local-gate.md](local-gate.md): `factory gate run/show/list`, the local merge gate runner and `gate_runs` table (step 1: not yet read by the judge).
 - [model-routing.md](model-routing.md): which model each role starts on, and the `model_cleaner` config rollback.
@@ -99,6 +100,7 @@ Every page under `docs/`, grouped by what you want to do. New to the factory? St
 - [scrub-scan.md](scrub-scan.md): the scanner that catches owner-specific or sensitive data.
 - [go-toolchain.md](go-toolchain.md): how the Go code is built and tested.
 - [worker-guard-go.md](worker-guard-go.md): the Go port of the worker-guard hook (opt-in through `guard_impl`, Python stays the default; section status, golden data, lookaround map).
+- [cli-go.md](cli-go.md): the Go CLI behind `bin/factory` (opt-in through `cli_impl`, Python stays the default; fast path, shadow mode, build and dependency fetch).
 - [profiling.md](profiling.md): the baseline script for per-call cost measurements.
 - [adr/README.md](adr/README.md): index of architecture decision records.
 - [adr/0001-language-policy.md](adr/0001-language-policy.md): the language policy (Go, Rust exceptions, Python).

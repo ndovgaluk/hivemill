@@ -64,6 +64,24 @@
   "current": "4"
  },
  {
+  "key": "cli_go_cmds",
+  "kind": "setting",
+  "default": "",
+  "summary": "comma list of subcommands bin/factory may hand to factory-go (S1 set: whoami, flags, agents, config); empty = none",
+  "goal": "G-041",
+  "doc": "docs/cli-go.md",
+  "current": ""
+ },
+ {
+  "key": "cli_impl",
+  "kind": "setting",
+  "default": "python",
+  "summary": "CLI implementation: python, go or shadow; mirrored to run/cli_impl (director only); stale or missing binary means python",
+  "goal": "G-041",
+  "doc": "docs/cli-go.md",
+  "current": "python"
+ },
+ {
   "key": "coder_ci_handoff",
   "kind": "flag",
   "default": "off",
@@ -838,6 +856,16 @@
   "current": "8765"
  },
  {
+  "key": "serve_show_text",
+  "kind": "flag",
+  "default": "0",
+  "summary": "1 = the /task Flow section shows instruction text (message bodies, spec, acceptance, verdict summaries) as Markdown; only on a loopback bind",
+  "goal": "",
+  "doc": "docs/web-ui.md",
+  "state": "off",
+  "current": "0"
+ },
+ {
   "key": "skilleval_keep_failed_h",
   "kind": "setting",
   "default": "48",
@@ -1089,6 +1117,25 @@
   "doc": "",
   "state": "off",
   "current": ""
+ },
+ {
+  "key": "workflow_engine",
+  "kind": "flag",
+  "default": "off",
+  "summary": "off | on: build the workflow engine and let the tick launch `factory-workflow tick`",
+  "goal": "",
+  "doc": "docs/workflow-engine.md",
+  "state": "off",
+  "current": "off"
+ },
+ {
+  "key": "workflow_reviewer_session",
+  "kind": "setting",
+  "default": "fresh",
+  "summary": "fresh | keep: story runs review each child with a new reviewer, or resume one reviewer per story",
+  "goal": "",
+  "doc": "docs/workflow-engine.md",
+  "current": "fresh"
  },
  {
   "key": "worktree_pool_max",

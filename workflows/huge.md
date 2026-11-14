@@ -1,22 +1,22 @@
-# Workflow: huge (draft)
+# Workflow `huge`
 
-For a task of size L or XL, or complexity 4 or 5, or a task that already has children. The unit of work is a story with child tasks; one branch and one PR per story.
+For large or hard work: size L or XL, or complexity 4 or 5, or a story that already has children. Also the shape of a batch: several prepared stories in one run.
 
-| Step | Who | What |
-|---|---|---|
-| 1 | code | preflight; pick this workflow, or take the owner's override |
-| 2 | architect | readiness check. If the story is enriched (children exist and each is complete), go to step 5 |
-| 3 | architect | design in the story: approach and reasons, contract, files and areas touched, risks. For changes to spawn, clean, isolation, the guard or the merge gate: have a second session attack the design, and fold the result in |
-| 4 | architect | split into children the way the `working-with-taskosaur` skill does: each of size M or smaller and self-contained (goal, context, contract, files, acceptance, how to verify), with dependencies and an order |
-| 5 | code | freeze the story and its children; check the files against other open stories of the project (overlap → this story waits) |
-| 6 | builder | one child at a time, in order: implement, test, run the checks, commit with the child's key, comment, move the child to In Review; then the next child |
-| 7 | reviewer | for each child as it reaches In Review, while the builder goes on: review that child's commits, run its tests, record the verdict |
-| 8 | code | "changes requested": the child goes back to In Progress; the builder fixes it after the child it is on and before starting the next; the same reviewer session re-checks |
-| 9 | qa | when all children are In Review and reviewed: test the whole branch against the story's acceptance criteria |
-| 10 | code | QA failed: the affected children go back to In Progress, findings to the builder, then steps 7 and 9 again for what changed |
-| 11 | code | reviewed, tested, checks green: merge queue, one merge, every child and the story Done in Taskosaur |
-| 12 | architect | audit: each success criterion against evidence; gaps become follow-up tasks |
+## What runs today
 
-Limits: 5 fix rounds per child. After 2 rounds on the same kind of finding the architect is called before the third.
+The run in [README.md](README.md):
 
-Conflicts with another merge: the builder of this story resolves them between two children, using the merged task's design; the reviewer re-checks the affected children only.
+- one builder session works every child in order, across all stories of the run, and keeps its context from child to child; if the session ends early the engine resumes the same session;
+- each child is reviewed as soon as it is In Review, while the builder goes on with the next;
+- a rejected child is fixed after the child in hand and before the next one starts; five rounds on one child stop the run for the owner;
+- the pull request is opened once, when every child of every story is reviewed; the full checks run once;
+- after the merge every child and every story is Done in the task manager, each story with its own closing comment.
+
+A batch is started by the boss only for task-manager keys, all prepared beforehand; free text is never part of a batch.
+
+## What is planned to differ
+
+- **Architect (not built):** design, an attack on the design for the risky parts, and the split into self-contained children with their dependencies, following the task manager's own planning rules. Until then a story must arrive already split and prepared.
+- **QA before the pull request (not built):** when all children are In Review and reviewed, QA tests the whole branch as one result, and its findings go to the builder like review findings. Today the factory's final gate does the testing after the pull request is open.
+- **Architect on non-convergence (not built):** after two rounds on the same kind of finding the architect is asked before the third. Today the engine only counts rounds and stops at five.
+- **Merge queue and conflicts (not built):** one merge at a time per project, open branches re-checked after every merge, conflicts resolved by the builder of the branch that has not merged. Today the factory's existing staleness and refresh rules apply to the one pull request.

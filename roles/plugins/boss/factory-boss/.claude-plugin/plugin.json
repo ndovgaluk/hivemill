@@ -1,0 +1,8 @@
+{
+  "name": "factory-boss",
+  "description": "Text-only factory skills for the boss: starting and following story runs of the workflow engine",
+  "version": "1.0.0",
+  "author": {
+    "name": "factory"
+  }
+}
