@@ -315,11 +315,11 @@ func TestStartCreatesGoalTaskPluginChildrenAndBuilder(t *testing.T) {
 	if !strings.Contains(r.factory.calls[0], "--project p1") || !strings.Contains(r.factory.calls[0], "- [ ] it works") {
 		t.Fatalf("goal new %q", r.factory.calls[0])
 	}
-	if !strings.Contains(r.factory.calls[2], "--name builder-t-0001 --prompt -") {
+	if !strings.Contains(r.factory.calls[2], "--name coder-t-0001 --prompt -") {
 		t.Fatalf("spawn %q", r.factory.calls[2])
 	}
 	kick := r.factory.stdins[2]
-	if placeholderRE.MatchString(kick) || !strings.Contains(kick, "`builder-t-0001`") ||
+	if placeholderRE.MatchString(kick) || !strings.Contains(kick, "`coder-t-0001`") ||
 		!strings.Contains(kick, "branch `factory/t-0001`") || !strings.Contains(kick, "children ST-1") {
 		t.Fatalf("kickoff %q", kick)
 	}
@@ -448,7 +448,7 @@ func TestTickRecordsAChildInReviewOnce(t *testing.T) {
 func TestBuilderEndedWithoutSessionBlocksTheRunOnce(t *testing.T) {
 	r := newStartRig(t)
 	run(r.env, "start", "--story", "ST-1")
-	r.fdb.Exec("UPDATE agents SET status='done', session_id=NULL WHERE name='builder-t-0001'")
+	r.fdb.Exec("UPDATE agents SET status='done', session_id=NULL WHERE name='coder-t-0001'")
 	run(r.env, "tick")
 	run(r.env, "tick")
 	if _, out, _ := run(r.env, "status"); out != "G-001 ST-1 huge (chosen) blocked\n" {
@@ -474,10 +474,10 @@ func TestBuiltAndBlockedOnlyForTheRunsBuilder(t *testing.T) {
 			t.Fatalf("%s built: %d %q", who, code, errs)
 		}
 	}
-	if code, _, _ := run(r.as("builder-t-0001"), "blocked", "C-9", "--reason", "x"); code != exitErr {
+	if code, _, _ := run(r.as("coder-t-0001"), "blocked", "C-9", "--reason", "x"); code != exitErr {
 		t.Fatalf("foreign child: %d", code)
 	}
-	code, out, errs := run(r.as("builder-t-0001"), "blocked", "C-2", "--reason", "the spec contradicts cli.go")
+	code, out, errs := run(r.as("coder-t-0001"), "blocked", "C-2", "--reason", "the spec contradicts cli.go")
 	if code != 0 || !strings.Contains(out, "blocked on C-2") {
 		t.Fatalf("blocked: %d %q %q", code, out, errs)
 	}
@@ -490,7 +490,7 @@ func TestBuiltAndBlockedOnlyForTheRunsBuilder(t *testing.T) {
 	if !strings.Contains(inc, `"cause": "builder-blocked"`) || !strings.Contains(inc, `"child": "C-2"`) {
 		t.Fatalf("incident %s", inc)
 	}
-	if code, out, _ := run(r.as("builder-t-0001"), "built"); code != 0 || out != "run G-001: built\n" {
+	if code, out, _ := run(r.as("coder-t-0001"), "built"); code != 0 || out != "run G-001: built\n" {
 		t.Fatalf("built: %d %q", code, out)
 	}
 }
@@ -501,7 +501,7 @@ func TestBuilderNameFollowsTheOrgRule(t *testing.T) {
 	if code, _, errs := run(r.env, "start", "--story", "ST-1"); code != 0 {
 		t.Fatal(errs)
 	}
-	if !strings.Contains(r.factory.calls[2], "--name cursor-builder-t-0001") {
+	if !strings.Contains(r.factory.calls[2], "--name cursor-coder-t-0001") {
 		t.Fatalf("spawn %q", r.factory.calls[2])
 	}
 }

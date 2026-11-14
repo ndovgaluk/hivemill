@@ -118,14 +118,14 @@ func TestBuiltRunAsksForThePROnceWhenEveryChildIsReviewed(t *testing.T) {
 	st.Exec("UPDATE children SET state='fixing' WHERE child_key='C-2'")
 	st.Close()
 	r.tick(t)
-	if len(r.callsLike("msg builder-t-0001")) != 0 || r.state(t) != string(RunBuilt) {
+	if len(r.callsLike("msg coder-t-0001")) != 0 || r.state(t) != string(RunBuilt) {
 		t.Fatalf("sent with a child fixing: %v", r.factory.calls)
 	}
 	st, _ = OpenState(StatePath(r.home))
 	st.Exec("UPDATE children SET state='reviewed' WHERE child_key='C-2'")
 	st.Close()
 	r.tick(t)
-	mails := r.callsLike("msg builder-t-0001")
+	mails := r.callsLike("msg coder-t-0001")
 	text := r.factory.stdins[len(r.factory.stdins)-1]
 	if len(mails) != 1 || r.state(t) != string(RunMerging) || placeholderRE.MatchString(text) ||
 		!strings.Contains(text, "factory task update T-0001 --status in_review") || !strings.Contains(text, "git merge origin/main") {
@@ -135,7 +135,7 @@ func TestBuiltRunAsksForThePROnceWhenEveryChildIsReviewed(t *testing.T) {
 		t.Fatalf("body in the mail: %v", p)
 	}
 	r.tick(t)
-	if len(r.callsLike("msg builder-t-0001")) != 1 {
+	if len(r.callsLike("msg coder-t-0001")) != 1 {
 		t.Fatal("second mail")
 	}
 }

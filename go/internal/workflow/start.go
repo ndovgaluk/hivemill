@@ -48,7 +48,7 @@ const (
 const (
 	defaultOrg       = "claude" // scout/orgs.py DEFAULT_ORG
 	cfgOrgPrefix     = "org_prefix_default"
-	builderPrefix    = "builder-"
+	builderPrefix    = "coder-" // the worker guard lets only coder-<task id> push to factory/<task id> (first real run, HM-39)
 	branchPrefix     = "factory/"
 	roleCoderTask    = "coder"
 	taskSpecTemplate = "Story run of %s. The work is defined in the task manager (factory wf tsr show and children) " +

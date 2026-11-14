@@ -97,16 +97,16 @@ func TestBatchOpensOnePRAfterTheLastChildAndClosesEveryStory(t *testing.T) {
 	seedCommits(r)
 	r.fdb.Exec("INSERT INTO agents(name, role, task_id, status) VALUES('review-d-2-r1', 'reviewer', 'T-0001', 'live')")
 	r.tick(t)
-	if len(r.callsLike("msg builder-t-0001")) != 0 {
+	if len(r.callsLike("msg coder-t-0001")) != 0 {
 		t.Fatal("PR mail while D-2 is in review")
 	}
 	run(r.as("review-d-2-r1"), "review", "D-2", "pass", "--notes", notesFile(t, "ok"))
 	r.tick(t)
-	if m := r.callsLike("msg builder-t-0001"); len(m) != 1 || !strings.Contains(r.factory.stdins[len(r.factory.stdins)-1], "Title: `T-0001: batch ST-1..ST-2 (2 stories)`") {
+	if m := r.callsLike("msg coder-t-0001"); len(m) != 1 || !strings.Contains(r.factory.stdins[len(r.factory.stdins)-1], "Title: `T-0001: batch ST-1..ST-2 (2 stories)`") {
 		t.Fatalf("PR mail %v", m)
 	}
 	r.tick(t)
-	if len(r.callsLike("msg builder-t-0001")) != 1 {
+	if len(r.callsLike("msg coder-t-0001")) != 1 {
 		t.Fatal("second PR mail")
 	}
 	r.merged(t)

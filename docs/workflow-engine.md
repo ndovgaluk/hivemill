@@ -149,7 +149,7 @@ exit 2, "factory-workflow is not built; set workflow_engine on and wait for a ti
    acceptance section), then records the run as `starting`, with one `children` row per child in list order.
 4. `factory task add` (role coder): one factory task, one branch `factory/<task>`, one PR for the whole story.
 5. Copies `workflows/goal-plugin/` into `roles/plugins/goals/<goal>/` (the skill `story-run:story-builder`).
-6. `factory spawn coder --name builder-<task>` (with the org prefix where spawn's naming rule needs one) with the
+6. `factory spawn coder --name coder-<task>` (with the org prefix where spawn's naming rule needs one) with the
    kickoff `workflows/prompts/builder-kickoff.md`; the run becomes `building`.
 
 A failure after step 3 leaves the run `failed` with an incident naming the step, the command, its exit code and its

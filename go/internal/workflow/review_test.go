@@ -10,7 +10,7 @@ import (
 	"factory/go/internal/tsr"
 )
 
-// started is a rig with a running story run (children C-1..C-3, builder builder-t-0001).
+// started is a rig with a running story run (children C-1..C-3, builder coder-t-0001).
 func started(t *testing.T) *startRig {
 	t.Helper()
 	r := newStartRig(t)
@@ -43,7 +43,7 @@ func (r *startRig) setReview(key string, on bool) {
 }
 
 // builder is the run's builder in the rig.
-const builder = "builder-t-0001"
+const builder = "coder-t-0001"
 
 func (r *startRig) tick(t *testing.T) {
 	t.Helper()
@@ -144,7 +144,7 @@ func TestChangesGoToTheBuilderAndANewRoundStarts(t *testing.T) {
 	if r.tracker.checks[0] != "id-C-1|REVIEW|FAILED|review-c-1-r1|C-1-1" {
 		t.Fatalf("checks %v", r.tracker.checks)
 	}
-	mails := r.callsLike("msg builder-t-0001")
+	mails := r.callsLike("msg coder-t-0001")
 	if len(mails) != 1 || !strings.Contains(mails[0], "--kind request") ||
 		!strings.Contains(r.factory.stdins[len(r.factory.stdins)-1], "Review of `C-1`: changes requested (round 1 of 5)") {
 		t.Fatalf("mail %v", mails)
@@ -191,8 +191,8 @@ func TestTheFifthChangesStopsTheRunUntilResume(t *testing.T) {
 	if len(boss) != 1 || !strings.Contains(body, "finding review-c-1-r1") || !strings.Contains(body, "finding review-c-1-r5") {
 		t.Fatalf("boss mail %v %q", boss, body)
 	}
-	if len(r.callsLike("msg builder-t-0001")) != 4 {
-		t.Fatalf("builder mails %v", r.callsLike("msg builder-t-0001"))
+	if len(r.callsLike("msg coder-t-0001")) != 4 {
+		t.Fatalf("builder mails %v", r.callsLike("msg coder-t-0001"))
 	}
 	n := len(r.factory.calls)
 	r.setReview("C-1", true)
@@ -213,7 +213,7 @@ func TestReviewIsRefusedForTheWrongAgentOrChild(t *testing.T) {
 	r.setReview("C-1", true)
 	r.tick(t)
 	f := notesFile(t, "x")
-	for _, c := range []struct{ who, child string }{{"builder-t-0001", "C-1"}, {"review-c-1-r1", "C-2"}, {"owner", "C-1"}} {
+	for _, c := range []struct{ who, child string }{{"coder-t-0001", "C-1"}, {"review-c-1-r1", "C-2"}, {"owner", "C-1"}} {
 		if code, _, errs := run(r.as(c.who), "review", c.child, "pass", "--notes", f); code != exitRefuse {
 			t.Fatalf("%s on %s: %d %q", c.who, c.child, code, errs)
 		}
@@ -282,10 +282,10 @@ func TestKeepModeWithoutSessionFallsBackToFresh(t *testing.T) {
 func TestAnEndedBuilderIsResumedThreeTimesThenTheRunStops(t *testing.T) {
 	r := started(t)
 	for i := 1; i <= MaxBuilderResumes; i++ {
-		r.fdb.Exec("UPDATE agents SET status='done' WHERE name='builder-t-0001'")
+		r.fdb.Exec("UPDATE agents SET status='done' WHERE name='coder-t-0001'")
 		r.tick(t)
 		s := r.callsLike("spawn coder")
-		if len(s) != i+1 || s[i] != "spawn coder --goal G-001 --task T-0001 --name builder-t-0001 --resume sess-builder-t-0001" {
+		if len(s) != i+1 || s[i] != "spawn coder --goal G-001 --task T-0001 --name coder-t-0001 --resume sess-coder-t-0001" {
 			t.Fatalf("resume %d: %v", i, s)
 		}
 		body := r.factory.stdins[len(r.factory.stdins)-1]
@@ -296,7 +296,7 @@ func TestAnEndedBuilderIsResumedThreeTimesThenTheRunStops(t *testing.T) {
 			t.Fatalf("status %q", out)
 		}
 	}
-	r.fdb.Exec("UPDATE agents SET status='done' WHERE name='builder-t-0001'")
+	r.fdb.Exec("UPDATE agents SET status='done' WHERE name='coder-t-0001'")
 	r.tick(t)
 	if _, out, _ := run(r.env, "status"); out != "G-001 ST-1 huge (chosen) blocked\n" {
 		t.Fatalf("status %q", out)
