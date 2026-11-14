@@ -66,3 +66,11 @@ Two other workflows exist and are not part of this wait: `install` (an install s
 LSP: not used, only a workflow file, a doc and GitHub run data were read.
 
 Skipped: reading what each guard job does step by step, and your install's `required_checks` setting; risk: the finish estimate is from three successful runs, so it is a rough range.
+
+## Q: Who is reviewing that PR? Does it trigger GitHub Actions and e2e tests? (PR 17, 2026-11-14)
+
+**Reviewer: nobody.** PR 17 (HM-37, HM-43, HM-48) is an owner PR opened by the session on the fork, from a branch of the engine clone. It is not a factory task branch (`factory/<task-id>`), so the factory's reviewer, QA and judge agents never see it, and no GitHub reviewer was requested. The checks before it were the session's own: the whole web test suite (769 tests) and a look in Chrome on live data. PR 14 and PR 15 were merged the same way, right after opening, without waiting for CI.
+
+**GitHub Actions: yes.** Opening the PR started the `tests.yml` workflow: 19 jobs, among them 10 `unittest-shard` jobs (the full Python suite in shards), 3 `guard-unittest-shard`, `guard-equiv`, `guard-equiv-rest`, `guard-diff`, `guard-self-compare`, `guard-evaluator-home-loosen` and `go`. For PR 17 the session first waited for them, then the owner asked to close the PR and merge without it: the branch was fast-forwarded into `main` (`0c11d0c`) before the jobs finished, so their result was not used (corrected 2026-11-14).
+
+**E2E tests: no.** The repository has no browser e2e runner; the web UI is server-rendered HTML covered by the Python tests (`tests/test_web*.py`). The other two workflow files, `install.yml` and `release.yml`, were not checked for their triggers and did not show up in PR 17's check runs.

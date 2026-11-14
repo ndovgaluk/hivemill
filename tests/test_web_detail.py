@@ -156,7 +156,7 @@ class TestCriteria(DetailCase):
 
 class TestGoalsPage(DetailCase):
     def order(self, path):
-        return re.findall(r'<span class="mono lrow-id">(G-\d+)</span>', re.split(r'data-key="goals-done"', self.page(path))[0])
+        return re.findall(r'<span class="mono lrow-id">(G-\d+)</span>', re.split(r'data-key="goals-done"', self.page(path).split('<main', 1)[1])[0])   # main only: the sidebar lists goals too (HM-36)
 
     def test_sort_whitelist(self):
         x = self.con.execute

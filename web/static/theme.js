@@ -1,5 +1,6 @@
 /* Optional enhancements; every page is complete without them (theme then follows the OS, nav is plain links).
-   1. Auto/Light/Dark segmented control in each [data-theme-slot]. 2. Keep scroll and open <details> across the 60 s meta refresh. */
+   1. Auto/Light/Dark segmented control in each [data-theme-slot]. 2. Keep scroll and open <details> across the 60 s meta refresh.
+   3. Remember whether the sidebar's done goals are shown. */
 (function () {
   var KEY = "factory-theme", KEEP = "factory-keep", root = document.documentElement, order = ["auto", "light", "dark"];
   var ICONS = {
@@ -38,6 +39,18 @@
       window.scrollTo(0, kept.y || 0);
     }
   } catch (e) { /* unreadable or junk sessionStorage: keep the page defaults */ }
+  // 3. The sidebar's "+" lists (done goals HM-36, finished tasks HM-43): each one's open state is kept across pages
+  //    under its data-key; the name follows the state (data-show / data-hide).
+  [].forEach.call(document.querySelectorAll("details.navdone"), function (d) {
+    var s = d.querySelector("summary"), store = "factory-" + d.getAttribute("data-key");
+    function sync() {
+      s.setAttribute("aria-expanded", String(d.open));
+      s.setAttribute("aria-label", d.getAttribute(d.open ? "data-hide" : "data-show"));
+    }
+    if (!d.open && get("localStorage", store) === "1") d.open = true;
+    sync();
+    d.addEventListener("toggle", function () { put("localStorage", store, d.open ? "1" : "0"); sync(); });
+  });
   window.addEventListener("pagehide", function () {
     put("sessionStorage", KEEP, JSON.stringify({ path: here, at: Date.now(), y: window.scrollY,
       open: details.map(did).filter(function (id, i) { return details[i].open; }) }));

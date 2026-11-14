@@ -1,3 +1,4 @@
+import datetime as dt
 import json
 import os
 import subprocess
@@ -59,6 +60,109 @@ class BossTickTests(FactoryTestCase):
         self.assertIn("📬 2 unread", self.prompts_to("zz-director")[0][3])
         self.assertIn("📬 1 unread", self.prompts_to("zz-lead")[0][3])
         self.assertNotIn("📬", self.badge("p-dir"))
+
+
+STALE_NOW = dt.datetime(2026, 6, 1, 12, 0, 0, tzinfo=dt.timezone.utc)
+STALE_KEY = "stale_unread_alert_s"
+STALE_SUBJECT = "stale unread mail:"
+STALE_EVENT = "stale-unread-alert"
+STALE_AGENTS = (("boss", "boss", "p-boss"), ("zz-director", "director", "p-dir"), ("zz-lead", "lead", "p-lead"),
+                ("zz-coder", "coder", "p-coder"))
+CODER = "zz-coder"
+DIRECTOR = "zz-director"
+
+
+class StaleUnreadTests(FactoryTestCase):
+    """G-003 SC4: one alert per live agent whose unread mail is at least stale_unread_alert_s old. Every agent is
+    listed as working, so tick step 3 nudges nobody and only the stale-unread step acts."""
+
+    def setUp(self):
+        super().setUp()
+        for name, role, pane in STALE_AGENTS:
+            self.env.seed_agent(name, role, pane_id=pane)
+        self.env.set_herdr(agents=[{"name": n, "pane_id": p, "agent_status": "working", "agent_session": {"value": "s-" + n}}
+                                   for n, _, p in STALE_AGENTS])
+
+    def mail(self, to, age_min, kind="request", at=0):
+        """One unread message for `to`, `age_min` old at STALE_NOW + `at` minutes."""
+        created = (STALE_NOW + dt.timedelta(minutes=at - age_min)).isoformat()
+        self.env.sql("INSERT INTO messages(sender,recipient,kind,subject,body,created) VALUES('x',?,?,?,?,?)",
+                     (to, kind, "subj", "", created))
+        return self.env.sql("SELECT max(id) i FROM messages")[0]["i"]
+
+    def tick(self, plus_min=0):
+        self.ok("tick", extra_env={"FACTORY_NOW": (STALE_NOW + dt.timedelta(minutes=plus_min)).isoformat()})
+
+    def alerts(self, about):
+        return self.env.sql("SELECT recipient, sender, subject, body FROM messages WHERE kind='alert' AND subject LIKE ? "
+                            "ORDER BY id", (f"{STALE_SUBJECT} {about} (%",))
+
+    def alert_events(self, about):
+        return [json.loads(r["detail"]) for r in self.env.sql(
+            "SELECT detail FROM events WHERE entity='agent' AND entity_id=? AND action=?", (about, STALE_EVENT))]
+
+    def test_default_is_one_hour(self):
+        self.assertEqual(self.ok("config", STALE_KEY).stdout.strip().split()[-1], "3600")
+
+    def test_59_min_is_not_stale(self):
+        self.mail(CODER, 59)
+        self.tick()
+        self.assertEqual(self.alerts(CODER), [])
+        self.assertEqual(self.alert_events(CODER), [])
+
+    def test_threshold_61_min_alerts_the_director(self):
+        mid = self.mail(CODER, 61)
+        self.tick()
+        (a,) = self.alerts(CODER)
+        self.assertEqual((a["recipient"], a["sender"]), (DIRECTOR, "tick"))
+        self.assertEqual(a["subject"], f"{STALE_SUBJECT} {CODER} (1 msg, oldest 61 min)")
+        self.assertIn(f"M{mid} request from x, 61 min", a["body"])
+        self.assertEqual(self.alert_events(CODER), [{"agent": CODER, "count": 1, "oldest": f"M{mid}", "to": "director"}])
+
+    def test_threshold_exactly_60_min_alerts(self):
+        self.mail(CODER, 60)
+        self.tick()
+        self.assertEqual(len(self.alerts(CODER)), 1)
+
+    def test_dedup_one_alert_per_episode_and_a_new_one_after_the_mail_was_read(self):
+        self.mail(CODER, 61)
+        self.tick()
+        self.tick(1)
+        self.mail(CODER, 70, at=2)   # a second stale message in the same episode
+        self.tick(2)
+        self.assertEqual(len(self.alerts(CODER)), 1)
+        self.assertEqual(len(self.alert_events(CODER)), 1)
+        self.env.sql("UPDATE messages SET read_at='2026-06-01T12:03:00+00:00' WHERE recipient=?", (CODER,))
+        self.tick(3)                 # nothing stale: the episode ends
+        self.assertEqual(self.env.sql("SELECT 1 FROM throttle WHERE key=?", (f"stale-unread:{CODER}",)), [])
+        self.mail(CODER, 61, at=4)
+        self.tick(4)
+        self.assertEqual(len(self.alerts(CODER)), 2)
+
+    def test_routing_director_to_boss_everyone_else_to_director_once_each(self):
+        self.mail(DIRECTOR, 61)
+        self.mail("boss", 61, kind="decision")
+        self.mail("zz-lead", 61)
+        for plus in (0, 1, 2):
+            self.tick(plus)
+        self.assertEqual([a["recipient"] for a in self.alerts(DIRECTOR)], ["boss"])
+        self.assertEqual([a["recipient"] for a in self.alerts("boss")], [DIRECTOR])
+        self.assertEqual([a["recipient"] for a in self.alerts("zz-lead")], [DIRECTOR])
+
+    def test_config_threshold_is_honoured(self):
+        self.ok("config", STALE_KEY, "600")
+        self.mail(CODER, 9)
+        self.tick()
+        self.assertEqual(self.alerts(CODER), [])
+        self.mail("zz-lead", 11)
+        self.tick()
+        self.assertEqual(len(self.alerts("zz-lead")), 1)
+
+    def test_not_live_agent_is_ignored(self):
+        self.env.seed_agent("zz-gone", "coder", status="exited", pane_id="p-gone")
+        self.mail("zz-gone", 120)
+        self.tick()
+        self.assertEqual(self.alerts("zz-gone"), [])
 
 
 class BossHookTests(FactoryTestCase):

@@ -5,6 +5,7 @@ with f-strings around raw DB values. Only the class names in CLASSES may be emit
 """
 import html as _html
 import re
+from pathlib import Path
 
 from scout import orgs as _orgs
 from web.queries import parse_ts
@@ -49,6 +50,8 @@ CLASSES = frozenset({
     "settings", "set-intro", "set-row", "set-text", "set-name", "set-key", "set-help", "set-ctl", "set-now", "set-value",
     "set-default", "set-form", "set-input", "set-btn", "set-cmd", "set-note", "set-note--ok", "set-note--bad",
     "flow-full", "flow-root",   # DVDG-561: the React flow debugger's full-width section and mount element
+    # HM-36 goals in the sidebar
+    "navgoals", "navsub", "navsub--done", "navgoal", "navgoal-l1", "navgoal-l2", "navgoal-t", "navdone", "navplus", "nav-on", "nav-off",
     *(f"flow-node--{s}" for s in ("done", "current", "pending", "skipped")),
 })
 
@@ -458,9 +461,82 @@ def _item_link(path, label, icon, active, shell, cls, size=16, org=None):
               href=_with_org(path, org), class_=classes or None, aria_current="page" if here and main_nav else None)
 
 
-def _shell_navs(active, shell, org=None):
-    groups = [el("div", el("h2", g), el("ul", [el("li", _item_link(p, label, ic, active, shell, "nav-item", org=org))
-                                              for p, label, ic in items]),
+NAV_GOALS_PATH = "/goals"
+GOAL_PAGE_PREFIX = "/goal/"
+_NAV_DONE_KEY = "nav-done-goals"   # data-key of the "+" disclosure; theme.js keeps its open state
+
+
+def _nav_goal(g, org, current):
+    """One sidebar goal (HM-36): line 1 the status glyph, id and title; line 2 the Goals page's progress meter and
+    "{done}/{total} tasks". The whole entry is one link whose name says status, id, title and progress."""
+    from web import charts
+    from web.components import row_status
+
+    done, total = g["done"], g["total"]
+    name = f"{LABELS.get(g['status'], g['status'])}, {g['id']}, {g['title']}, {done} of {total} tasks done"
+    line1 = el("div", row_status(g["status"]), el("span", g["id"], class_="mono lrow-id"), el("span", g["title"], class_="navgoal-t"),
+               class_="navgoal-l1")
+    line2 = el("div", charts.meter(done, total, f"{done}/{total} tasks"), class_="navgoal-l2")
+    return el("li", el("a", line1, line2, href=_with_org(f"{GOAL_PAGE_PREFIX}{g['id']}", org), aria_label=name),
+              class_="navgoal is-current" if g["id"] == current else "navgoal")
+
+
+def _nav_lists(active, done, entry, current, key, show, hide):
+    """A sidebar sub-list pair (HM-36, HM-43): the `active` entries, and a "+" disclosure (native details, so it works
+    without script) with the `done` ones, open when the current item is one of them or nothing is active (owner,
+    2026-11-14). theme.js keeps its open state under `key` and swaps the `show`/`hide` names. Nothing when both are empty."""
+    parts = [el("ul", [entry(x) for x in active], class_="navsub")] if active else []
+    if done:
+        opened = not active or any(x["id"] == current for x in done)
+        summary = el("summary", el("span", "+", class_="nav-off", aria_hidden="true"), el("span", "−", class_="nav-on", aria_hidden="true"),
+                     class_="navplus", aria_label=hide if opened else show, aria_expanded="true" if opened else "false")
+        parts.append(el("details", summary, el("ul", [entry(x) for x in done], class_="navsub navsub--done"),
+                        class_="navdone", data_key=key, data_show=show, data_hide=hide, open=opened or None))
+    return parts
+
+
+def _nav_goals(shell, org, current):
+    """The sidebar's goal lists under "Goals" (HM-36): active goals, and under the "+" the last done goals followed by
+    the last blocked or cancelled ones (HM-48)."""
+    s = shell or {}
+    return _nav_lists(s.get("goals") or [], (s.get("goals_done") or []) + (s.get("goals_stopped") or []),
+                      lambda g: _nav_goal(g, org, current), current, _NAV_DONE_KEY,
+                      "Show done and stopped goals", "Hide done and stopped goals")
+
+
+NAV_TASKS_PATH = "/tasks"
+TASK_PAGE_PREFIX = "/task/"
+_NAV_DONE_TASKS_KEY = "nav-done-tasks"
+
+
+def _nav_task(t, org, current):
+    """One sidebar task (HM-43): line 1 the status glyph, id and title; line 2 its goal. One link to the task page."""
+    from web.components import row_status
+
+    name = f"{LABELS.get(t['status'], t['status'])}, {t['id']}, {t['title']}" + (f", goal {t['goal_id']}" if t["goal_id"] else "")
+    line1 = el("div", row_status(t["status"]), el("span", t["id"], class_="mono lrow-id"), el("span", t["title"], class_="navgoal-t"),
+               class_="navgoal-l1")
+    line2 = el("div", el("span", t["goal_id"] or "no goal", class_="lbl"), class_="navgoal-l2")
+    return el("li", el("a", line1, line2, href=_with_org(f"{TASK_PAGE_PREFIX}{t['id']}", org), aria_label=name),
+              class_="navgoal is-current" if t["id"] == current else "navgoal")
+
+
+def _nav_tasks(shell, org, current):
+    """The sidebar's task lists under "Tasks" (HM-43): tasks in work, and the last finished tasks under the "+"."""
+    return _nav_lists((shell or {}).get("tasks") or [], (shell or {}).get("tasks_done") or [],
+                      lambda t: _nav_task(t, org, current), current, _NAV_DONE_TASKS_KEY,
+                      "Show the last 3 finished tasks", "Hide finished tasks")
+
+
+def _shell_navs(active, shell, org=None, current_goal=None, current_task=None):
+    subs_for = {NAV_GOALS_PATH: lambda: _nav_goals(shell, org, current_goal), NAV_TASKS_PATH: lambda: _nav_tasks(shell, org, current_task)}
+
+    def side_li(p, label, ic):
+        link_ = _item_link(p, label, ic, active, shell, "nav-item", org=org)
+        subs = subs_for[p]() if p in subs_for else None
+        return el("li", link_, subs, class_="navgoals") if subs else el("li", link_)
+
+    groups = [el("div", el("h2", g), el("ul", [side_li(p, label, ic) for p, label, ic in items]),
                  class_="navgroup") for g, items in GROUPS]
     side = el("nav", _wordmark(org), groups, el("div", data_theme_slot=True, class_="themebox"), aria_label="Main", class_="sidebar")
     flat = {p: (label, ic) for _, items in GROUPS for p, label, ic in items}
@@ -473,22 +549,36 @@ def _shell_navs(active, shell, org=None):
     return side, more, el("nav", tabs, aria_label="Primary tabs", class_="tabbar")
 
 
+STATIC_DIR = Path(__file__).resolve().parent / "static"
+
+
+def asset(name):
+    """URL of a static file with its modification time as version (HM-49): static files are cached for an hour, so a
+    new deploy must change the URL or the browser pairs new HTML with an old stylesheet."""
+    try:
+        return f"/static/{name}?v={int((STATIC_DIR / name).stat().st_mtime):x}"
+    except OSError:
+        return f"/static/{name}"
+
+
 def page(title, body, active="/", refresh=True, shell=None, crumb_trail=None, org=None, path=None, query=None):
     """Full HTML5 document. `body` is trusted markup (the output of a view's render). `shell` is the dict from
     queries.shell_status plus "now"; without it the header omits the status cluster (error pages). `path` (the request
     path) turns on the org filter in the header; `org` is the whitelisted ?org= value (None = all) and `query` the
     request's query dict, kept on the filter's links."""
     org = org if org in _orgs.ORGS else None
-    side, more, tabs = _shell_navs(active, shell, org)
+    current_goal = path[len(GOAL_PAGE_PREFIX):] if path and str(path).startswith(GOAL_PAGE_PREFIX) else None
+    current_task = path[len(TASK_PAGE_PREFIX):] if path and str(path).startswith(TASK_PAGE_PREFIX) else None
+    side, more, tabs = _shell_navs(active, shell, org, current_goal, current_task)
     head = el("head",
               el("meta", charset="utf-8"),
               el("meta", name="viewport", content="width=device-width, initial-scale=1"),
               el("meta", name="color-scheme", content="light dark"),
               el("meta", http_equiv="refresh", content="60") if refresh else "",
               el("title", f"{title} - factory"),
-              el("link", rel="icon", href="/static/favicon.svg", type="image/svg+xml"),
-              el("link", rel="stylesheet", href="/static/app.css"),
-              el("script", src="/static/theme.js", defer=True))
+              el("link", rel="icon", href=asset("favicon.svg"), type="image/svg+xml"),
+              el("link", rel="stylesheet", href=asset("app.css")),
+              el("script", src=asset("theme.js"), defer=True))
     org_nav = org_filter(path, query, org) if path and shell else None
     main = el("div", shell_header(title, shell, crumb_trail, org_nav, path), el("main", Safe(body) if not isinstance(body, Safe) else body, id="content", class_="page"),
               more, class_="main")

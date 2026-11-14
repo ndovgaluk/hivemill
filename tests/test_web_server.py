@@ -51,7 +51,7 @@ def get(httpd, path, host="auto", method="GET"):
         c.close()
 
 
-THEME_SCRIPT = '<script src="/static/theme.js" defer></script>'           # the deferred theme toggle
+THEME_SCRIPT = f'<script src="{wh.asset("theme.js")}" defer></script>'   # the deferred theme toggle (versioned, HM-49)
 FLOW_SCRIPT = '<script type="module" src="/static/flow/flow.js"></script>'  # DVDG-561: the committed React flow bundle
 
 
@@ -192,6 +192,10 @@ class TestRoutes(ServerCase):
     def test_static_types(self):
         self.assertTrue(self.get("/static/app.css")[1]["Content-Type"].startswith("text/css"))
         self.assertEqual(self.get("/static/favicon.svg")[1]["Content-Type"], "image/svg+xml")
+
+    def test_versioned_static_url_serves_the_file(self):  # HM-49
+        r = self.get("/static/app.css?v=anything")
+        self.assertTrue(r[1]["Content-Type"].startswith("text/css"))
 
     def test_view_exception_gives_generic_500(self):
         boom = SimpleNamespace(TITLE="x", data=lambda ctx, **p: 1 / 0, render=lambda c, d: "")
@@ -389,7 +393,7 @@ class TestVocabularyAndStubs(ServerCase):
                 self.assertTrue(text.startswith("<!doctype html>"))
                 self.assertIn('name="viewport" content="width=device-width, initial-scale=1"', text)
                 self.assertIn('name="color-scheme" content="light dark"', text)
-                self.assertIn('href="/static/app.css"', text)
+                self.assertIn(f'href="{wh.asset("app.css")}"', text)
                 links = self.parse(text).links
                 for w in want:
                     self.assertIn(w, links)

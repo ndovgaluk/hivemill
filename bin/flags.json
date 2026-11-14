@@ -42,6 +42,14 @@
    "doc": ""
   },
   {
+   "key": "boss_wake_other_after_s",
+   "kind": "setting",
+   "default": "0",
+   "summary": "boss tick wake: an unread report/msg/decision/alert this old wakes the boss too; 0 = never",
+   "goal": "",
+   "doc": "docs/boss-mail.md"
+  },
+  {
    "key": "cap_fallback_offer",
    "kind": "setting",
    "default": "0",
@@ -832,6 +840,14 @@
    "promoted_in": "baseline"
   },
   {
+   "key": "stale_unread_alert_s",
+   "kind": "setting",
+   "default": "3600",
+   "summary": "tick: one alert to the director (for the director: to the boss) when a live agent has unread mail at least this old",
+   "goal": "G-003",
+   "doc": "docs/hq-nudges.md"
+  },
+  {
    "key": "state_dump_interval_s",
    "kind": "setting",
    "default": "3600",
@@ -869,7 +885,7 @@
    "key": "terminal_backend",
    "kind": "setting",
    "default": "auto",
-   "summary": "auto | herdr | hc — which CLI factory uses for the agent host; auto prefers the TUI when both are on PATH",
+   "summary": "auto | herdr | hc \u2014 which CLI factory uses for the agent host; auto prefers the TUI when both are on PATH",
    "goal": "G-031",
    "doc": "docs/terminal-backends.md"
   },

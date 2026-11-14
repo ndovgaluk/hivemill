@@ -46,6 +46,15 @@
   "current": "1800"
  },
  {
+  "key": "boss_wake_other_after_s",
+  "kind": "setting",
+  "default": "0",
+  "summary": "boss tick wake: an unread report/msg/decision/alert this old wakes the boss too; 0 = never",
+  "goal": "",
+  "doc": "docs/boss-mail.md",
+  "current": "0"
+ },
+ {
   "key": "cap_fallback_offer",
   "kind": "setting",
   "default": "0",
@@ -929,6 +938,15 @@
   "state": "on",
   "promoted_in": "baseline",
   "current": "behind_ok"
+ },
+ {
+  "key": "stale_unread_alert_s",
+  "kind": "setting",
+  "default": "3600",
+  "summary": "tick: one alert to the director (for the director: to the boss) when a live agent has unread mail at least this old",
+  "goal": "G-003",
+  "doc": "docs/hq-nudges.md",
+  "current": "3600"
  },
  {
   "key": "state_dump_interval_s",

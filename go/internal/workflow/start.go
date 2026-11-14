@@ -204,6 +204,12 @@ func (e *Engine) planStart(keys []string, workflow, project string) (*startPlan,
 		if err != nil {
 			return nil, err
 		}
+		// Taskosaur's list rows carry no description and no tests field: read each child in full (first real run, HM-39)
+		for i := range kids {
+			if kids[i], err = tr.TaskByKey(kids[i].Key); err != nil {
+				return nil, err
+			}
+		}
 		if len(p.stories) > 0 && story.ProjectID != p.stories[0].ProjectID {
 			return nil, usageError{fmt.Sprintf("story %s is in another Taskosaur project than %s; a batch takes one project",
 				k, p.stories[0].Key)}

@@ -1022,9 +1022,70 @@ def _cfg_num(cfg, defaults, key, fallback):
         return float(fallback)
 
 
-def shell_status(con, usage, defaults, mem=None, now=None):
+NAV_DONE_GOALS = 5   # HM-36: done goals the sidebar's "+" lists, completed last first
+NAV_STOPPED_GOALS = 3   # HM-48: blocked or cancelled goals listed under the done ones, changed last first
+_NAV_GOAL_ACTIVE, _NAV_GOAL_DONE = "active", "done"
+_NAV_GOAL_STOPPED = ("blocked", "cancelled")
+_CLOSED_PREFIXES = ("done", "cancelled")   # bin/factory_cli.py goal_closed_at
+_TS_FLOOR = dt.datetime.min.replace(tzinfo=dt.timezone.utc)
+
+
+def goals_closed_at(con, rows):
+    """{goal id: when it was closed} for goal rows, in one query for all of them: the newest `status` event whose detail
+    starts with done or cancelled, else the goal's `updated` (the rule of bin/factory_cli.py goal_closed_at)."""
+    ids = [g["id"] for g in rows]
+    seen = {}
+    if ids:
+        for r in con.execute("SELECT entity_id, ts, detail FROM events WHERE entity='goal' AND action='status' AND entity_id IN "
+                             f"({','.join('?' * len(ids))}) ORDER BY id DESC", ids):
+            if r["entity_id"] not in seen and (r["detail"] or "").startswith(_CLOSED_PREFIXES):
+                seen[r["entity_id"]] = r["ts"]
+    return {g["id"]: seen.get(g["id"], g["updated"]) for g in rows}
+
+
+def nav_goals(con, org=None):
+    """(active, done) goals for the sidebar (HM-36), each {id, title, status, org, done, total}: every active goal by
+    priority then id (the Goals page's order within a status), and the NAV_DONE_GOALS done goals completed last, newest
+    first, each with `closed`, and (HM-48) the NAV_STOPPED_GOALS blocked or cancelled goals changed last, newest first.
+    `org` (a whitelisted name or None) keeps only that org's goals. Two queries plus goals()."""
+    rows = [g for g in goals(con) if org is None or g["org"] == org]
+    pick = lambda g: {"id": g["id"], "title": g["title"], "status": g["status"], "org": g["org"],   # noqa: E731
+                      "done": g["tasks_done"], "total": g["tasks_total"]}
+    active = sorted((g for g in rows if g["status"] == _NAV_GOAL_ACTIVE),
+                    key=lambda g: (99 if g["priority"] is None else g["priority"], g["id"]))
+    done = [g for g in rows if g["status"] == _NAV_GOAL_DONE]
+    stopped = [g for g in rows if g["status"] in _NAV_GOAL_STOPPED]
+    closed = goals_closed_at(con, done + stopped)
+    newest = lambda g: (parse_ts(closed[g["id"]]) or _TS_FLOOR, g["id"])   # noqa: E731
+    done.sort(key=newest, reverse=True)
+    stopped.sort(key=newest, reverse=True)
+    return ([pick(g) for g in active], [{**pick(g), "closed": closed[g["id"]]} for g in done[:NAV_DONE_GOALS]],
+            [{**pick(g), "closed": closed[g["id"]]} for g in stopped[:NAV_STOPPED_GOALS]])
+
+
+NAV_DONE_TASKS = 3   # HM-43: finished tasks the sidebar's "+" under Tasks lists, updated last first
+NAV_TASKS_IN_WORK = ("in_progress", "in_review")
+_NAV_TASK_DONE = "done"
+
+
+def nav_tasks(con, org=None):
+    """(in work, done) tasks for the sidebar (HM-43), each {id, title, status, goal_id}: tasks in progress or in review
+    by id, and the NAV_DONE_TASKS done tasks updated last, newest first. `org` keeps only tasks whose goal is in that
+    org. Fixed number of queries."""
+    gorgs = goal_orgs(con)
+    keep = lambda r: org is None or org_of_goal(gorgs, r["goal_id"]) == org   # noqa: E731
+    pick = lambda r: {"id": r["id"], "title": r["title"], "status": r["status"], "goal_id": r["goal_id"]}   # noqa: E731
+    q = "SELECT id, title, status, goal_id, updated FROM tasks WHERE status IN ({}) ORDER BY {}"
+    work = [pick(r) for r in con.execute(q.format(",".join("?" * len(NAV_TASKS_IN_WORK)), "id"), NAV_TASKS_IN_WORK) if keep(r)]
+    done = [r for r in con.execute(q.format("?", "id"), (_NAV_TASK_DONE,)) if keep(r)]
+    done.sort(key=lambda r: (parse_ts(r["updated"]) or _TS_FLOOR, r["id"]), reverse=True)
+    return work, [pick(r) for r in done[:NAV_DONE_TASKS]]
+
+
+def shell_status(con, usage, defaults, mem=None, now=None, org=None):
     """Data for the global status header and nav badges, the same on every page:
-    {needs, agents_attention, health: {tone, text}, cursor: {...}}. `usage` is the usage_fn() dict (or None), `defaults` the caps.
+    {needs, agents_attention, health: {tone, text}, cursor: {...}, goals, goals_done}. `usage` is the usage_fn() dict (or
+    None), `defaults` the caps; `org` (the ?org= filter) narrows the sidebar's goal lists (nav_goals).
     needs = what owner_pending lists; agents_attention = queued or blocked agents (running agents never count).
     `mem` = MB available (mem_fn()), None when unknown.
     health, worst first: memory low, usage cap reached, gate closed, usage high, usage unknown, else all normal."""
@@ -1058,8 +1119,11 @@ def shell_status(con, usage, defaults, mem=None, now=None):
     from web import cursor_limits
 
     t = _now(now)
+    active_goals, done_goals, stopped_goals = nav_goals(con, org)
+    work_tasks, done_tasks = nav_tasks(con, org)
     return {"needs": needs, "agents_attention": queued + n.get("blocked", 0), "health": health,
-            "cursor": cursor_limits.display(con, t)}
+            "cursor": cursor_limits.display(con, t), "goals": active_goals, "goals_done": done_goals, "goals_stopped": stopped_goals,
+            "tasks": work_tasks, "tasks_done": done_tasks}
 
 
 # ───────────────────────────── overview (G-019 B4) ─────────────────────────────
