@@ -88,6 +88,36 @@ class BossWakeTests(BossWakeBase):
                 self.tick()
                 self.assertEqual(self.prompts(), [], kind)
 
+    def test_other_kinds_wake_after_their_own_delay(self):  # HM-38
+        self.ok("config", "boss_wake_other_after_s", "600")
+        self.mail("report", 9)
+        self.tick()
+        self.assertEqual(self.prompts(), [])   # 9 min < 10 min
+        mid = self.mail("decision", 11)
+        self.tick()
+        self.assertEqual(len(self.prompts()), 1)
+        self.assertIn("[decision]", self.prompts()[0][3])
+        self.assertIn("oldest 11 min", self.prompts()[0][3])
+        self.assertEqual(json.loads(self.wake_events()[0]["detail"]), {"count": 1, "oldest": f"M{mid}", "kinds": "decision"})
+
+    def test_other_kinds_off_by_default_even_when_old(self):  # HM-38
+        self.mail("report", 120)
+        self.tick()
+        self.assertEqual(self.prompts(), [])
+
+    def test_escalation_keeps_its_own_delay_and_kinds_are_listed_together(self):  # HM-38
+        self.ok("config", "boss_wake_other_after_s", "60")
+        self.mail("escalation", 10)   # under boss_wake_after_s (15 min): does not qualify
+        self.mail("report", 5)
+        self.mail("alert", 3)
+        self.tick()
+        self.assertEqual(len(self.prompts()), 1)
+        text = self.prompts()[0][3]
+        self.assertIn("2 unread factory message(s) [alert,report], oldest 5 min", text)
+        self.mail("request", 20)
+        self.tick(T0 + dt.timedelta(minutes=5))   # inside the cooldown: no second wake
+        self.assertEqual(len(self.prompts()), 1)
+
     def test_unsent_input_blocks_wake(self):
         self.mail("escalation", 16)
         self.env.set_herdr(read_text={BOSS: "❯ owner draft here\n"})
