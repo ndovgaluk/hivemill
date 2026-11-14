@@ -1,16 +1,13 @@
-# Workflow: medium (draft)
+# Workflow `medium`
 
-For a task of size M, or complexity 3, with no children.
+For normal feature work: size M, or complexity 3. One task or a story with a few children.
 
-| Step | Who | What |
-|---|---|---|
-| 1 | code | preflight; pick this workflow, or take the owner's override |
-| 2 | architect | readiness check. If the task is not enriched: write the design and its reasons, the files to touch, edge cases, acceptance criteria and how to verify into the task. No split. Then the task is frozen |
-| 3 | builder | implement, test, run the checks, commit with the task key, comment, move the task to In Review |
-| 4 | reviewer | review, run the tests and walk the acceptance list in one pass; record the verdict |
-| 5 | code | "changes requested": task back to In Progress, findings to the builder, then step 4 again with the same reviewer session |
-| 6 | code | passed and checks green: merge queue, merge, Done in Taskosaur |
+## What runs today
 
-Limits: 5 fix rounds. After 2 rounds on the same kind of finding the architect is called before the third.
+The run in [README.md](README.md), the same steps as `simple`: one builder, a review per child, fixes after the child in hand, one pull request, the factory's final checks and merge, then Done in the task manager.
 
-A task that turns out larger than M while the architect reads it is re-rated and moved to `huge`.
+## What is planned to differ
+
+- **Architect (not built):** before the build, an architect on the strongest model reads the code and writes the design into the task: the contract, the files to touch, the edge cases, the acceptance criteria and the tests. Until that step exists the task must arrive prepared, written that way by whoever planned it.
+- **Design freeze (not built):** once the build starts, a change to the design is a visible edit with a comment and pauses the builder. Today the builder's rule covers the builder's side only: it never edits a task's text, and it stops with `factory wf blocked` when the text cannot be built as written.
+- **QA:** no separate QA step beyond what the factory's final gate already runs.

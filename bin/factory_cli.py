@@ -198,6 +198,8 @@ DEFAULT_CONFIG = {
     "state_push": "0",           # push the state branch (full DB dump incl. messages) to origin; off by default because the dump is private
     "mech_merge": "off",         # off | shadow | on: the tick's mechanical merger for tier T0-T2 PRs (G-022 #4); shadow records mech-would-merge/block and merges nothing
     "mech_merge_retry_s": "600", # the merger looks at a PR head it already blocked on (or shadow-recorded) at most this often
+    "workflow_engine": "off",    # off | on: build go/cmd/workflow and let the tick launch `factory-workflow tick` (DVDG-565, docs/workflow-engine.md)
+    "workflow_reviewer_session": "fresh",  # fresh | keep: story runs review each child with a new reviewer, or resume one per story
     "risk_tiers": "off",        # off | on: `factory task tier T --classify` computes a PR's risk tier (G-022 #1); nothing else reads tiers yet
     "public_text_repos": "",     # comma list OWNER/NAME where the public text rule applies (G-021): judge text check, no state push
     "noreply_email": "",         # author email judge merges into a public_text_repos repo with; empty = repo-local git user.email, must end @users.noreply.github.com (G-021)
@@ -2972,6 +2974,11 @@ def guard_tick(con, build=True, tick=True, src=None, lib=None, go=None):
             write_cli_impl(con, src)
     except (OSError, ValueError, subprocess.SubprocessError, sqlite3.Error) as e:
         print(f"cli go build: tick step failed ({e})", file=sys.stderr)
+    try:  # DVDG-565: the workflow engine, only while its switch is on
+        if build and cap is not None and cfg(con, "workflow_engine") == "on" and load1() <= cap:
+            build_guard_go(src, lib, tick=tick, go=go, name=WORKFLOW_BIN, pkg="./cmd/workflow")
+    except (OSError, ValueError, subprocess.SubprocessError, sqlite3.Error) as e:
+        print(f"workflow go build: tick step failed ({e})", file=sys.stderr)
 
 
 def _config_trap(fn, *args):
@@ -6615,6 +6622,44 @@ def tick_mech_merge(con):
         subprocess.run(["systemd-run", "--user", "--collect", "--quiet", "--unit", MECH_UNIT, "--", *run], **kw)  # rc!=0: previous unit still active
     else:
         subprocess.Popen(run, start_new_session=True, **kw)
+
+
+WORKFLOW_BIN = "factory-workflow"  # DVDG-565: go/cmd/workflow, built by guard_tick, docs/workflow-engine.md
+
+
+def workflow_bin():
+    """The built workflow engine, or None when it is missing or its stamp is not the current go/ tree."""
+    lib = guard_lib_dir()
+    srchash = guard_srchash()
+    ok = os.access(lib / WORKFLOW_BIN, os.X_OK) and srchash and _read_line(lib / f"{WORKFLOW_BIN}.stamp") == srchash
+    return lib / WORKFLOW_BIN if ok else None
+
+
+def workflow_env():
+    """What the engine is told: who calls, the home, and the CLI it runs its factory steps with."""
+    return {"FACTORY_AGENT": actor(), "FACTORY_HOME": str(HOME), "FACTORY_CLI": str(Path(__file__).resolve().with_name("factory"))}
+
+
+def tick_workflow(con):
+    """Tick: with workflow_engine on and a current build, launch ONE detached `factory-workflow tick` (fixed unit name
+    under systemd; the engine's own lock covers the rest), as tick_mech_merge does. The tick never waits."""
+    if cfg(con, "workflow_engine") != "on" or not (b := workflow_bin()):
+        return
+    wenv = workflow_env()
+    kw = dict(stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env={**os.environ, **wenv})
+    if os.environ.get("INVOCATION_ID"):  # a transient unit gets the manager's environment, not ours: pass it explicitly
+        setenv = [f"--setenv={k}={v}" for k, v in wenv.items()]
+        subprocess.run(["systemd-run", "--user", "--collect", "--quiet", "--unit", WORKFLOW_BIN, *setenv, "--", str(b), "tick"], **kw)
+    else:
+        subprocess.Popen([str(b), "tick"], start_new_session=True, **kw)
+
+
+def cmd_wf(a):
+    """`factory wf …`: run the workflow engine with these arguments and exit with its code."""
+    b = workflow_bin()
+    if not b:
+        die("factory-workflow is not built; set workflow_engine on and wait for a tick, or run factory up", 2)
+    sys.exit(subprocess.run([str(b), *a.args], env={**os.environ, **workflow_env()}).returncode)
 
 
 def cmd_refresh(a):
@@ -11172,6 +11217,8 @@ def cmd_spawn(a):
         die("the evaluator is spawned only by the skilleval harness; run `factory skilleval try` instead", 3)
     con = db()
     caller = require_role(con, "director", "lead", "boss")
+    if a.resume and (caller != "owner" or a.role not in ("reviewer", "coder")):  # DVDG-565: the workflow engine, as the owner
+        die("--resume is for the owner (the workflow engine) and roles reviewer and coder only", 3)
     if a.role == "scout" and caller not in ("director", "owner"):
         die("only the director (or the owner) spawns a scout; the tick does it on schedule", 3)
     if a.role == "retro" and caller not in ("director", "owner"):
@@ -11212,7 +11259,7 @@ def cmd_spawn(a):
         if a.goal and goal_org(con, a.goal) not in (None, a.org):
             die(f"{a.goal} belongs to the {goal_org(con, a.goal)} org; move it first: factory goal org {a.goal} {a.org}", 2)
     spawn(con, a.role, a.goal, a.team, a.task, a.name, a.cwd, read_text(a.prompt), a.model, sandbox_optin=a.sandbox,
-          org=a.org, strict_name=bool(a.name), host_backend=a.host_backend)
+          org=a.org, strict_name=bool(a.name), host_backend=a.host_backend, resume=a.resume)
 
 
 def mark_read(con, msgs):
@@ -16181,6 +16228,12 @@ def cmd_tick(a, locked=False):
     except Exception as e:  # noqa: BLE001 — a bad candidate must never stop the tick
         event(con, "tick", "mech-merge", "mech-merge-tick-error", str(e)[:300])
     _pt_lap("mech_merge")
+
+    # 1c''''. workflow engine (DVDG-565, config workflow_engine off|on): one detached run, never blocks the tick
+    try:
+        tick_workflow(con)
+    except Exception as e:  # noqa: BLE001 — the engine must never stop the tick
+        event(con, "tick", "workflow", "workflow-error", str(e)[:300])
     
     # 1c'. CI result of a parked team's in_review PR -> mail to its lead, so 1d wakes it in this tick
     try:
@@ -19905,6 +19958,7 @@ def main():
     x.add_argument("--sandbox", action="store_true", help="run this one agent in the worker sandbox (reviewer, qa, coder)")
     x.add_argument("--host-backend", choices=["herdr", "hc"], default=None,
                    help="spawn on herdr TUI or hc for this agent only; config terminal_backend is unchanged")
+    x.add_argument("--resume", metavar="SESSION", help="owner only (the workflow engine), reviewer or coder: resume this session")
     x.set_defaults(fn=cmd_spawn)
     x = sp.add_parser("done", help="worker: finish, send summary to lead, get reaped")
     x.add_argument("--force", action="store_true", help="close even with unread decision/request messages")
@@ -19940,6 +19994,8 @@ def main():
     x.add_argument("--all", action="store_true", help="also the plain settings"); x.add_argument("--json", action="store_true"); x.set_defaults(fn=cmd_flags)
     x = sp.add_parser("mech-merge", help="one run of the mechanical merger (config mech_merge off|shadow|on); the tick launches it")
     x.add_argument("--task", help="only this task"); x.set_defaults(fn=cmd_mech_merge)
+    x = sp.add_parser("wf", help="the workflow engine (config workflow_engine; docs/workflow-engine.md): factory wf status|incidents|...")
+    x.add_argument("args", nargs=argparse.REMAINDER); x.set_defaults(fn=cmd_wf)
     x = sp.add_parser("gate", help="local merge gate: run the project's gate_cmd on a PR head or on main, show/list runs")
     x.add_argument("action", choices=["run", "show", "list"]); x.add_argument("task", nargs="?", help="run: task id; show: task id or run id")
     x.add_argument("--main", metavar="PROJECT", help="run: gate the verified main of this project instead of a PR")

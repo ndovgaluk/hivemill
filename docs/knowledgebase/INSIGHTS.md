@@ -24,6 +24,34 @@ Add entries with `/engineering-insights`
 
 ## What Doesn't Work
 
+### 2026-11-14 · mistake · A query on `workflow.db` inside an open transaction hangs the engine forever
+Symptom: `go test ./internal/workflow` never finished (moved to background after 300 s); the first `factory wf tsr status … in_review` test hung.
+Cause: `OpenState` sets `SetMaxOpenConns(1)`; `recordInReview` called `e.State.QueryRow` (via `previousHead`) while its own `tx` held the only connection.
+Rule: inside a `workflow.db` transaction use only `tx.*`; read everything else before `Begin`. Run engine tests with `go test -timeout 120s` so a hang fails fast.
+Evidence: go/internal/workflow/state.go `OpenState`; go/internal/workflow/commits.go `recordInReview` ("read before the transaction"); HM-35 comment
+Promoted: no
+
+### 2026-11-14 · mistake · `pgrep -f <pattern> | xargs kill` inside `wsl … bash -lc '…'` kills its own shell
+Symptom: the command ended with exit code 15 and printed nothing, twice.
+Cause: the pattern also matches the `bash -lc` command line that contains it, so the shell kills itself (inferred from the exit code 15 = SIGTERM).
+Rule: never `pgrep -f`/`pkill -f` with a pattern that appears in the same command; match the binary name only (`pgrep -x`), or kill from a separate call.
+Evidence: two tool calls of 2026-11-14 (HM-35)
+Promoted: no
+
+### 2026-11-14 · mistake · A tick step that launches its program with `systemd-run --user` does not pass the tick's environment
+Symptom: the HM-22 `tick_workflow` passed `env={…FACTORY_HOME…}` to `subprocess.run(["systemd-run", …])`; under systemd the engine would have started without `FACTORY_HOME` and the later `FACTORY_CLI`.
+Cause: a transient unit runs with the user manager's environment, not the environment of the `systemd-run` process (systemd behaviour, inferred, not reproduced on this box); `tick_mech_merge` gets away with it because `factory` defaults to `~/factory`.
+Rule: pass every variable a detached tick program needs as `--setenv=K=V` to `systemd-run`, and test it with a stub `systemd-run` on PATH plus `INVOCATION_ID` set.
+Evidence: bin/factory_cli.py `workflow_env`, `tick_workflow`; tests/test_mech_merge.py `test_under_systemd_the_engine_gets_its_environment_through_setenv`; HM-22 comment of 2026-11-14
+Promoted: no
+
+### 2026-11-14 · mistake · Treating every agent status but `live` as ended blocks an agent that is still starting or queued
+Symptom: the HM-24 engine marked a run `blocked` (builder "ended") whenever the builder's `agents.status` was not `live`.
+Cause: the factory's ended statuses are only `done`, `exited`, `lost`, `cancelled`; `starting` and queued agents are alive.
+Rule: decide "ended" with that exact list (as `coder_ci_resume_tick` does), and treat a missing agents row as "not started yet", never as ended.
+Evidence: bin/factory_cli.py `coder_ci_resume_tick` (`a.status NOT IN ('done','exited','lost','cancelled')`); go/internal/workflow/build.go `agentEnded`
+Promoted: no
+
 ### 2026-11-14 · mistake · Writing a file into the installed factory checkout raises an owner alert within a minute
 Symptom: "Needs you" showed an escalation "unknown writer rebuilt flow bundle in live ~/factory" during a running goal.
 Cause: the tick runs `git status` on the installed checkout each minute and mails the director any modified tracked path; the session had copied three bundle files there to show a UI change.
@@ -103,6 +131,27 @@ Promoted: no
 
 ## Tool & Library Notes
 
+### 2026-11-14 · context · The Python LSP (pyright) of a session started in `D:\` indexes the old Windows checkout, not the WSL clone
+Symptom: `workspaceSymbol tick_mech_merge` answered `/d:/_DEV/__Factories/hivemill/bin/factory_cli.py` line 6118, while the clone `hivemill-engine` had it at line 6606.
+Cause: the LSP workspace root is the session's start folder (`D:\_DEV\__Factories\hivemill`); `\\wsl$` files opened by path get diagnostics but no workspace index. The Go server answers "No packages found" for `\\wsl$` files.
+Rule: in such a session use LSP `documentSymbol` on the `\\wsl$` file, or get line numbers with grep inside WSL; never trust a `workspaceSymbol` line number for the clone. Start the session in the clone for full LSP.
+Evidence: LSP calls of 2026-11-14 (HM-22)
+Promoted: no
+
+### 2026-11-14 · context · `go test -run TestGolden ./internal/cli/ -args -update-golden` reports FAIL even when the update worked
+Symptom: the update run ended `FAIL factory/go/internal/cli` with "file … differs from the python3 regeneration" for each rewritten golden file.
+Cause: `TestGoldenRegenClean` compares within the same run, before the rewritten files settle (seen twice: HM-22, HM-25).
+Rule: after `-update-golden`, run `go test -count=1 ./internal/cli/` again without the flag; only that second run's result counts.
+Evidence: go/internal/cli/golden_regen_test.go:83; HM-22 and HM-25 comments
+Promoted: no
+
+### 2026-11-14 · context · A Go test dialing `127.0.0.1:1` in WSL waits for the timeout instead of getting "connection refused"
+Symptom: a client test with 3 tries and a 15 s timeout took 45 s.
+Cause: the port does not refuse in this WSL setup (not investigated further).
+Rule: for a refused connection, `net.Listen("tcp", "127.0.0.1:0")`, take its address, close it, then dial that address.
+Evidence: go/internal/tsr/tsr_test.go `TestErrorsRetriesAndRedirects`
+Promoted: no
+
 ### 2026-11-13 · context · Content inside React Flow's `<ViewportPortal>` gets `pointer-events: none`
 Symptom: arrow-label buttons rendered in the viewport portal could not be clicked in Chrome (`document.elementFromPoint` hit `.react-flow__pane`), while the Vitest click tests passed.
 Cause: the portal container and its children inherit `pointer-events: none`; jsdom does not apply pointer-events.
@@ -122,6 +171,10 @@ Promoted: no
 - 2026-11-13: `wsl … -- bash -lc "<command>"` quoting bit again — three times during DVDG-551 (grep patterns with `|` and quotes, `sed -n` ranges); the script form fixed each
 
 ## Session Notes
+
+- 2026-11-14: HM-35 review fixes → added: workflow.db query inside its transaction hangs; pgrep -f in bash -lc kills itself
+
+- 2026-11-14: DVDG-565 engine children HM-22..HM-27, HM-33 → added: systemd-run does not pass the tick's environment; agent ended statuses; pyright indexes the D: checkout; golden update reports FAIL; 127.0.0.1:1 hangs in WSL
 
 - 2026-11-13: worktree rules, /hm skill, chip size → added: shortening coder.md wording breaks P8; git MCP cannot reach the WSL clone; worktrees hold only committed files; toolbar button rule overrides component button rule
 

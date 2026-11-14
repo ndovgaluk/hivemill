@@ -9,7 +9,7 @@ from test_sandbox_spawn import prep
 
 PLUGINS_ROOT = REPO / "roles" / "plugins"
 PLUGINS = PLUGINS_ROOT / "staff-engineer"
-WITH_PLUGINS = {"coder", "director", "lead", "pm", "qa", "researcher", "reviewer", "staff-engineer"}
+WITH_PLUGINS = {"boss", "coder", "director", "lead", "pm", "qa", "researcher", "reviewer", "staff-engineer"}
 BAD_EXT = {".sh", ".py", ".js", ".ts", ".cmd", ".ps1", ".html"}
 BAD_NAMES = {"hooks", "hooks.json", ".mcp.json"}
 NAMED_WORKFLOW = REPO / "roles" / "workflows" / "multi-angle-review.js"
@@ -70,6 +70,7 @@ class VendoredPluginsStaticTests(unittest.TestCase):
     def test_every_child_is_a_plugin(self):
         kids = {t.name: sorted(p.name for p in t.iterdir() if p.is_dir()) for t in role_trees()}
         self.assertEqual(kids, {
+            "boss": ["factory-boss"],
             "coder": ["coder-skills"],
             "director": ["factory-director"],
             "lead": ["factory-lead"],

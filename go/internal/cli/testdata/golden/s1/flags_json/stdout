@@ -1119,6 +1119,25 @@
   "current": ""
  },
  {
+  "key": "workflow_engine",
+  "kind": "flag",
+  "default": "off",
+  "summary": "off | on: build the workflow engine and let the tick launch `factory-workflow tick`",
+  "goal": "",
+  "doc": "docs/workflow-engine.md",
+  "state": "off",
+  "current": "off"
+ },
+ {
+  "key": "workflow_reviewer_session",
+  "kind": "setting",
+  "default": "fresh",
+  "summary": "fresh | keep: story runs review each child with a new reviewer, or resume one reviewer per story",
+  "goal": "",
+  "doc": "docs/workflow-engine.md",
+  "current": "fresh"
+ },
+ {
   "key": "worktree_pool_max",
   "kind": "setting",
   "default": "2",

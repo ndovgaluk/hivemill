@@ -53,6 +53,8 @@ var DefaultConfig = []ConfigDefault{
 	{"state_push", "0"},
 	{"mech_merge", "off"},
 	{"mech_merge_retry_s", "600"},
+	{"workflow_engine", "off"},
+	{"workflow_reviewer_session", "fresh"},
 	{"risk_tiers", "off"},
 	{"public_text_repos", ""},
 	{"noreply_email", ""},

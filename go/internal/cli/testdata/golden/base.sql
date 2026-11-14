@@ -197,6 +197,8 @@ INSERT INTO "config"("key","value") VALUES('state_dump_interval_s','3600');
 INSERT INTO "config"("key","value") VALUES('state_push','0');
 INSERT INTO "config"("key","value") VALUES('mech_merge','off');
 INSERT INTO "config"("key","value") VALUES('mech_merge_retry_s','600');
+INSERT INTO "config"("key","value") VALUES('workflow_engine','off');
+INSERT INTO "config"("key","value") VALUES('workflow_reviewer_session','fresh');
 INSERT INTO "config"("key","value") VALUES('risk_tiers','off');
 INSERT INTO "config"("key","value") VALUES('public_text_repos','');
 INSERT INTO "config"("key","value") VALUES('noreply_email','');

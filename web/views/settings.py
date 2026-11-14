@@ -79,6 +79,14 @@ GROUPS = (
                 "On: the tick merges tier T0 to T2 PRs through the judge's own gate, with no judge agent. Shadow: "
                 "runs the gate and records what it would do. Needs risk tiers. Details: docs/mech-merge.md.",
                 Kind.CHOICE, None, None, OFF_SHADOW_ON),
+        Setting("workflow_engine", "Workflow engine",
+                "On: the factory builds the workflow engine and the tick runs it, for stories started with factory wf. "
+                "Off: nothing of it runs. Details: docs/workflow-engine.md.", Kind.CHOICE, None, None, OFF_ON),
+        Setting("workflow_reviewer_session", "Reviewer session in story runs",
+                "A fresh reviewer for each child: every child and every fix round is read by a new reviewer. Keep one "
+                "reviewer for the story: the same reviewer session is resumed for each child and remembers the earlier "
+                "ones. Applies from the next review. Details: docs/workflow-engine.md.", Kind.CHOICE, None, None,
+                (("fresh", "A fresh reviewer for each child"), ("keep", "Keep one reviewer for the story"))),
     )),
 )
 SETTINGS = {s.key: s for _, _, items in GROUPS for s in items}

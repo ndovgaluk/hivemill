@@ -1,16 +1,13 @@
-# Workflow: simple (draft)
+# Workflow `simple`
 
-For a task of size XS or S and complexity 1 or 2, with no children.
+For a small, clear piece of work: size XS or S and complexity 1 or 2. Typically one task with no children; the engine treats it as a story with one child.
 
-| Step | Who | What |
-|---|---|---|
-| 1 | code | preflight; pick this workflow, or take the owner's override |
-| 2 | architect | readiness check: is the task enriched? If not (for example the owner gave the boss one sentence), read the code and write the task in Taskosaur: what to change, the files and places to change, acceptance criteria, how to verify. Ask the owner through the boss only for what the request leaves undecided and the code cannot answer. No design document, no split |
-| 3 | builder | implement, test, run the checks, commit with the task key, comment, move the task to In Review |
-| 4 | reviewer | review and run the tests in one pass; record the verdict |
-| 5 | code | "changes requested": task back to In Progress, findings to the builder, then step 4 again with the same reviewer session |
-| 6 | code | passed and checks green: merge queue, merge, Done in Taskosaur |
+## What runs today
 
-Limits: 5 fix rounds. After 2 rounds on the same kind of finding the architect is called before the third.
+The run in [README.md](README.md): one builder builds the task, one reviewer checks its commits, the builder fixes findings (at most 5 rounds), one pull request, the factory's final checks and merge, then Done in the task manager.
 
-No separate QA and no audit.
+## What is planned to differ
+
+- **Architect:** none. A task that is not prepared is refused at the start; it is never enriched on the fly.
+- **Final review:** for this workflow the per-child review and the final pull request review look at the same single change. The final review may later be reduced to the tests and the merge checks, once real runs show it finds nothing the first review missed. Not built; today both run.
+- **QA:** no separate QA step beyond what the factory's final gate already runs.

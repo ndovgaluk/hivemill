@@ -1,0 +1,8 @@
+{
+  "name": "story-run",
+  "description": "Text-only rules for the builder of a story run started by the workflow engine (factory wf start)",
+  "version": "1.0.0",
+  "author": {
+    "name": "factory"
+  }
+}
