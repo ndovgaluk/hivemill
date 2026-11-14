@@ -238,6 +238,7 @@ summary { cursor: pointer; min-height: var(--tap); display: list-item; list-styl
 .navgoals { position: relative; }
 .navgoals > .nav-item { padding-right: 40px; }
 .navgroup .navsub { margin: 2px 0 6px 22px; }
+.navgroup .navsub--done { margin-top: 0; }   /* HM-36: the done list sits right under the "+" */
 .navgoal a { display: block; padding: 4px 8px; border-radius: var(--r-sm); color: var(--text-2); font: 400 12px/16px var(--font); }
 .navgoal a:hover { background: var(--fill); text-decoration: none; }
 .navgoal.is-current a { background: var(--info-bg); color: var(--info-fg); }
