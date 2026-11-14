@@ -86,7 +86,7 @@ export function Timeline({ data, onOpenInstructions = noop, expand = null }: {
           <span><span className={`${styles.key} ${styles.wait}`} /> queued</span>
           <span><span className={`${styles.key} ${styles.fail}`} /> ended in FAIL</span>
           <span><span className={`${styles.mk}`} /> message</span>
-          <span><span className={`${styles.mk} ${styles.mk_status}`} /> status</span>
+          <span><span className={`${styles.mk} ${styles.mk_status}`} /> action</span>
           <span><span className={`${styles.mk} ${styles.mk_verdict}`}>✓</span> verdict</span>
         </span>
       </div>
