@@ -66,6 +66,16 @@ stories applies. The texts of each workflow are in [workflows/README.md](../work
 | problems | `factory wf incidents --goal <goal> --json` | empty while all goes well; each rejection, failure, warning and escalation with its full detail |
 | the record | the story in Taskosaur | each child's builder and reviewer comments, the "reviewed by agent" mark, and after the merge its commits and Done |
 
+### First run checklist
+
+For the first run on a factory, use a small prepared story and check these five things in order.
+
+1. The engine is built: `factory wf version` prints a version.
+2. The run started: `factory wf status --goal GOAL` shows the run and one line per child.
+3. Each child was reviewed: its line shows a review result before the next child's review starts.
+4. One pull request was opened for the whole story, and no pull request per child.
+5. After the merge the run is done, and the story and every child are Done in the task manager, each with its commits linked.
+
 ## The whole run
 
 1. The boss runs `factory wf start --story KEY` for a prepared story (see "Starting a run"): one factory goal, one

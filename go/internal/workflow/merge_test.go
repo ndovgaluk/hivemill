@@ -241,3 +241,23 @@ func TestKeyMatchingIsWholeKey(t *testing.T) {
 		}
 	}
 }
+
+func TestFirstDonePicksTheLowestPositionDoneStatus(t *testing.T) {
+	todo := tsr.Status{ID: "s-todo", Category: "TODO", Position: 1}
+	for name, c := range map[string]struct {
+		in   []tsr.Status
+		want string
+	}{
+		"no statuses":      {nil, ""},
+		"no done category": {[]tsr.Status{todo}, ""},
+		"one done":         {[]tsr.Status{todo, {ID: "s-done", Category: tsr.CategoryDone, Position: 5}}, "s-done"},
+		"two done, higher position first": {[]tsr.Status{
+			{ID: "s-late", Category: tsr.CategoryDone, Position: 7},
+			{ID: "s-early", Category: tsr.CategoryDone, Position: 3},
+		}, "s-early"},
+	} {
+		if got := firstDone(c.in); got != c.want {
+			t.Errorf("%s: firstDone = %q, want %q", name, got, c.want)
+		}
+	}
+}
