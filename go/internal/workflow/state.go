@@ -107,7 +107,20 @@ const (
 	CauseClosedWithoutMerge     Cause = "closed-without-merge"     // the run's task is done with no merged event
 	CauseGoalCancelled          Cause = "goal-cancelled"           // the run's goal is cancelled in the factory: the run is closed
 	CausePendingFailed          Cause = "pending-failed"           // a queued comment, mark or mail failed; retried next tick
+	CauseCILocalNotBuilt        Cause = "ci-local-not-built"       // a run in CI mode local reached its end before HM-54 exists
 )
+
+// CI modes of a run (HM-67): what clears the run's change before it reaches main. Chosen at start (`--ci`) or from
+// config workflow_ci, stored on the run, never changed after.
+const (
+	CIGithub  = "github" // one pull request; GitHub's checks and the judge clear it (the engine's finish so far)
+	CILocal   = "local"  // the affected tests on this machine, then the engine merges into main itself (HM-54)
+	cfgCI     = "workflow_ci"
+	defaultCI = CIGithub
+)
+
+// CIModes lists the accepted modes, for validating --ci and the config.
+var CIModes = []string{CIGithub, CILocal}
 
 // MaxSpawnRetries is how many refusals in a row for the same agent name are retried before the engine acts: a spawn
 // refusal often clears by itself (the resource gate, an old pane not yet confirmed closed).
@@ -116,13 +129,13 @@ const MaxSpawnRetries = 5
 // StaleMergingAfter is how long a merging run may sit with no agent, no open PR and no change before the boss is told.
 const StaleMergingAfter = 2 * time.Hour
 
-// UserVersion is the PRAGMA user_version of workflow.db. The schema below is its shape for the first version (runs,
-// run_stories, children, incidents; child_commits, pending and counters added by HM-35 before any release).
-const UserVersion = 1
+// UserVersion is the PRAGMA user_version of workflow.db. Version 1: runs, run_stories, children, incidents
+// (child_commits, pending and counters added by HM-35 before any release). Version 2 (HM-67): runs.ci.
+const UserVersion = 2
 
 const schema = `
 CREATE TABLE runs(goal_id TEXT PRIMARY KEY, story_key TEXT NOT NULL, workflow TEXT NOT NULL, task_id TEXT,
-  state TEXT NOT NULL, created TEXT NOT NULL, updated TEXT NOT NULL);
+  state TEXT NOT NULL, created TEXT NOT NULL, updated TEXT NOT NULL, ci TEXT NOT NULL DEFAULT 'github');
 CREATE TABLE run_stories(goal_id TEXT NOT NULL, story_key TEXT NOT NULL, position INTEGER NOT NULL,
   PRIMARY KEY(goal_id, story_key));
 CREATE TABLE children(goal_id TEXT NOT NULL, story_key TEXT NOT NULL, child_key TEXT NOT NULL, position INTEGER NOT NULL,
@@ -144,8 +157,9 @@ var ErrStateVersion = errors.New("workflow: workflow.db has an unexpected user_v
 // StatePath is <home>/db/workflow.db.
 func StatePath(home string) string { return filepath.Join(home, "db", "workflow.db") }
 
-// OpenState opens workflow.db, creating it (mode 0600, schema, user_version 1) when missing, with the pragmas of
-// factorydb.Open. A database of another user_version, or an unversioned one that already holds tables, is refused.
+// OpenState opens workflow.db, creating it (mode 0600, schema, UserVersion) when missing, with the pragmas of
+// factorydb.Open; a version 1 file is migrated to 2. Any other user_version, or an unversioned file that already holds
+// tables, is refused.
 func OpenState(path string) (*sql.DB, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return nil, err
@@ -193,6 +207,13 @@ func initState(d *sql.DB) (err error) {
 	switch {
 	case v == 0 && tables == 0:
 		if _, err = d.Exec(schema); err != nil {
+			return err
+		}
+		if _, err = d.Exec(fmt.Sprintf("PRAGMA user_version = %d", UserVersion)); err != nil {
+			return err
+		}
+	case v == 1: // HM-67: runs started before the CI mode existed went through GitHub
+		if _, err = d.Exec("ALTER TABLE runs ADD COLUMN ci TEXT NOT NULL DEFAULT 'github'"); err != nil {
 			return err
 		}
 		if _, err = d.Exec(fmt.Sprintf("PRAGMA user_version = %d", UserVersion)); err != nil {

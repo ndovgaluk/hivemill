@@ -72,7 +72,7 @@ func runMain(cmd string, rest []string, env identity.Env, stdout, stderr io.Writ
 	}
 	fs := flag.NewFlagSet("factory wf "+cmd, flag.ContinueOnError)
 	fs.SetOutput(stderr)
-	var workflow, project, reason, notes, goal *string
+	var workflow, project, reason, notes, goal, ci *string
 	var stories keyList
 	var freshBuilder *bool
 	var pos []string
@@ -82,6 +82,7 @@ func runMain(cmd string, rest []string, env identity.Env, stdout, stderr io.Writ
 		fs.Var(&stories, "story", "Taskosaur key of a story to build; repeat it for a batch, in the order of work")
 		workflow = fs.String("workflow", "", "simple, medium or huge; default: chosen from size and complexity")
 		project = fs.String("project", "", "factory project of the goal")
+		ci = fs.String("ci", "", "github or local; default: config workflow_ci")
 	case "resume":
 		goal = fs.String("goal", "", "the run's goal")
 		freshBuilder = fs.Bool("fresh-builder", false, "start a new builder session instead of resuming the old one")
@@ -103,6 +104,9 @@ func runMain(cmd string, rest []string, env identity.Env, stdout, stderr io.Writ
 	}
 	if workflow != nil && *workflow != "" && !contains(Workflows, *workflow) {
 		return fail(exitUsage, fmt.Errorf("--workflow must be one of %v", Workflows))
+	}
+	if ci != nil && *ci != "" && !contains(CIModes, *ci) {
+		return fail(exitUsage, fmt.Errorf("--ci must be one of %v", CIModes))
 	}
 	var who string
 	var code int
@@ -143,6 +147,7 @@ func runMain(cmd string, rest []string, env identity.Env, stdout, stderr io.Writ
 		if err != nil {
 			return fail(exitErr, err)
 		}
+		p.ci = e.ciMode(*ci)
 		if _, err := e.start(p, stdout); err != nil {
 			return fail(exitErr, err)
 		}
@@ -223,9 +228,7 @@ func (e *Engine) runOfAgent(who, role string) (Run, error) {
 	if err != nil || task == "" {
 		return Run{}, fmt.Errorf("no story run has %s as its %s", who, role)
 	}
-	var r Run
-	err = e.State.QueryRow(`SELECT goal_id, story_key, workflow, COALESCE(task_id, ''), state FROM runs WHERE task_id=?`,
-		task).Scan(&r.GoalID, &r.StoryKey, &r.Workflow, &r.TaskID, &r.State)
+	r, err := scanRun(e.State.QueryRow(`SELECT `+runCols+` FROM runs WHERE task_id=?`, task))
 	if err != nil {
 		return Run{}, fmt.Errorf("no story run has %s as its %s", who, role)
 	}

@@ -376,9 +376,7 @@ func short(sha string) string {
 // built again, and the counters of early ends start over. --fresh-builder starts a new builder session told what is
 // built; otherwise an ended builder is resumed by the next tick.
 func (e *Engine) resume(goal string, freshBuilder bool, who string, w io.Writer) error {
-	var r Run
-	err := e.State.QueryRow(`SELECT goal_id, story_key, workflow, COALESCE(task_id, ''), state FROM runs WHERE goal_id=?`,
-		goal).Scan(&r.GoalID, &r.StoryKey, &r.Workflow, &r.TaskID, &r.State)
+	r, err := scanRun(e.State.QueryRow(`SELECT `+runCols+` FROM runs WHERE goal_id=?`, goal))
 	if err != nil {
 		return usageError{fmt.Sprintf("no run %s", goal)}
 	}

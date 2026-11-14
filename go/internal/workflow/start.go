@@ -157,6 +157,7 @@ type startPlan struct {
 	workflow string
 	chosen   bool // the workflow came from Choose, not --workflow
 	project  string
+	ci       string // CIGithub or CILocal: --ci, else config workflow_ci (HM-67)
 }
 
 type planChild struct {
@@ -353,6 +354,9 @@ func (e *Engine) start(p *startPlan, w io.Writer) (string, error) {
 	if err := e.Env.EventAs(e.Factory, ActorEngine, EventEntity, goal, origin, p.workflow); err != nil {
 		return goal, err
 	}
+	if err := e.Env.EventAs(e.Factory, ActorEngine, EventEntity, goal, eventCIMode, p.runCI()); err != nil {
+		return goal, err
+	}
 	fail := func(step string, cause Cause, err error) (string, error) {
 		detail := map[string]any{"step": step, "error": err.Error(), "stories": keys}
 		var ce *CmdError
@@ -409,8 +413,8 @@ func (e *Engine) insertRun(goal string, keys []string, p *startPlan, now string)
 		return err
 	}
 	defer tx.Rollback()
-	if _, err := tx.Exec(`INSERT INTO runs(goal_id, story_key, workflow, state, created, updated) VALUES(?,?,?,?,?,?)`,
-		goal, keys[0], p.workflow, string(RunStarting), now, now); err != nil {
+	if _, err := tx.Exec(`INSERT INTO runs(goal_id, story_key, workflow, state, created, updated, ci) VALUES(?,?,?,?,?,?,?)`,
+		goal, keys[0], p.workflow, string(RunStarting), now, now, p.runCI()); err != nil {
 		return err
 	}
 	for i, k := range keys {

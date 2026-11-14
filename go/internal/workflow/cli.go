@@ -21,7 +21,7 @@ import (
 const Bin = "factory-workflow"
 
 const usage = "usage: factory wf {version | status [--goal ID] | tick | incidents [--goal ID] [--kind KIND] [--json] | " +
-	"start --story KEY [--story KEY ...] [--workflow simple|medium|huge] [--project ID] | resume --goal ID [--fresh-builder] | " +
+	"start --story KEY [--story KEY ...] [--workflow simple|medium|huge] [--project ID] [--ci github|local] | resume --goal ID [--fresh-builder] | " +
 	"blocked CHILD --reason TEXT | built | review CHILD pass|changes --notes FILE | tsr ...}"
 
 // Exit codes, as the Python CLI's die().
@@ -90,7 +90,7 @@ func Main(args []string, env identity.Env, stdout, stderr io.Writer) int {
 			if o := se.workflowOrigin(r.GoalID); o != "" {
 				wf += " (" + o + ")"
 			}
-			fmt.Fprintf(stdout, "%s %s %s %s\n", r.GoalID, r.StoryKey, wf, r.State)
+			fmt.Fprintf(stdout, "%s %s %s %s ci=%s\n", r.GoalID, r.StoryKey, wf, r.State, r.CI)
 			if contains([]string{string(RunMerging), string(RunLinking), string(RunReporting), string(RunClosing),
 				string(RunAnnouncing), string(RunDone)}, string(r.State)) {
 				if pr := prURL(se.Factory, r.TaskID); pr != "" {

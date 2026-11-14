@@ -87,6 +87,11 @@ GROUPS = (
                 "reviewer for the story: the same reviewer session is resumed for each child and remembers the earlier "
                 "ones. Applies from the next review. Details: docs/workflow-engine.md.", Kind.CHOICE, None, None,
                 (("fresh", "A fresh reviewer for each child"), ("keep", "Keep one reviewer for the story"))),
+        Setting("workflow_ci", "CI for new story runs",
+                "GitHub: the run opens one pull request, GitHub's checks and the judge clear it. Local: only the tests "
+                "the change can affect run on this machine, then the run merges into main itself (HM-54). Applies to "
+                "runs started after the change; factory wf start --ci overrides it. Details: docs/workflow-engine.md.",
+                Kind.CHOICE, None, None, (("github", "GitHub"), ("local", "Local (affected tests)"))),
     )),
 )
 SETTINGS = {s.key: s for _, _, items in GROUPS for s in items}

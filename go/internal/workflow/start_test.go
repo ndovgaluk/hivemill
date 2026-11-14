@@ -327,7 +327,7 @@ func TestStartCreatesGoalTaskPluginChildrenAndBuilder(t *testing.T) {
 	if st, err := os.Stat(skill); err != nil || st.Mode().Perm() != 0o644 {
 		t.Fatalf("skill: %v %v", st, err)
 	}
-	if code, out, _ := run(r.env, "status"); code != 0 || out != "G-001 ST-1 huge (chosen) building\n" {
+	if code, out, _ := run(r.env, "status"); code != 0 || out != "G-001 ST-1 huge (chosen) building ci=github\n" {
 		t.Fatalf("status %q", out)
 	}
 	st, _ := OpenState(StatePath(r.home))
@@ -406,7 +406,7 @@ func TestSpawnFailureLeavesAFailedRunAndBlocksASecondStart(t *testing.T) {
 	if code != exitErr || !strings.Contains(errs, "failed at spawn") {
 		t.Fatalf("start: %d %q", code, errs)
 	}
-	if _, out, _ := run(r.env, "status"); out != "G-001 ST-1 huge (chosen) failed\n" {
+	if _, out, _ := run(r.env, "status"); out != "G-001 ST-1 huge (chosen) failed ci=github\n" {
 		t.Fatalf("status %q", out)
 	}
 	_, out, _ := run(r.env, "incidents", "--json")
@@ -451,7 +451,7 @@ func TestBuilderEndedWithoutSessionBlocksTheRunOnce(t *testing.T) {
 	r.fdb.Exec("UPDATE agents SET status='done', session_id=NULL WHERE name='coder-t-0001'")
 	run(r.env, "tick")
 	run(r.env, "tick")
-	if _, out, _ := run(r.env, "status"); out != "G-001 ST-1 huge (chosen) blocked\n" {
+	if _, out, _ := run(r.env, "status"); out != "G-001 ST-1 huge (chosen) blocked ci=github\n" {
 		t.Fatalf("status %q", out)
 	}
 	mails := 0
@@ -545,7 +545,7 @@ func TestACancelledGoalClosesTheRunAndTheStoryCanStartAgain(t *testing.T) {
 			t.Fatalf("tick: %d %q", code, errs)
 		}
 	}
-	if _, out, _ := run(r.env, "status"); out != "G-001 ST-1 huge (chosen) cancelled\n" {
+	if _, out, _ := run(r.env, "status"); out != "G-001 ST-1 huge (chosen) cancelled ci=github\n" {
 		t.Fatalf("status %q", out)
 	}
 	if len(r.factory.calls) != n {

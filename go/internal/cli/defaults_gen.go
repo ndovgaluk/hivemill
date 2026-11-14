@@ -57,6 +57,7 @@ var DefaultConfig = []ConfigDefault{
 	{"mech_merge_retry_s", "600"},
 	{"workflow_engine", "off"},
 	{"workflow_reviewer_session", "fresh"},
+	{"workflow_ci", "github"},
 	{"risk_tiers", "off"},
 	{"public_text_repos", ""},
 	{"noreply_email", ""},

@@ -42,6 +42,18 @@ func (e *Engine) deps() (*Deps, error) {
 type Run struct {
 	GoalID, StoryKey, Workflow, TaskID string
 	State                              RunState
+	CI                                 string // CIGithub or CILocal (HM-67)
+}
+
+// runCols is the select list every Run is read with, in the order scanRun expects.
+const runCols = "goal_id, story_key, workflow, COALESCE(task_id, ''), state, ci"
+
+type scanner interface{ Scan(dest ...any) error }
+
+func scanRun(s scanner) (Run, error) {
+	var r Run
+	err := s.Scan(&r.GoalID, &r.StoryKey, &r.Workflow, &r.TaskID, &r.State, &r.CI)
+	return r, err
 }
 
 // Incident is one rejection, failure, warning or escalation, with everything known at that moment in Detail.
@@ -99,9 +111,12 @@ var advance = func(e *Engine, r Run) error {
 	switch r.State {
 	case RunBuilding:
 		return e.advanceBuilding(r)
-	case RunBuilt: // late fixes still run; when every child is reviewed the builder opens the PR
+	case RunBuilt: // late fixes still run; when every child is reviewed the builder opens the PR (CI mode github)
 		if err := e.advanceBuilding(r); err != nil {
 			return err
+		}
+		if r.CI == CILocal {
+			return e.finishLocal(r)
 		}
 		return e.openPR(r)
 	case RunMerging:
@@ -114,16 +129,15 @@ var advance = func(e *Engine, r Run) error {
 
 // Runs lists the runs, oldest first; goal "" means all.
 func (e *Engine) Runs(goal string) ([]Run, error) {
-	rows, err := e.State.Query(`SELECT goal_id, story_key, workflow, COALESCE(task_id, ''), state FROM runs
-		WHERE ?1 = '' OR goal_id = ?1 ORDER BY created, goal_id`, goal)
+	rows, err := e.State.Query(`SELECT `+runCols+` FROM runs WHERE ?1 = '' OR goal_id = ?1 ORDER BY created, goal_id`, goal)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 	var out []Run
 	for rows.Next() {
-		var r Run
-		if err := rows.Scan(&r.GoalID, &r.StoryKey, &r.Workflow, &r.TaskID, &r.State); err != nil {
+		r, err := scanRun(rows)
+		if err != nil {
 			return nil, err
 		}
 		out = append(out, r)

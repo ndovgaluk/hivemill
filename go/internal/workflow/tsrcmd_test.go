@@ -48,7 +48,7 @@ func newTsrRig(t *testing.T) *tsrRig {
 		t.Fatal(err)
 	}
 	for _, q := range []string{
-		"INSERT INTO runs VALUES('G-1', 'ST-9', 'simple', 'T-1', 'building', 'x', 'x')",
+		"INSERT INTO runs(goal_id, story_key, workflow, task_id, state, created, updated) VALUES('G-1', 'ST-9', 'simple', 'T-1', 'building', 'x', 'x')",
 		"INSERT INTO run_stories VALUES('G-1', 'ST-9', 1)",
 		"INSERT INTO children(goal_id, story_key, child_key, position, state, updated) VALUES('G-1', 'ST-9', 'HM-1', 1, 'todo', 'x')",
 	} {

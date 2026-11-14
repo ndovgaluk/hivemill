@@ -29,7 +29,8 @@ full CI run, final review and QA happen once per story (or batch) instead of onc
    `factory up`) builds `factory-workflow`; `factory wf version` answers once it is built.
 2. Taskosaur access: one agent user with a personal access token, in the two files of "Taskosaur access" below
    (`~/.config/factory/tsr-url`, `~/.config/factory/tsr-token`, mode 0600).
-3. Optional: `factory config workflow_reviewer_session keep` to keep one reviewer per story (default `fresh`).
+3. Optional: `factory config workflow_reviewer_session keep` to keep one reviewer per story (default `fresh`), and
+   `factory config workflow_ci local` to make local the default CI mode of new runs (default `github`; see "CI mode").
 4. The end of a run is the factory's own pull request path, so the switches that drive it apply as they are:
    `review_autospawn` (reviewer and QA start when the pull request opens), `coder_ci_handoff` (the builder does not wait
    for CI; a red head restarts it), `risk_tiers` and `mech_merge` (merging without a judge agent). With them off, the pull
@@ -140,11 +141,30 @@ exit 2, "factory-workflow is not built; set workflow_engine on and wait for a ti
 | `factory wf tick` | advances every run once; the tick calls it, and only the owner may (exit 3 for an agent). A second run while one holds `run/workflow.lock` exits 0 at once |
 | `factory wf incidents [--goal ID] [--kind KIND] [--json]` | lists incidents, newest first; `--json` prints the full detail. Owner and boss only (exit 3 otherwise) |
 | `factory wf tsr …` | Taskosaur reads and the few writes agents may make; see "Taskosaur access" |
-| `factory wf start --story KEY [--story KEY …] [--workflow simple\|medium\|huge] [--project ID]` | starts a story run (boss or owner); several `--story` make a batch; see "Starting a run" and "Batches" |
+| `factory wf start --story KEY [--story KEY …] [--workflow simple\|medium\|huge] [--project ID] [--ci github\|local]` | starts a story run (boss or owner); several `--story` make a batch; `--ci` picks the run's CI mode; see "Starting a run", "Batches" and "CI mode" |
 | `factory wf blocked CHILD --reason TEXT` | the run's builder stops on a child it cannot build as written: child and run `blocked`, an escalation incident, a decision mail to the boss |
 | `factory wf built` | the run's builder reports every child In Review: run `built` |
 | `factory wf review CHILD pass\|changes --notes FILE` | the child's reviewer records its result; see "Review per child" |
 | `factory wf resume --goal ID [--fresh-builder]` | restarts a blocked run (boss or owner) |
+
+## CI mode
+
+Each run has a CI mode: what clears its change before it reaches `main` (HM-67, owner decisions of 2026-11-15).
+
+| Mode | The end of the run |
+|---|---|
+| `github` (default) | the builder opens one pull request; reviewer and QA, GitHub's checks and the judge (or the mechanical merger) clear it, as described in "The whole run" |
+| `local` | only the tests the run's diff can affect (`ci/affected.py`) run on this machine; when they pass, the engine merges the branch into `main` and pushes, with no pull request. **Built by HM-54; until then a `local` run stops `blocked` with one escalation (`ci-local-not-built`) once every child is reviewed, and never falls back to a pull request** |
+
+- The mode is chosen at start: `factory wf start … --ci local`, else config `workflow_ci` (Settings page, "CI for new story
+  runs"), else `github`. An unknown config value also means `github`, so a typo never skips GitHub's checks; an unknown
+  `--ci` is a usage error before anything is made.
+- The run keeps the mode it started with: changing `workflow_ci` later only affects new runs. It is stored in
+  `runs.ci`, shown at the end of each `factory wf status` line (`… building ci=local`), and recorded as the factory event
+  `ci-mode` on the run's goal.
+- Why `local` runs only the affected tests: the full suite takes 30 min at best on the owner's machine (12 shards),
+  slower than GitHub's ~22 min (HM-51, `docs/local-gate.md`, "This factory"). The full suite still runs on GitHub after
+  the push to `main`; a red `main` is caught by the factory's red-main check.
 
 ## Starting a run
 
@@ -302,12 +322,12 @@ only the engine sets them (the client's `AgentCheck`, `SetStatus` and `LinkCommi
 
 ## State
 
-The engine keeps its own SQLite file, `$FACTORY_HOME/db/workflow.db` (mode 0600, `PRAGMA user_version` 1), created on
-first use. It only reads `factory.db`; its one write there is an `events` row. The factory's schema is not changed.
+The engine keeps its own SQLite file, `$FACTORY_HOME/db/workflow.db` (mode 0600, `PRAGMA user_version` 2), created on
+first use. A version 1 file is migrated on open: `runs` gets the column `ci`, and its existing runs read as `github`. It only reads `factory.db`; its one write there is an `events` row. The factory's schema is not changed.
 
 | Table | Holds |
 |---|---|
-| `runs` | one row per run: goal id (key), first story, workflow name, factory task, state, times |
+| `runs` | one row per run: goal id (key), first story, workflow name, factory task, state, times, CI mode (`ci`) |
 | `run_stories` | the stories of a run, in order (one row for a single-story run) |
 | `children` | the Taskosaur children of the run's stories, in order across the run, with state, fix rounds and commit range |
 | `incidents` | every rejection, failure, warning and escalation, with a structured cause and a JSON detail |
@@ -389,6 +409,6 @@ Everything above is new files except these places in `bin/factory_cli.py`. After
 4. The `wf` subcommand (`cmd_wf`).
 5. `cmd_spawn`: `--resume SESSION` (owner only, reviewer or coder), passed to `spawn(resume=…)`.
 
-The keys `workflow_engine` and `workflow_reviewer_session` are the only additions to `DEFAULT_CONFIG`. A new key also
+The keys `workflow_engine`, `workflow_reviewer_session` and `workflow_ci` (HM-67) are the only additions to `DEFAULT_CONFIG`. A new key also
 needs `bin/flags.json`, `go generate ./internal/cli` (rewrites `defaults_gen.go`) and the Go golden files
 (`go test -count=1 -run TestGolden ./internal/cli/ -args -update-golden`, run from `go/`).

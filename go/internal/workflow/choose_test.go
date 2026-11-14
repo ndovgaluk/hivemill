@@ -42,7 +42,7 @@ func TestStartChoosesOrTakesTheGivenWorkflow(t *testing.T) {
 	if code, _, errs := run(r.env, "start", "--story", "ONE"); code != 0 {
 		t.Fatal(errs)
 	}
-	if _, out, _ := run(r.env, "status"); out != "G-001 ONE medium (chosen) building\n" {
+	if _, out, _ := run(r.env, "status"); out != "G-001 ONE medium (chosen) building ci=github\n" {
 		t.Fatalf("chosen: %q", out)
 	}
 
@@ -53,7 +53,7 @@ func TestStartChoosesOrTakesTheGivenWorkflow(t *testing.T) {
 	if code, _, errs := run(r2.env, "start", "--story", "ST-1", "--workflow", "simple"); code != 0 {
 		t.Fatal(errs)
 	}
-	if _, out, _ := run(r2.env, "status"); out != "G-001 ST-1 simple (given) building\n" {
+	if _, out, _ := run(r2.env, "status"); out != "G-001 ST-1 simple (given) building ci=github\n" {
 		t.Fatalf("given: %q", out)
 	}
 }

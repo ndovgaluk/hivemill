@@ -44,7 +44,7 @@ func addRun(t *testing.T, home, goal, created string) {
 		t.Fatal(err)
 	}
 	defer st.Close()
-	if _, err := st.Exec(`INSERT INTO runs VALUES(?, 'DVDG-1', 'huge', NULL, ?, ?, ?)`, goal, string(RunNew), created, created); err != nil {
+	if _, err := st.Exec(`INSERT INTO runs(goal_id, story_key, workflow, task_id, state, created, updated) VALUES(?, 'DVDG-1', 'huge', NULL, ?, ?, ?)`, goal, string(RunNew), created, created); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -114,7 +114,7 @@ func TestStatusFreshHomeAndFactoryDBUntouched(t *testing.T) {
 		t.Fatal("factory.db changed")
 	}
 	addRun(t, home, "G-002", "2026-11-14T10:00:00+01:00")
-	if code, out, _ := run(env, "status", "--goal", "G-002"); code != 0 || out != "G-002 DVDG-1 huge new\n" {
+	if code, out, _ := run(env, "status", "--goal", "G-002"); code != 0 || out != "G-002 DVDG-1 huge new ci=github\n" {
 		t.Fatalf("status --goal: %d %q", code, out)
 	}
 }

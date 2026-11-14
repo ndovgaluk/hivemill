@@ -183,7 +183,7 @@ func TestTheFifthChangesStopsTheRunUntilResume(t *testing.T) {
 		}
 		r.fdb.Exec("UPDATE agents SET status='done' WHERE name=?", name)
 	}
-	if _, out, _ := run(r.env, "status"); out != "G-001 ST-1 huge (chosen) blocked\n" {
+	if _, out, _ := run(r.env, "status"); out != "G-001 ST-1 huge (chosen) blocked ci=github\n" {
 		t.Fatalf("status %q", out)
 	}
 	boss := r.callsLike("msg boss")
@@ -234,7 +234,7 @@ func TestASilentReviewerIsRetriedOnceThenTheRunStops(t *testing.T) {
 	}
 	r.fdb.Exec("UPDATE agents SET status='exited' WHERE name='review-c-1-r1'")
 	r.tick(t)
-	if _, out, _ := run(r.env, "status"); out != "G-001 ST-1 huge (chosen) blocked\n" || len(r.callsLike("msg boss")) != 1 {
+	if _, out, _ := run(r.env, "status"); out != "G-001 ST-1 huge (chosen) blocked ci=github\n" || len(r.callsLike("msg boss")) != 1 {
 		t.Fatalf("status %q, boss %v", out, r.callsLike("msg boss"))
 	}
 }
@@ -292,13 +292,13 @@ func TestAnEndedBuilderIsResumedThreeTimesThenTheRunStops(t *testing.T) {
 		if !strings.Contains(body, "resume "+string(rune('0'+i))+" of 3") || !strings.Contains(body, "child C-1 is in work") {
 			t.Fatalf("resume mail %q", body)
 		}
-		if _, out, _ := run(r.env, "status"); out != "G-001 ST-1 huge (chosen) building\n" {
+		if _, out, _ := run(r.env, "status"); out != "G-001 ST-1 huge (chosen) building ci=github\n" {
 			t.Fatalf("status %q", out)
 		}
 	}
 	r.fdb.Exec("UPDATE agents SET status='done' WHERE name='coder-t-0001'")
 	r.tick(t)
-	if _, out, _ := run(r.env, "status"); out != "G-001 ST-1 huge (chosen) blocked\n" {
+	if _, out, _ := run(r.env, "status"); out != "G-001 ST-1 huge (chosen) blocked ci=github\n" {
 		t.Fatalf("status %q", out)
 	}
 	if _, out, _ := run(r.env, "incidents", "--kind", "escalation"); !strings.Contains(out, "builder-resume-limit") {
