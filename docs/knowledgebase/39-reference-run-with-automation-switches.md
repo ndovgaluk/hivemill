@@ -192,3 +192,19 @@ Yes, by design of the diagram (DVDG-551): the "Review gate" box stands for the r
 ## Q: Can we track how long the waiting took? (2026-11-14 00:40)
 
 Yes, built in TSR task HM-13. The Waiting box now carries two figures: the wait going on now (`current_s`, shown while the box is active) and every wait so far (`work_s`: all the time since the first agent session of the goal in which no agent of the goal was running; shown on the box when it is idle, in its tooltip, and in the "Where the time went" list as "Waiting"). At 00:35 for G-002 the total was 1341 s (22 min 21 s) out of about 72 minutes elapsed. Limits: it does not say what each past wait was for, and a session whose end was never recorded counts as zero length, which overstates waiting.
+
+## Q: The factory is running on a separate repo, so merging into main will not affect G-002?
+
+**Corrected 2026-11-14 17:16, the same day: the second point below was wrong.** The installed factory updates itself. `git reflog` in `~/factory` shows `merge refs/remotes/origin/main: Fast-forward` to `8c8f973` at 16:57:43, under a minute after pull request 11 was merged, and the same for `cfacfad` (04:35) and `d54ebae` (03:13) earlier in the run; `bin/factory_cli.py` has a sync step described as "an explicit fetch of origin/main and merge --ff-only". So a merge into the fork's `main` reaches the factory within a minute. What still holds: G-002's branches and pull requests are in the other repository, and the engine is off (`workflow_engine` is not set). Seen after the update: the run went on (T-0020 CI green at 17:13, reviewer and QA spawned at 17:14); the boss was relaunched at 17:00 at the director's request, cause not checked. The factory's own code therefore changed three times while G-002 ran, which belongs in the measurement notes.
+
+Original answer:
+
+Answered 2026-11-14. Correct, the merge does not touch the run.
+
+- G-002 works on the reference repository `ndovgaluk/hivemill-ref`: the `hivemill` project was pointed there for the run. Its branches, pull requests and CI all live there. Pull request 11 merges into `ndovgaluk/hivemill`, a different repository.
+- The factory runs its own code from the installed folder `~/factory`, not from GitHub. A merge on GitHub changes nothing in that folder; new code arrives only through a deliberate deploy (`/hm master-local-deploy`).
+- Even after a deploy the engine is off until `workflow_engine` is switched on.
+
+Not checked: that nothing in the installed factory pulls `main` by itself. This rests on the deploy being a manual command, not on reading the tick code for a pull.
+
+The thing to avoid while G-002 runs is the deploy, not the merge.
