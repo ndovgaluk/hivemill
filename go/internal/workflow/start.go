@@ -169,6 +169,48 @@ type usageError struct{ msg string }
 
 func (u usageError) Error() string { return u.msg }
 
+// resolveProject is the factory project a run is made in: the one named, or the factory's only one. It must have a
+// repository path, because the builder's worktree is made from it; a goal without one starts the builder in the
+// shared checkout (first real run, HM-39).
+func (e *Engine) resolveProject(project string) (string, error) {
+	if project == "" {
+		rows, err := e.Factory.Query("SELECT id FROM projects ORDER BY id")
+		if err != nil {
+			return "", err
+		}
+		var ids []string
+		for rows.Next() {
+			var id string
+			if err := rows.Scan(&id); err != nil {
+				rows.Close()
+				return "", err
+			}
+			ids = append(ids, id)
+		}
+		rows.Close()
+		if err := rows.Err(); err != nil {
+			return "", err
+		}
+		if len(ids) != 1 {
+			return "", usageError{fmt.Sprintf("name the factory project with --project: the factory has %d (%s)", len(ids),
+				strings.Join(ids, ", "))}
+		}
+		project = ids[0]
+	}
+	var repo string
+	err := e.Factory.QueryRow("SELECT COALESCE(repo_path, '') FROM projects WHERE id=?", project).Scan(&repo)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", usageError{fmt.Sprintf("no factory project %s", project)}
+	}
+	if err != nil {
+		return "", err
+	}
+	if repo == "" {
+		return "", usageError{fmt.Sprintf("factory project %s has no repository path; a story run needs one for its worktree", project)}
+	}
+	return project, nil
+}
+
 // planStart reads the stories and their children and checks them and the templates. It creates nothing.
 func (e *Engine) planStart(keys []string, workflow, project string) (*startPlan, error) {
 	seen := map[string]bool{}
@@ -179,7 +221,8 @@ func (e *Engine) planStart(keys []string, workflow, project string) (*startPlan,
 		seen[strings.ToUpper(k)] = true
 		var goal, state string
 		err := e.State.QueryRow(`SELECT r.goal_id, r.state FROM run_stories s JOIN runs r ON r.goal_id = s.goal_id
-			WHERE s.story_key = ? AND r.state != ? ORDER BY r.created DESC LIMIT 1`, k, string(RunDone)).Scan(&goal, &state)
+			WHERE s.story_key = ? AND r.state NOT IN (?, ?) ORDER BY r.created DESC LIMIT 1`, k, string(RunDone),
+			string(RunCancelled)).Scan(&goal, &state)
 		if err == nil { // a failed run counts as unfinished: its goal is still open for the owner
 			return nil, usageError{fmt.Sprintf("story %s already has run %s (state %s); see factory wf status --goal %s "+
 				"and factory wf incidents --goal %s", k, goal, state, goal, goal)}
@@ -190,6 +233,9 @@ func (e *Engine) planStart(keys []string, workflow, project string) (*startPlan,
 	}
 	tr, err := e.Deps.Tracker()
 	if err != nil {
+		return nil, err
+	}
+	if project, err = e.resolveProject(project); err != nil {
 		return nil, err
 	}
 	p := &startPlan{workflow: workflow, project: project}

@@ -36,6 +36,7 @@ const (
 	RunClosing    RunState = "closing"    // moving children, then stories, to Done
 	RunAnnouncing RunState = "announcing" // telling the boss (once)
 	RunDone       RunState = "done"
+	RunCancelled  RunState = "cancelled" // the run's goal was cancelled in the factory; its stories may start again
 
 	ChildTodo      ChildState = "todo"
 	ChildInReview  ChildState = "in_review" // built; waiting for a reviewer
@@ -104,6 +105,7 @@ const (
 	CauseBuilderWoken           Cause = "builder-woken"            // an ended builder resumed to get new work; not limited
 	CauseSpawnRetryLimit        Cause = "spawn-retry-limit"        // MaxSpawnRetries refusals in a row for one agent name
 	CauseClosedWithoutMerge     Cause = "closed-without-merge"     // the run's task is done with no merged event
+	CauseGoalCancelled          Cause = "goal-cancelled"           // the run's goal is cancelled in the factory: the run is closed
 	CausePendingFailed          Cause = "pending-failed"           // a queued comment, mark or mail failed; retried next tick
 )
 

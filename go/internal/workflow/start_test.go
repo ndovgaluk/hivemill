@@ -299,7 +299,7 @@ func (r *startRig) runCount() int {
 
 func TestStartCreatesGoalTaskPluginChildrenAndBuilder(t *testing.T) {
 	r := newStartRig(t)
-	code, out, errs := run(r.env, "start", "--story", "ST-1", "--project", "proj")
+	code, out, errs := run(r.env, "start", "--story", "ST-1", "--project", "p1")
 	if code != 0 {
 		t.Fatalf("start: %d %q %q", code, out, errs)
 	}
@@ -312,7 +312,7 @@ func TestStartCreatesGoalTaskPluginChildrenAndBuilder(t *testing.T) {
 			t.Fatalf("call %d %q, want %s", i, r.factory.calls[i], w)
 		}
 	}
-	if !strings.Contains(r.factory.calls[0], "--project proj") || !strings.Contains(r.factory.calls[0], "- [ ] it works") {
+	if !strings.Contains(r.factory.calls[0], "--project p1") || !strings.Contains(r.factory.calls[0], "- [ ] it works") {
 		t.Fatalf("goal new %q", r.factory.calls[0])
 	}
 	if !strings.Contains(r.factory.calls[2], "--name builder-t-0001 --prompt -") {
@@ -503,5 +503,61 @@ func TestBuilderNameFollowsTheOrgRule(t *testing.T) {
 	}
 	if !strings.Contains(r.factory.calls[2], "--name cursor-builder-t-0001") {
 		t.Fatalf("spawn %q", r.factory.calls[2])
+	}
+}
+
+func TestStartTakesTheOnlyProjectAndRefusesOneWithoutARepository(t *testing.T) {
+	r := newStartRig(t)
+	if code, _, errs := run(r.env, "start", "--story", "ST-1", "--project", "nope"); code != exitUsage ||
+		!strings.Contains(errs, "no factory project nope") || len(r.factory.calls) != 0 {
+		t.Fatalf("unknown project: %d %q %v", code, errs, r.factory.calls)
+	}
+	r.fdb.Exec("INSERT INTO projects VALUES('bare', 'main', NULL)")
+	if code, _, errs := run(r.env, "start", "--story", "ST-1", "--project", "bare"); code != exitUsage ||
+		!strings.Contains(errs, "has no repository path") || len(r.factory.calls) != 0 {
+		t.Fatalf("project without a repository: %d %q", code, errs)
+	}
+	if code, _, errs := run(r.env, "start", "--story", "ST-1"); code != exitUsage ||
+		!strings.Contains(errs, "name the factory project with --project: the factory has 2 (bare, p1)") {
+		t.Fatalf("two projects, none named: %d %q", code, errs)
+	}
+	r.fdb.Exec("DELETE FROM projects WHERE id='bare'")
+	if code, _, errs := run(r.env, "start", "--story", "ST-1"); code != 0 || !strings.Contains(r.factory.calls[0], "--project p1") {
+		t.Fatalf("the only project: %d %q %v", code, errs, r.factory.calls)
+	}
+}
+
+func TestACancelledGoalClosesTheRunAndTheStoryCanStartAgain(t *testing.T) {
+	r := newStartRig(t)
+	if _, err := r.fdb.Exec("ALTER TABLE goals ADD COLUMN status TEXT"); err != nil {
+		t.Fatal(err)
+	}
+	if code, _, errs := run(r.env, "start", "--story", "ST-1"); code != 0 {
+		t.Fatalf("start: %d %q", code, errs)
+	}
+	if code, _, errs := run(r.env, "start", "--story", "ST-1"); code != exitUsage || !strings.Contains(errs, "already has run G-001") {
+		t.Fatalf("second start while the run is open: %d %q", code, errs)
+	}
+	n := len(r.factory.calls)
+	r.fdb.Exec("UPDATE goals SET status='cancelled' WHERE id='G-001'")
+	for i := 0; i < 2; i++ { // the second tick finds the run closed and does nothing
+		if code, _, errs := run(r.env, "tick"); code != 0 {
+			t.Fatalf("tick: %d %q", code, errs)
+		}
+	}
+	if _, out, _ := run(r.env, "status"); out != "G-001 ST-1 huge (chosen) cancelled\n" {
+		t.Fatalf("status %q", out)
+	}
+	if len(r.factory.calls) != n {
+		t.Fatalf("the tick still acted for a cancelled goal: %v", r.factory.calls[n:])
+	}
+	_, out, _ := run(r.env, "incidents", "--json")
+	if strings.Count(out, `"cause": "goal-cancelled"`) != 1 {
+		t.Fatalf("incidents %s", out)
+	}
+	// the story is free again: the start gets past the "already has run" check and reaches the factory (the fake
+	// factory numbers every goal G-001, so recording this second run fails; that is the fake, not the engine)
+	if _, _, errs := run(r.env, "start", "--story", "ST-1"); strings.Contains(errs, "already has run") || len(r.factory.calls) == n {
+		t.Fatalf("start after the cancel: %q %v", errs, r.factory.calls[n:])
 	}
 }

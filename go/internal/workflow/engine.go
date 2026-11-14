@@ -157,12 +157,39 @@ func safeAdvance(e *Engine, r Run) (err error) {
 			err = fmt.Errorf("panic: %v", p)
 		}
 	}()
+	if closed, err := e.closeIfGoalCancelled(r); err != nil || closed {
+		return err
+	}
 	if e.Deps != nil { // queued comments, marks and mails first, each once
 		if err := e.runPending(r); err != nil {
 			return err
 		}
 	}
 	return advance(e, r)
+}
+
+// goalStatusCancelled is goals.status of a goal the owner or the boss gave up.
+const goalStatusCancelled = "cancelled"
+
+// closeIfGoalCancelled ends a run whose goal was cancelled in the factory: without it the engine kept bringing the
+// builder back, and the abandoned run blocked a new start for its stories (first real run, HM-39). A goal row that
+// cannot be read counts as not cancelled.
+func (e *Engine) closeIfGoalCancelled(r Run) (bool, error) {
+	if r.State == RunDone || r.State == RunCancelled || e.Factory == nil {
+		return false, nil
+	}
+	var status string
+	if err := e.Factory.QueryRow("SELECT COALESCE(status, '') FROM goals WHERE id=?", r.GoalID).Scan(&status); err != nil ||
+		status != goalStatusCancelled {
+		return false, nil
+	}
+	if err := e.setRunState(r.GoalID, RunCancelled); err != nil {
+		return false, err
+	}
+	_, err := e.Record(Incident{GoalID: r.GoalID, Kind: KindWarning, Cause: CauseGoalCancelled, Actor: ActorEngine,
+		Summary: "the run's goal was cancelled in the factory; the run is closed",
+		Detail:  map[string]any{"run_state": string(r.State), "story": r.StoryKey, "task_id": r.TaskID}})
+	return true, err
 }
 
 func firstLine(s string) string {
