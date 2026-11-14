@@ -435,7 +435,7 @@ class TestNoHerdrAndServer(Base):
                 self.assertIn('name="viewport"', body)
                 used = {c for m in re.findall(r'class="([^"]*)"', body) for c in m.split()}
                 self.assertEqual(used - wh.CLASSES, set(), path)
-                self.assertNotIn("<script", body.replace('<script src="/static/theme.js" defer></script>', ""))  # only the deferred theme toggle
+                self.assertNotIn("<script", re.sub(r'<script src="/static/theme\.js(\?v=[0-9a-f]+)?" defer></script>', "", body))  # only the deferred theme toggle
                 self.assertNotIn("style=", body)
 
 

@@ -5,6 +5,7 @@ with f-strings around raw DB values. Only the class names in CLASSES may be emit
 """
 import html as _html
 import re
+from pathlib import Path
 
 from scout import orgs as _orgs
 from web.queries import parse_ts
@@ -548,6 +549,18 @@ def _shell_navs(active, shell, org=None, current_goal=None, current_task=None):
     return side, more, el("nav", tabs, aria_label="Primary tabs", class_="tabbar")
 
 
+STATIC_DIR = Path(__file__).resolve().parent / "static"
+
+
+def asset(name):
+    """URL of a static file with its modification time as version (HM-49): static files are cached for an hour, so a
+    new deploy must change the URL or the browser pairs new HTML with an old stylesheet."""
+    try:
+        return f"/static/{name}?v={int((STATIC_DIR / name).stat().st_mtime):x}"
+    except OSError:
+        return f"/static/{name}"
+
+
 def page(title, body, active="/", refresh=True, shell=None, crumb_trail=None, org=None, path=None, query=None):
     """Full HTML5 document. `body` is trusted markup (the output of a view's render). `shell` is the dict from
     queries.shell_status plus "now"; without it the header omits the status cluster (error pages). `path` (the request
@@ -563,9 +576,9 @@ def page(title, body, active="/", refresh=True, shell=None, crumb_trail=None, or
               el("meta", name="color-scheme", content="light dark"),
               el("meta", http_equiv="refresh", content="60") if refresh else "",
               el("title", f"{title} - factory"),
-              el("link", rel="icon", href="/static/favicon.svg", type="image/svg+xml"),
-              el("link", rel="stylesheet", href="/static/app.css"),
-              el("script", src="/static/theme.js", defer=True))
+              el("link", rel="icon", href=asset("favicon.svg"), type="image/svg+xml"),
+              el("link", rel="stylesheet", href=asset("app.css")),
+              el("script", src=asset("theme.js"), defer=True))
     org_nav = org_filter(path, query, org) if path and shell else None
     main = el("div", shell_header(title, shell, crumb_trail, org_nav, path), el("main", Safe(body) if not isinstance(body, Safe) else body, id="content", class_="page"),
               more, class_="main")

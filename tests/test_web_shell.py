@@ -9,6 +9,7 @@ import sys
 import tempfile
 import threading
 import unittest
+from unittest import mock
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -58,7 +59,7 @@ class TestEveryRouteRenders(ServerCase):
         sections = re.findall(r'<a href="([^"]+)" class="nav-item', nav)   # HM-36: goal links sit under "Goals" too
         self.assertEqual(sections, [p for p, _ in wh.NAV])
         self.assertEqual(len(sections), 10)
-        self.assertEqual(re.findall(r"<script\b[^>]*>", text), ['<script src="/static/theme.js" defer>'])
+        self.assertEqual(re.findall(r"<script\b[^>]*>", text), [f'<script src="{wh.asset("theme.js")}" defer>'])
 
     def test_phone_more_nav_lists_every_page_and_tabbar_has_five_items(self):
         text = self.get("/tasks")[2].decode()
@@ -200,6 +201,23 @@ class TestShellStatus(unittest.TestCase):
 
 
 class TestHelpers(unittest.TestCase):
+    def test_assets_are_linked_with_a_version_that_follows_the_file(self):  # HM-49
+        out = str(wh.page("T", ""))
+        for name in ("app.css", "theme.js", "favicon.svg"):
+            self.assertRegex(out, r'"/static/%s\?v=[0-9a-f]+"' % re.escape(name))
+        with mock.patch.object(wh, "STATIC_DIR", wh.STATIC_DIR / "missing-dir"):
+            self.assertEqual(wh.asset("app.css"), "/static/app.css")
+        import os
+        import shutil
+        import tempfile
+        with tempfile.TemporaryDirectory() as d:
+            shutil.copy(wh.STATIC_DIR / "app.css", d)
+            with mock.patch.object(wh, "STATIC_DIR", Path(d)):
+                first = wh.asset("app.css")
+                os.utime(Path(d) / "app.css", (1_000_000, 1_000_000))
+                self.assertNotEqual(wh.asset("app.css"), first)
+                self.assertEqual(wh.asset("app.css"), "/static/app.css?v=%x" % 1_000_000)
+
     def test_status_is_glyph_plus_human_label(self):
         out = str(wh.status("in_progress"))
         self.assertIn("In progress", out)
