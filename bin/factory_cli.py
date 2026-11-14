@@ -190,6 +190,7 @@ DEFAULT_CONFIG = {
     "boss_wake_after_s": "900",    # tick step 3: boss pane is prompted only when an unread escalation/request is at least this old (T-1199)
     "boss_wake_cooldown_s": "1800",  # at most one boss wake per this many seconds (agents.last_nudge)
     "boss_wake_other_after_s": "0",  # HM-38: an unread report/msg/decision/alert this old wakes the boss too; 0 = never
+    "stale_unread_alert_s": "3600",  # G-003: one alert (to the director; for the director to the boss) when a live agent has unread mail at least this old
     "director_cycle_s": "900",
     "blocked_alert_s": "600",
     "hq_unblock_s": "900",       # T-0268: the tick denies (Esc) a permission dialog on an HQ pane after this long
@@ -15404,6 +15405,42 @@ def _hq_nudge_tick(con, r, h, list_ok, t, cooldown, starting):
         event_as(con, "tick", "agent", name, "boss-wake", wake)
 
 
+STALE_UNREAD_LIST_MAX = 20  # message lines in one stale-unread alert
+
+
+def tick_stale_unread(con):
+    """Tick: one alert per live agent while it has unread mail at least stale_unread_alert_s old (G-003 SC4), to the
+    director, or for the director to the boss. The throttle key stale-unread:<name> marks the episode: no repeat while
+    it exists; it goes when the agent has no stale unread mail left."""
+    limit = int(cfg(con, "stale_unread_alert_s"))
+    clock = digest_clock().timestamp()
+    for r in con.execute("SELECT name, role FROM agents WHERE status='live' AND role != 'evaluator' ORDER BY name").fetchall():
+        name = r["name"]
+        key = f"stale-unread:{name}"
+        stale = []
+        for m in con.execute("SELECT id, kind, sender, created FROM messages WHERE recipient=? AND read_at IS NULL ORDER BY id",
+                             (name,)).fetchall():
+            ts = _ts(m["created"])
+            if ts is not None and clock - ts.timestamp() >= limit:
+                stale.append((m, int((clock - ts.timestamp()) // 60)))
+        if not stale:
+            con.execute("DELETE FROM throttle WHERE key=?", (key,))
+            continue
+        if con.execute("SELECT 1 FROM throttle WHERE key=?", (key,)).fetchone():
+            continue
+        to = "boss" if r["role"] == "director" else "director"
+        oldest_min = max(age for _, age in stale)
+        lines = [f"M{m['id']} {m['kind']} from {m['sender']}, {age} min" for m, age in stale[:STALE_UNREAD_LIST_MAX]]
+        more = len(stale) - STALE_UNREAD_LIST_MAX
+        body = (f"{name} ({r['role']}) has {len(stale)} unread message(s) older than {limit // 60} min:\n"
+                + "\n".join(lines) + (f"\n... and {more} more" if more > 0 else "")
+                + "\nCheck its pane; this alert is sent once until its stale mail is read.")
+        send(con, to, f"stale unread mail: {name} ({len(stale)} msg, oldest {oldest_min} min)", body, "alert", sender="tick")
+        event_as(con, "tick", "agent", name, "stale-unread-alert",
+                 {"agent": name, "count": len(stale), "oldest": f"M{stale[0][0]['id']}", "to": to})
+        _throttle_set(con, key, clock)
+
+
 def dialog_now(con, name, role, want):
     """Right before a key send: herdr reports `name` blocked on THIS tick AND its bottom region still classifies as
     `want`; for the boss pane also no unsent input (L-019). Returns the classification or None (then: no keys)."""
@@ -16569,6 +16606,11 @@ def cmd_tick(a, locked=False):
                 _cursor_enter_after_prompt(an, agent_runtime_of(r), True)
             con.execute("UPDATE agents SET last_nudge=? WHERE name=?", (t, r["name"]))
     _pt_lap("nudge")
+    # 3a. stale unread mail: one alert per agent whose unread mail is older than stale_unread_alert_s (G-003)
+    try:
+        tick_stale_unread(con)
+    except Exception as e:  # noqa: BLE001 — the alert must never stop the tick
+        event(con, "tick", "stale-unread", "stale-unread-error", str(e)[:300])
     
     # 4. sidebar: goal progress on each goal workspace, capacity on HQ
     _, why, s = gate(con)
