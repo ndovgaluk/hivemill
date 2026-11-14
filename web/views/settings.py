@@ -91,9 +91,11 @@ GROUPS = (
                 (("fresh", "A fresh reviewer for each child"), ("keep", "Keep one reviewer for the story"))),
         Setting("workflow_ci", "CI for new story runs",
                 "GitHub: the run opens one pull request, GitHub's checks and the judge clear it. Local: only the tests "
-                "the change can affect run on this machine, then the run merges into main itself (HM-54). Applies to "
-                "runs started after the change; factory wf start --ci overrides it. Details: docs/workflow-engine.md.",
-                Kind.CHOICE, None, None, (("github", "GitHub"), ("local", "Local (affected tests)"))),
+                "the change can affect run on this machine, then the run merges into main itself. None: no pull request "
+                "and no tests, the run merges into main as soon as every child is reviewed. Applies to runs started "
+                "after the change; factory wf start --ci overrides it. Details: docs/workflow-engine.md.",
+                Kind.CHOICE, None, None, (("github", "GitHub"), ("local", "Local (affected tests)"),
+                                          ("none", "None (no PR, no tests)"))),
     )),
     # HM-53: the per-project rows of this group (what clears a change, the last local run) are drawn by _gate_row
     ("Merge gate", "What clears a change before it merges, per project: GitHub's CI, or the local test run of "

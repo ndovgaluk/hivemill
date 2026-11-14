@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 
 	"factory/go/internal/identity"
 	"factory/go/internal/tsr"
@@ -34,12 +35,52 @@ type Git interface {
 	Run(dir string, args ...string) (string, error)
 }
 
+// Tests starts a command (the affected tests of a branch, HM-54) detached in dir and returns at once; the command's
+// output goes to logPath and, when it ends, its exit code to rcPath. The engine's tick holds a lock and never waits for it.
+type Tests interface {
+	Start(dir, logPath, rcPath string, argv []string) error
+}
+
 // Deps are the outside systems of the engine's steps, injected so tests run the whole path with stubs.
 type Deps struct {
 	Tracker func() (Tracker, error) // lazy: a home with no runs never needs the token files
 	Factory Factory
 	Git     Git
+	Tests   Tests
 	SrcDir  string // the checkout holding workflows/ (the templates)
+}
+
+// envInvocation is set by systemd for a unit's processes: the tick's engine runs in a transient unit.
+const envInvocation = "INVOCATION_ID"
+
+// detachedScript runs "$@", writes its output to $LOG and then its exit code to $RC (through a temporary name, so a
+// reader never sees half a file).
+const detachedScript = `"$@" > "$LOG" 2>&1; echo $? > "$RC.tmp" && mv "$RC.tmp" "$RC"`
+
+type cliTests struct{ home string }
+
+func (t cliTests) Start(dir, logPath, rcPath string, argv []string) error {
+	env := append(ownerEnv(t.home), "LOG="+logPath, "RC="+rcPath)
+	args := append([]string{"-c", detachedScript, "affected"}, argv...)
+	if os.Getenv(envInvocation) != "" {
+		// a child would be killed with the tick's unit (KillMode=control-group): give it its own transient unit, as
+		// tick_gate does for gate runners; a unit gets the manager's environment, so pass what the tests need
+		unit := []string{"--user", "--collect", "--quiet", "--working-directory=" + dir}
+		for _, kv := range env {
+			k := kv[:strings.IndexByte(kv+"=", '=')]
+			if k == "PATH" || k == "HOME" || k == "FACTORY_HOME" || k == "LOG" || k == "RC" {
+				unit = append(unit, "--setenv="+kv)
+			}
+		}
+		return exec.Command("systemd-run", append(append(unit, "--", "bash"), args...)...).Run()
+	}
+	cmd := exec.Command("bash", args...)
+	cmd.Dir, cmd.Env = dir, env
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true} // its own session: it outlives this process
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+	return cmd.Process.Release()
 }
 
 // EnvFactoryCLI names bin/factory; the Python seams (cmd_wf, tick_workflow) set it.
@@ -65,6 +106,7 @@ var newDeps = func(env identity.Env) (*Deps, error) {
 		},
 		Factory: cliFactory{bin: bin, home: env.Home()},
 		Git:     cliGit{home: env.Home()},
+		Tests:   cliTests{home: env.Home()},
 		SrcDir:  filepath.Dir(filepath.Dir(bin)),
 	}, nil
 }

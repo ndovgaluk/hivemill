@@ -1150,7 +1150,7 @@
   "key": "workflow_ci",
   "kind": "setting",
   "default": "github",
-  "summary": "github | local: CI mode of new story runs (a pull request and GitHub's checks, or the affected tests locally); factory wf start --ci overrides",
+  "summary": "github | local | none: CI mode of new story runs (a pull request and GitHub's checks; the affected tests locally; or no tests), the last two merge into main without a PR; factory wf start --ci overrides",
   "goal": "",
   "doc": "docs/workflow-engine.md",
   "current": "github"

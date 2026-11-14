@@ -21,7 +21,7 @@ import (
 const Bin = "factory-workflow"
 
 const usage = "usage: factory wf {version | status [--goal ID] | tick | incidents [--goal ID] [--kind KIND] [--json] | " +
-	"start --story KEY [--story KEY ...] [--workflow simple|medium|huge] [--project ID] [--ci github|local] | resume --goal ID [--fresh-builder] | " +
+	"start --story KEY [--story KEY ...] [--workflow simple|medium|huge] [--project ID] [--ci github|local|none] | resume --goal ID [--fresh-builder] | " +
 	"blocked CHILD --reason TEXT | built | review CHILD pass|changes --notes FILE | tsr ...}"
 
 // Exit codes, as the Python CLI's die().

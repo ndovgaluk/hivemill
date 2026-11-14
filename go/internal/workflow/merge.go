@@ -366,7 +366,11 @@ func (e *Engine) finishStep(r Run) (RunState, error) {
 					}
 				}
 			}
-			if err := tr.LinkCommit([]string{s.task.ID}, full, "merge of "+pr); err != nil {
+			label := "merge of " + pr
+			if r.CI == CILocal || r.CI == CINone {
+				label = fmt.Sprintf("merge of story run %s (CI mode %s, no pull request)", r.GoalID, r.CI)
+			}
+			if err := tr.LinkCommit([]string{s.task.ID}, full, label); err != nil {
 				return "", err
 			}
 		}
@@ -418,8 +422,13 @@ func (e *Engine) finishStep(r Run) (RunState, error) {
 		return RunAnnouncing, nil
 	case RunAnnouncing:
 		keys := strings.Join(keysOf(ss), ", ")
+		how := "through " + pr
+		if r.CI == CILocal || r.CI == CINone {
+			merge, _ := e.mergeSHA(r.TaskID)
+			how = fmt.Sprintf("as %s without a pull request (CI mode %s)", short(merge), r.CI)
+		}
 		if _, err := e.mail(r, mailTo, mailReport, fmt.Sprintf("%s merged and Done", keys),
-			fmt.Sprintf("%s merged through %s and Done in the task manager, with every child (run %s).", keys, pr, r.GoalID)); err != nil {
+			fmt.Sprintf("%s merged %s and Done in the task manager, with every child (run %s).", keys, how, r.GoalID)); err != nil {
 			return "", err
 		}
 		return RunDone, nil
@@ -496,7 +505,16 @@ func (e *Engine) report(r Run, s storyInfo, pr, merge string) string {
 		elapsed = e.Env.Now().Sub(t).Round(time.Minute).String()
 	}
 	var b strings.Builder
-	fmt.Fprintf(&b, "Story run %s merged: pull request %s, merge commit %s. Elapsed since the run started: %s.\n\n", r.GoalID, pr, merge, elapsed)
+	switch r.CI {
+	case CILocal:
+		fmt.Fprintf(&b, "Story run %s merged without a pull request (CI mode local: the affected tests passed on this "+
+			"machine): merge commit %s. Elapsed since the run started: %s.\n\n", r.GoalID, merge, elapsed)
+	case CINone:
+		fmt.Fprintf(&b, "Story run %s merged without a pull request and without tests (CI mode none): merge commit %s. "+
+			"Nothing was tested before the merge. Elapsed since the run started: %s.\n\n", r.GoalID, merge, elapsed)
+	default:
+		fmt.Fprintf(&b, "Story run %s merged: pull request %s, merge commit %s. Elapsed since the run started: %s.\n\n", r.GoalID, pr, merge, elapsed)
+	}
 	b.WriteString("Fix rounds per child:\n")
 	for _, c := range s.kids {
 		fmt.Fprintf(&b, "- %s: %d\n", c.key, c.rounds)

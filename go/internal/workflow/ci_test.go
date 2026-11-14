@@ -112,24 +112,12 @@ func TestAVersion1StateIsMigratedAndItsRunsAreGithub(t *testing.T) {
 	}
 }
 
-func TestALocalRunStopsForTheOwnerInsteadOfOpeningAPullRequest(t *testing.T) {
-	r := built(t)
-	st, _ := OpenState(StatePath(r.home))
-	st.Exec("UPDATE runs SET ci=?", CILocal)
-	st.Close()
-	r.tick(t)
-	r.tick(t) // a second tick must not stop it, mail or record again
-	if len(r.callsLike("msg coder-t-0001")) != 0 {
-		t.Fatalf("builder asked for a pull request: %v", r.factory.calls)
+func TestStartAcceptsCIModeNone(t *testing.T) {
+	r := newStartRig(t)
+	if code, out, errs := run(r.env, "start", "--story", "ST-1", "--ci", CINone); code != 0 {
+		t.Fatalf("start: %d %q %q", code, out, errs)
 	}
-	if r.state(t) != string(RunBlocked) || len(r.callsLike("msg boss")) != 1 {
-		t.Fatalf("state %s, boss mails %v", r.state(t), r.callsLike("msg boss"))
-	}
-	st, _ = OpenState(StatePath(r.home))
-	defer st.Close()
-	var n int
-	st.QueryRow("SELECT count(*) FROM incidents WHERE cause=? AND kind=?", string(CauseCILocalNotBuilt), string(KindEscalation)).Scan(&n)
-	if n != 1 {
-		t.Fatalf("%d escalations", n)
+	if got := storedCI(t, r); got != CINone {
+		t.Fatalf("stored %q", got)
 	}
 }

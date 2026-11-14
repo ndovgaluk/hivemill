@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -160,6 +161,14 @@ func (f *fakeFactory) Run(stdin string, args ...string) (string, error) {
 			ON CONFLICT(name) DO UPDATE SET status='live', session_id=excluded.session_id`, name, args[1], "sess-"+name)
 		return "SPAWNED " + name + "\n", nil
 	}
+	if args[0]+" "+args[1] == "task update" { // HM-54: the engine closes its task after it landed the run
+		f.db.Exec("UPDATE tasks SET status=? WHERE id=?", flagValue(args, "--status"), args[2])
+		return args[2] + "\n", nil
+	}
+	if args[0] == "stop" {
+		f.db.Exec("UPDATE agents SET status='done' WHERE name=?", args[1])
+		return "stopped " + args[1] + "\n", nil
+	}
 	if args[0] == "msg" {
 		if f.mailFail > 0 {
 			f.mailFail--
@@ -188,11 +197,18 @@ const fakeMergeSHA = "0abc1234eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
 
 // fakeGit plays the builder's worktree: a branch whose commits are `log`, oldest first, pushed unless unpushed.
 type fakeGit struct {
-	calls    []string
-	log      []commit // the branch since the run started, oldest first
-	dirty    bool
-	unpushed bool
+	calls     []string
+	argv      [][]string // every call in full (HM-54 asserts on push and commit-tree)
+	log       []commit   // the branch since the run started, oldest first
+	dirty     bool
+	unpushed  bool
+	baseMoved bool // HM-54: origin/<base> is not an ancestor of HEAD
+	landed    bool // HM-54: HEAD is already in origin/<base>
+	pushFail  int  // HM-54: refuse this many pushes
 }
+
+// fakeLandSHA is the merge commit commit-tree makes in the fake (HM-54).
+const fakeLandSHA = "1234567890abcdef1234567890abcdef12345678"
 
 func (g *fakeGit) commit(sha, subject string) {
 	g.log = append(g.log, commit{sha: sha, subject: subject})
@@ -207,7 +223,16 @@ func (g *fakeGit) head() string {
 
 func (g *fakeGit) Run(dir string, args ...string) (string, error) {
 	g.calls = append(g.calls, args[0])
+	g.argv = append(g.argv, append([]string(nil), args...))
 	switch args[0] {
+	case "commit-tree":
+		return fakeLandSHA, nil
+	case "push":
+		if g.pushFail > 0 {
+			g.pushFail--
+			return "", &CmdError{Cmd: "git push", Err: errors.New("exit status 1"), Stderr: "! [rejected] (fetch first)\n"}
+		}
+		return "", nil
 	case "status":
 		if g.dirty {
 			return " M cli.go", nil
@@ -229,9 +254,45 @@ func (g *fakeGit) Run(dir string, args ...string) (string, error) {
 		}
 		return g.head(), nil
 	case "merge-base":
+		if len(args) > 2 && args[1] == "--is-ancestor" {
+			notAncestor := &CmdError{Cmd: "git merge-base", Err: errors.New("exit status 1")}
+			if args[2] == "HEAD" && !g.landed || strings.HasPrefix(args[2], "origin/") && g.baseMoved {
+				return "", notAncestor
+			}
+			return "", nil
+		}
 		return "base0", nil
 	}
 	return "", nil
+}
+
+// pushes are the git push calls made, in full.
+func (g *fakeGit) pushes() [][]string {
+	var out [][]string
+	for _, a := range g.argv {
+		if a[0] == "push" {
+			out = append(out, a)
+		}
+	}
+	return out
+}
+
+// fakeTests plays the detached affected run: Start writes the log and the exit code at once (code < 0: never ends).
+type fakeTests struct {
+	starts []string
+	code   int
+	log    string
+}
+
+func (f *fakeTests) Start(dir, logPath, rcPath string, argv []string) error {
+	f.starts = append(f.starts, strings.Join(argv, " "))
+	if err := os.WriteFile(logPath, []byte(f.log), 0o600); err != nil {
+		return err
+	}
+	if f.code < 0 {
+		return nil
+	}
+	return os.WriteFile(rcPath, []byte(strconv.Itoa(f.code)+"\n"), 0o600)
 }
 
 type startRig struct {
@@ -241,6 +302,7 @@ type startRig struct {
 	tracker *fakeTracker
 	factory *fakeFactory
 	git     *fakeGit
+	tests   *fakeTests
 	fdb     *sql.DB
 }
 
@@ -263,7 +325,7 @@ func newStartRig(t *testing.T) *startRig {
 			t.Fatal(err)
 		}
 	}
-	r := &startRig{t: t, env: env, home: home, fdb: fdb, git: &fakeGit{},
+	r := &startRig{t: t, env: env, home: home, fdb: fdb, git: &fakeGit{}, tests: &fakeTests{log: "Ran 12 tests in 1.0s\n\nOK\n"},
 		factory: &fakeFactory{t: t, db: fdb, org: defaultOrg},
 		tracker: &fakeTracker{tasks: map[string]tsr.Task{}, children: map[string][]string{}}}
 	story := enriched("ST-1")
@@ -276,7 +338,7 @@ func newStartRig(t *testing.T) *startRig {
 	t.Cleanup(func() { newDeps = old })
 	newDeps = func(identity.Env) (*Deps, error) {
 		return &Deps{Tracker: func() (Tracker, error) { return r.tracker, nil }, Factory: r.factory, Git: r.git,
-			SrcDir: repoRoot(t)}, nil
+			Tests: r.tests, SrcDir: repoRoot(t)}, nil
 	}
 	return r
 }

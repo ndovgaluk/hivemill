@@ -31,6 +31,8 @@ const (
 	// After every child is reviewed: the builder opens the one PR and the factory's gate merges it. Each finish step is
 	// a state of its own, so a step that succeeded is never repeated after a failure later on (the done_step counter).
 	RunMerging    RunState = "merging"    // the builder was told to open the PR; the factory's gate has it
+	RunGating     RunState = "gating"     // CI mode local (HM-54): the branch head's affected tests run on this machine
+	RunLanding    RunState = "landing"    // CI mode local or none (HM-54): merging the branch into the base and pushing
 	RunLinking    RunState = "linking"    // merged: linking commits (idempotent in Taskosaur)
 	RunReporting  RunState = "reporting"  // commenting on the story (once)
 	RunClosing    RunState = "closing"    // moving children, then stories, to Done
@@ -107,7 +109,20 @@ const (
 	CauseClosedWithoutMerge     Cause = "closed-without-merge"     // the run's task is done with no merged event
 	CauseGoalCancelled          Cause = "goal-cancelled"           // the run's goal is cancelled in the factory: the run is closed
 	CausePendingFailed          Cause = "pending-failed"           // a queued comment, mark or mail failed; retried next tick
-	CauseCILocalNotBuilt        Cause = "ci-local-not-built"       // a run in CI mode local reached its end before HM-54 exists
+	CauseCILocalNotBuilt        Cause = "ci-local-not-built"       // a run in CI mode local reached its end before HM-54 exists (no longer recorded)
+	CauseLandRefused            Cause = "land-refused"             // HM-54: the builder's checkout is dirty or unpushed, or the base moved
+	CauseLocalTestsFailed       Cause = "local-tests-failed"       // HM-54: the affected tests of the branch head failed
+	CauseLocalTestsError        Cause = "local-tests-error"        // HM-54: the affected run could not start or ran too long
+	CauseLocalTestsLimit        Cause = "local-tests-limit"        // HM-54: MaxLocalTestFailures reached; the run waits for the owner
+	CausePushRefused            Cause = "push-refused"             // HM-54: the push of the merge was refused; retried next tick
+)
+
+// HM-54 limits of the finish without a pull request.
+const (
+	MaxLocalTestFailures = 3             // failed affected runs per run before it stops for the owner
+	affectedExitLoad     = 5             // ci/affected.py EXIT_LOAD: refused for load, retried next tick
+	affectedStaleAfter   = 3 * time.Hour // an affected run with no result after this is treated as an error
+	failedTestsMax       = 20            // failing tests named in a mail or incident
 )
 
 // CI modes of a run (HM-67): what clears the run's change before it reaches main. Chosen at start (`--ci`) or from
@@ -115,12 +130,13 @@ const (
 const (
 	CIGithub  = "github" // one pull request; GitHub's checks and the judge clear it (the engine's finish so far)
 	CILocal   = "local"  // the affected tests on this machine, then the engine merges into main itself (HM-54)
+	CINone    = "none"   // no pull request and no tests: the engine merges into main itself (HM-54, owner 2026-11-15)
 	cfgCI     = "workflow_ci"
 	defaultCI = CIGithub
 )
 
 // CIModes lists the accepted modes, for validating --ci and the config.
-var CIModes = []string{CIGithub, CILocal}
+var CIModes = []string{CIGithub, CILocal, CINone}
 
 // MaxSpawnRetries is how many refusals in a row for the same agent name are retried before the engine acts: a spawn
 // refusal often clears by itself (the resource gate, an old pane not yet confirmed closed).

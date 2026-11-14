@@ -115,10 +115,14 @@ var advance = func(e *Engine, r Run) error {
 		if err := e.advanceBuilding(r); err != nil {
 			return err
 		}
-		if r.CI == CILocal {
-			return e.finishLocal(r)
+		if r.CI == CILocal || r.CI == CINone {
+			return e.startLanding(r) // HM-54: no pull request
 		}
 		return e.openPR(r)
+	case RunGating:
+		return e.advanceGating(r)
+	case RunLanding:
+		return e.advanceLanding(r)
 	case RunMerging:
 		return e.advanceMerging(r)
 	case RunLinking, RunReporting, RunClosing, RunAnnouncing:

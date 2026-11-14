@@ -103,9 +103,11 @@ For the first run on a factory, use a small prepared story and check these five 
 | `starting` | goal made, builder not started yet | the rest of `start` |
 | `failed` | `start` stopped part-way; see the incident | (final; a new start for the story is refused) |
 | `building` | the builder works the children; reviews run beside it | `factory wf built`, a stop |
-| `built` | every child built; late fixes and reviews still run | every child reviewed: the open-PR mail |
-| `blocked` | stopped for the boss (builder blocked, round limit, silent reviewers, builder resume limit) | `factory wf resume` |
-| `merging` | the pull request is the factory gate's | the task done with a `merged` event |
+| `built` | every child built; late fixes and reviews still run | every child reviewed: the open-PR mail (CI mode `github`), or a clean, pushed checkout (`local`: `gating`; `none`: `landing`) |
+| `blocked` | stopped for the boss (builder blocked, round limit, silent reviewers, builder resume limit, 3 red affected runs) | `factory wf resume` |
+| `merging` | CI mode `github`: the pull request is the factory gate's | the task done with a `merged` event |
+| `gating` | CI mode `local`: the affected tests of the builder's head run on this machine | a pass (`landing`), a red run (`building`, the builder is mailed the failing tests) |
+| `landing` | CI modes `local` and `none`: merging the branch into the base and pushing | the push and the `merged` event; a moved base sends the run back to `building` |
 | `linking`, `reporting`, `closing`, `announcing` | the finish steps after the merge, one each | the step succeeding |
 | `done` | merged and Done in Taskosaur | (final) |
 
@@ -141,7 +143,7 @@ exit 2, "factory-workflow is not built; set workflow_engine on and wait for a ti
 | `factory wf tick` | advances every run once; the tick calls it, and only the owner may (exit 3 for an agent). A second run while one holds `run/workflow.lock` exits 0 at once |
 | `factory wf incidents [--goal ID] [--kind KIND] [--json]` | lists incidents, newest first; `--json` prints the full detail. Owner and boss only (exit 3 otherwise) |
 | `factory wf tsr …` | Taskosaur reads and the few writes agents may make; see "Taskosaur access" |
-| `factory wf start --story KEY [--story KEY …] [--workflow simple\|medium\|huge] [--project ID] [--ci github\|local]` | starts a story run (boss or owner); several `--story` make a batch; `--ci` picks the run's CI mode; see "Starting a run", "Batches" and "CI mode" |
+| `factory wf start --story KEY [--story KEY …] [--workflow simple\|medium\|huge] [--project ID] [--ci github\|local\|none]` | starts a story run (boss or owner); several `--story` make a batch; `--ci` picks the run's CI mode; see "Starting a run", "Batches" and "CI mode" |
 | `factory wf blocked CHILD --reason TEXT` | the run's builder stops on a child it cannot build as written: child and run `blocked`, an escalation incident, a decision mail to the boss |
 | `factory wf built` | the run's builder reports every child In Review: run `built` |
 | `factory wf review CHILD pass\|changes --notes FILE` | the child's reviewer records its result; see "Review per child" |
@@ -154,9 +156,32 @@ Each run has a CI mode: what clears its change before it reaches `main` (HM-67, 
 | Mode | The end of the run |
 |---|---|
 | `github` (default) | the builder opens one pull request; reviewer and QA, GitHub's checks and the judge (or the mechanical merger) clear it, as described in "The whole run" |
-| `local` | only the tests the run's diff can affect (`ci/affected.py`) run on this machine; when they pass, the engine merges the branch into `main` and pushes, with no pull request. **Built by HM-54; until then a `local` run stops `blocked` with one escalation (`ci-local-not-built`) once every child is reviewed, and never falls back to a pull request** |
+| `local` | only the tests the run's diff can affect run on this machine (`python3 ci/affected.py --base origin/<base> --run`, in the builder's worktree, on its exact head); when they pass (exit 0 and at least one test ran), the engine merges the branch into `main` and pushes, with no pull request (HM-54) |
+| `none` | no pull request and **no tests**: as soon as every child is reviewed and the checkout is clean and pushed, the engine merges and pushes. Each child was still reviewed by agent; the story's closing comment says "merged without a pull request and without tests" (HM-54, owner 2026-11-15) |
 
-- The mode is chosen at start: `factory wf start … --ci local`, else config `workflow_ci` (Settings page, "CI for new story
+How a run without a pull request ends (HM-54, `go/internal/workflow/land.go`):
+
+1. **Checkout check** (state `built`, every child reviewed): `git fetch origin`; the builder's worktree must have no
+   uncommitted changes and `HEAD` must equal `origin/<branch>`. Otherwise the run stays `built`, the builder is mailed
+   once per head what to do, and a `land-refused` warning is recorded.
+2. **Tests** (`local` only, state `gating`): the affected run starts detached (its own systemd unit under the tick) and
+   writes `run/workflow/<goal>/affected-<head>.log` and `.rc`; the engine reads the result on a later tick. Exit 5 (refused
+   for load) is retried; a run with no result after 3 h is a `local-tests-error`. A red run records a
+   `local-tests-failed` rejection with the failing tests, mails them to the builder and sends the run back to `building`;
+   the builder fixes, pushes and runs `factory wf built`. The third red run stops the run (`local-tests-limit`).
+3. **Landing** (state `landing`): `origin/<base>` must be an ancestor of `HEAD` (else the builder is asked to merge it and
+   the run goes back to `building`). The engine makes one merge commit (`git commit-tree HEAD^{tree} -p origin/<base>
+   -p HEAD`, subject the factory task id and the stories, as a PR title) and pushes it as a fast-forward of the base:
+   `git push origin <sha>:refs/heads/<base>`, never `--force`. A refused push is a `push-refused` warning and is retried
+   next tick. Then: the `merged` event on the factory task (`@<sha> by=engine ci=<mode>`), the `landed` event on the goal,
+   `factory task update <task> --status done`, `factory stop <builder>`, and the usual finish steps (link commits,
+   comment, Done, mail).
+4. The DevDigest gate check (HM-61) has its call site before the merge (`devdigestLandingCheck`); until HM-61 it allows it.
+
+A push to `main` is live in the installed factory within a minute. With `none` nothing is tested before that; GitHub's
+full suite still runs on the push, and a red `main` is caught by the factory's red-main check.
+
+- The mode is chosen at start: `factory wf start … --ci local` (or `none`), else config `workflow_ci` (Settings page, "CI for new story
   runs"), else `github`. An unknown config value also means `github`, so a typo never skips GitHub's checks; an unknown
   `--ci` is a usage error before anything is made.
 - The run keeps the mode it started with: changing `workflow_ci` later only affects new runs. It is stored in

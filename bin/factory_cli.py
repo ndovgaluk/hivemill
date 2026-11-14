@@ -202,7 +202,7 @@ DEFAULT_CONFIG = {
     "mech_merge_retry_s": "600", # the merger looks at a PR head it already blocked on (or shadow-recorded) at most this often
     "workflow_engine": "off",    # off | on: build go/cmd/workflow and let the tick launch `factory-workflow tick` (DVDG-565, docs/workflow-engine.md)
     "workflow_reviewer_session": "fresh",  # fresh | keep: story runs review each child with a new reviewer, or resume one per story
-    "workflow_ci": "github",  # github | local: CI mode of new story runs (`factory wf start --ci` overrides; HM-67, docs/workflow-engine.md)
+    "workflow_ci": "github",  # github | local | none: CI mode of new story runs (`factory wf start --ci` overrides; HM-67, HM-54, docs/workflow-engine.md)
     "risk_tiers": "off",        # off | on: `factory task tier T --classify` computes a PR's risk tier (G-022 #1); nothing else reads tiers yet
     "public_text_repos": "",     # comma list OWNER/NAME where the public text rule applies (G-021): judge text check, no state push
     "noreply_email": "",         # author email judge merges into a public_text_repos repo with; empty = repo-local git user.email, must end @users.noreply.github.com (G-021)
