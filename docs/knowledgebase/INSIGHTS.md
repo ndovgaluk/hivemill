@@ -24,6 +24,13 @@ Add entries with `/engineering-insights`
 
 ## What Doesn't Work
 
+### 2026-11-14 · mistake · A web UI change checked only with the modules the task names broke two other web tests
+Symptom: HM-36 (sidebar goals) passed test_web_shell, test_web_views_goals and test_web_server, then broke test_web_detail test_sort_whitelist and test_web_design test_every_class_has_a_rule on main.
+Cause: other web tests read the whole page (the sidebar adds goal ids with `mono lrow-id`), and test_web_design needs a CSS rule for every class in CLASSES; `ci/affected.py --quick` did not pick those modules.
+Rule: for any change to web/html.py, web/queries.py or web/static/, run `python3 -m unittest discover -s tests -p 'test_web*.py'` (about 3 min) before In Review.
+Evidence: HM-37 comment, 2026-11-14; tests/test_web_detail.py order(), tests/test_web_design.py
+Promoted: no
+
 ### 2026-11-14 · mistake · A preview server run from a working clone changes when you switch that clone's branch
 Symptom: the owner's preview of HM-36 on port 18637 lost the sidebar goal lists after the clone was switched to the HM-38 branch.
 Cause: `factory serve` reloads its code every 60 s (`watch_code`), so it serves whatever branch the clone is on now.

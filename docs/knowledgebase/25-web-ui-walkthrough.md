@@ -86,3 +86,17 @@ What we can reuse:
 - So DVDG-544 stays "server-rendered SVG + CSS", with an optional extra step: a small `flow.js` adapted from Archscribe's interactive script for richer tooltips and click-to-trace, while the page still works without JavaScript. Copied code keeps Archscribe's MIT copyright notice.
 
 Offline use: its animated GIF output suits a one-off **animated explainer of the factory flow** for learning (needs Pillow in a Python venv; Playwright optional).
+
+## Q: Is that an icon for an ongoing task or for a stopped task? (sidebar, T-0026)
+
+Ongoing. The purple ring with three quarters filled means **In review**: the coder finished and the PR waits for the reviewer and QA verdicts. T-0026 was `in_review` in the live DB on 2026-11-14.
+
+The sidebar under "Tasks" (HM-43) lists only tasks in progress or in review, so a stopped task (blocked, cancelled) never appears there. Finished tasks appear only under the "+".
+
+| Icon | Status |
+|---|---|
+| blue ring, half filled | In progress (a coder is working) |
+| purple ring, three quarters filled, dot in the middle | In review (waiting for reviewer + QA) |
+| green filled circle with a tick | Done |
+
+The icon has no visible tooltip, only screen-reader text; hovering the entry shows nothing extra. Source: `_SVG12` in `web/html.py`.
