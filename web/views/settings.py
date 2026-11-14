@@ -13,6 +13,8 @@ from pathlib import Path
 
 from web.components import section
 from web.html import el
+from web.db import has_column
+from web.queries import parse_ts
 
 TITLE = "Settings"
 REFRESH = False          # a 60 s reload would wipe a half-filled form
@@ -93,7 +95,33 @@ GROUPS = (
                 "runs started after the change; factory wf start --ci overrides it. Details: docs/workflow-engine.md.",
                 Kind.CHOICE, None, None, (("github", "GitHub"), ("local", "Local (affected tests)"))),
     )),
+    # HM-53: the per-project rows of this group (what clears a change, the last local run) are drawn by _gate_row
+    ("Merge gate", "What clears a change before it merges, per project: GitHub's CI, or the local test run of "
+                   "docs/local-gate.md (section \"This factory\"). The local full suite takes about 30 min on this "
+                   "machine, GitHub's CI about 22. Details: docs/local-gate.md.", (
+        Setting("gate_ignore_pending_ci", "Nothing waits for GitHub in local mode",
+                "On: for a project on the local test run, the merge, the first review and the coder's pre-check wait "
+                "only for the local run; a GitHub check that finished red still blocks a merge. No effect on a "
+                "project on GitHub CI. Details: docs/local-gate.md.", Kind.SWITCH, None, None),
+    )),
 )
+MERGE_GATE_GROUP = "Merge gate"
+
+
+class GateMode:
+    GITHUB = "github"
+    LOCAL = "local"
+    CUSTOM = "custom"   # a gate_cmd this page did not set: shown, never changed here
+
+
+GATE_MODE_LABELS = {GateMode.GITHUB: "GitHub CI", GateMode.LOCAL: "Local test run", GateMode.CUSTOM: "Custom command"}
+GATE_CHOICES = (GateMode.GITHUB, GateMode.LOCAL)
+# the values HM-51 measured and wrote down in docs/local-gate.md, section "This factory"
+LOCAL_GATE_CMD = "python3 $FACTORY_MAIN/tests/gate_shards.py"
+LOCAL_GATE_COUNT_CMD = "python3 $FACTORY_MAIN/ci/test_count_gate.py count ."
+LOCAL_GATE_TIMEOUT_S = 3600
+GATE_PATH = "/settings/gate"   # the page's second write path (server: Handler._gate_post)
+PROJECT_MAX = 64
 SETTINGS = {s.key: s for _, _, items in GROUPS for s in items}
 EDITABLE = frozenset(SETTINGS)
 
@@ -107,24 +135,61 @@ def valid_value(key, value):
         return value in (ON, OFF)
     return value.isascii() and value.isdigit()
 
-# query parameters of the redirect after a change (server: Handler._settings_post)
+# query parameters of the redirect after a change (server: Handler._settings_post and Handler._gate_post)
 Q_SAVED, Q_ERROR, Q_MSG = "saved", "error", "msg"
+Q_GATE_SAVED, Q_GATE_ERROR = "gate_saved", "gate_error"
 
 
-def apply_change(factory_home, key, value, env=None):
-    """Run `bin/factory config <key> <value>`; returns (ok, message). The caller has checked `key` is in EDITABLE."""
-    cmd = [sys.executable, str(ROOT / "bin" / "factory"), "config", key, value]
+def _run_factory(factory_home, args, env, what):
+    """Run `bin/factory <args>`; returns (ok, message): the CLI's last stderr line on a refusal."""
+    cmd = [sys.executable, str(ROOT / "bin" / "factory"), *args]
     run_env = dict(os.environ if env is None else env)
     if factory_home:
         run_env["FACTORY_HOME"] = str(factory_home)
     try:
         r = subprocess.run(cmd, env=run_env, capture_output=True, text=True, timeout=CONFIG_TIMEOUT_S)
     except (OSError, subprocess.TimeoutExpired) as e:
-        return False, f"factory config could not run: {e}"[:MSG_MAX]
+        return False, f"{what} could not run: {e}"[:MSG_MAX]
     if r.returncode == 0:
         return True, ""
-    last = (r.stderr.strip().splitlines() or [f"factory config exited {r.returncode}"])[-1]
+    last = (r.stderr.strip().splitlines() or [f"{what} exited {r.returncode}"])[-1]
     return False, last.removeprefix("factory: ")[:MSG_MAX]
+
+
+def apply_change(factory_home, key, value, env=None):
+    """Run `bin/factory config <key> <value>`; returns (ok, message). The caller has checked `key` is in EDITABLE."""
+    return _run_factory(factory_home, ["config", key, value], env, "factory config")
+
+
+def gate_mode(gate_cmd):
+    cmd = (gate_cmd or "").strip()
+    return GateMode.GITHUB if not cmd else GateMode.LOCAL if cmd == LOCAL_GATE_CMD else GateMode.CUSTOM
+
+
+def gate_update_args(project, mode):
+    """`factory project update` arguments for `mode`. GitHub empties the command and the count command again, so a switch
+    to local and back leaves the row as it was (gate_timeout_s is the default 3600 both ways)."""
+    if mode == GateMode.LOCAL:
+        return ["project", "update", project, "--gate-cmd", LOCAL_GATE_CMD, "--gate-count-cmd", LOCAL_GATE_COUNT_CMD,
+                "--gate-timeout-s", str(LOCAL_GATE_TIMEOUT_S)]
+    return ["project", "update", project, "--gate-cmd", "", "--gate-count-cmd", ""]
+
+
+def apply_gate_mode(factory_home, project, mode, env=None):
+    """Switch `project` to `mode` through `bin/factory project update`. The caller has checked both against the DB."""
+    return _run_factory(factory_home, gate_update_args(project, mode), env, "factory project update")
+
+
+def gate_projects(con):
+    """[{id, repo, cmd, mode, last}] for the Merge gate group: every project and its newest gate run (two queries).
+    A database from before the local gate (no projects.gate_cmd or no gate_runs) has no rows here, as web/queries.py does."""
+    if not has_column(con, "projects", "gate_cmd") or not has_column(con, "gate_runs", "id"):
+        return []
+    last = {r["project_id"]: dict(r) for r in con.execute(
+        "SELECT g.id, g.project_id, g.status, g.head_sha, g.started, g.finished, g.created FROM gate_runs g "
+        "JOIN (SELECT project_id, MAX(id) mid FROM gate_runs GROUP BY project_id) m ON g.id=m.mid")}
+    return [{"id": p["id"], "repo": p["repo_path"] or "", "cmd": p["gate_cmd"] or "", "mode": gate_mode(p["gate_cmd"]),
+             "last": last.get(p["id"])} for p in con.execute("SELECT id, repo_path, gate_cmd FROM projects ORDER BY id")]
 
 
 def _shown(s, value):
@@ -155,7 +220,15 @@ def data(ctx):
         result = {"ok": True, "key": q[Q_SAVED], "msg": ""}
     elif q.get(Q_ERROR) in EDITABLE:
         result = {"ok": False, "key": q[Q_ERROR], "msg": (q.get(Q_MSG) or "")[:MSG_MAX]}
-    return {"groups": groups, "editable": bool(getattr(ctx, "loopback", False)), "result": result}
+    projects = gate_projects(ctx.db)
+    ids = {p["id"] for p in projects}
+    gate_result = None
+    if q.get(Q_GATE_SAVED) in ids:
+        gate_result = {"ok": True, "project": q[Q_GATE_SAVED], "msg": ""}
+    elif q.get(Q_GATE_ERROR) in ids:
+        gate_result = {"ok": False, "project": q[Q_GATE_ERROR], "msg": (q.get(Q_MSG) or "")[:MSG_MAX]}
+    return {"groups": groups, "editable": bool(getattr(ctx, "loopback", False)), "result": result,
+            "projects": projects, "gate_result": gate_result}
 
 
 def _control(s):
@@ -198,11 +271,54 @@ def _row(ctx, d, s):
               class_="set-row", id=f"set-{s['key']}")
 
 
+def _last_run(r):
+    """One line on a project's newest gate run (HM-53)."""
+    if not r:
+        return "Last local run: no run yet"
+    start, end = parse_ts(r["started"]), parse_ts(r["finished"])
+    took = f", {int((end - start).total_seconds())} s" if start and end else ""
+    at = start or parse_ts(r["created"])
+    when = at.astimezone().strftime("%m-%d %H:%M") if at else "?"
+    return f"Last local run: #{r['id']} {r['status']}{took}, started {when}, head {(r['head_sha'] or '?')[:8]}"
+
+
+def _gate_row(ctx, d, p):
+    """One project of the Merge gate group: what clears a change, a switch (not for a custom command), the last run."""
+    value = el("span", GATE_MODE_LABELS[p["mode"]], class_="set-value")
+    if p["mode"] == GateMode.CUSTOM:
+        ctl = el("p", "Read-only here: a custom gate command (", el("code", p["cmd"], class_="set-cmd"),
+                 "); change it with factory project update.", class_="set-help")
+    elif d["editable"]:
+        ctl = el("form", el("input", type="hidden", name="token", value=getattr(ctx, "form_token", "") or ""),
+                 el("input", type="hidden", name="project", value=p["id"]),
+                 el("select", *[el("option", GATE_MODE_LABELS[m], value=m, selected=p["mode"] == m) for m in GATE_CHOICES],
+                    name="mode", class_="set-input", aria_label=f"What clears a change in {p['id']}"),
+                 el("button", "Save", type="submit", class_="set-btn"), method="post", action=GATE_PATH, class_="set-form")
+    else:
+        other = GateMode.LOCAL if p["mode"] == GateMode.GITHUB else GateMode.GITHUB
+        ctl = el("code", " ".join(a if a and " " not in a else f"'{a}'" for a in ["factory", *gate_update_args(p["id"], other)]),
+                 class_="set-cmd")
+    note = None
+    r = d["gate_result"]
+    if r and r["project"] == p["id"]:
+        note = el("p", "Saved." if r["ok"] else f"Not changed: {r['msg'] or 'refused'}",
+                  class_="set-note set-note--ok" if r["ok"] else "set-note set-note--bad", role="status")
+    return el("div", el("div", el("span", f"What clears a change in {p['id']}", class_="set-name"),
+                        el("code", p["repo"] or p["id"], class_="set-key"),
+                        el("p", _last_run(p["last"]), class_="set-help"), class_="set-text"),
+              el("div", el("div", value, class_="set-now"), ctl, note, class_="set-ctl"),
+              class_="set-row", id=f"gate-{p['id']}")
+
+
 def render(ctx, d):
     intro = (el("p", "Changes run factory config on this machine and are logged as config events.", class_="set-intro")
              if d["editable"] else
              el("p", "Read-only: settings can be changed here only when factory serve is bound to 127.0.0.1. "
                      "Run the command shown instead.", class_="set-intro"))
-    return el("div", intro, *[section(g["title"], el("p", g["note"], class_="set-help"),
-                                      *[_row(ctx, d, s) for s in g["settings"]]) for g in d["groups"]],
+
+    def rows(g):
+        extra = [_gate_row(ctx, d, p) for p in d["projects"]] if g["title"] == MERGE_GATE_GROUP else []
+        return [*extra, *[_row(ctx, d, s) for s in g["settings"]]]
+
+    return el("div", intro, *[section(g["title"], el("p", g["note"], class_="set-help"), *rows(g)) for g in d["groups"]],
               class_="settings")

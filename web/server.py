@@ -159,7 +159,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def _dispatch(self):
         app = self.server.app
-        settings_post = self.command == "POST" and urlsplit(self.path).path == SETTINGS_PATH
+        settings_post = self.command == "POST" and urlsplit(self.path).path in (SETTINGS_PATH, settings_view.GATE_PATH)
         if self.command not in ("GET", "HEAD") and not settings_post:
             return self._error(405, "method not allowed", {"Allow": "GET, HEAD"})
         if not app.sem.acquire(blocking=False):
@@ -175,7 +175,7 @@ class Handler(BaseHTTPRequestHandler):
                 self.query = {}
             self._path = parts.path
             if settings_post:
-                return self._settings_post(app, host)
+                return self._gate_post(app, host) if parts.path == settings_view.GATE_PATH else self._settings_post(app, host)
             self._route(parts.path)
         except (BrokenPipeError, ConnectionResetError, TimeoutError):
             raise
@@ -253,9 +253,9 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(404, json.dumps({"error": "not found", "scope": scope, "id": oid}), JSON_TYPE)
         self._send(200, json.dumps(data, default=str), JSON_TYPE)
 
-    def _settings_post(self, app, host):
-        """HM-1: change one curated setting. Every check refuses on its own status; nothing is written unless all pass,
-        and the write itself is `bin/factory config` (validation, role check, event)."""
+    def _checked_form(self, app, host):
+        """The Settings page's write guard (HM-1), shared by both POST paths: loopback bind, same Origin, a form content
+        type, a size limit and the per-process form token. Returns the form, or None after sending the refusal."""
         if not app.loopback:
             return self._error(403, "settings can be changed only when factory serve is bound to a loopback address")
         if (self.headers.get("Origin") or "") != f"http://{host}":
@@ -275,6 +275,34 @@ class Handler(BaseHTTPRequestHandler):
             return self._error(400, "bad form")
         if not hmac.compare_digest(form.get("token", ""), app.form_token):
             return self._error(403, "form expired: reload the page")
+        return form
+
+    def _gate_post(self, app, host):
+        """HM-53: switch one project's merge gate between GitHub CI and the local test run. Same guard as _settings_post;
+        an unknown project or mode, or a project with a custom gate command, is refused before any subprocess runs."""
+        form = self._checked_form(app, host)
+        if form is None:
+            return None
+        project, mode = form.get("project", ""), form.get("mode", "")
+        if mode not in settings_view.GATE_CHOICES or not project or len(project) > settings_view.PROJECT_MAX:
+            return self._error(400, "bad project or mode")
+        with wdb.reader(app.current_db()) as con:
+            row = con.execute("SELECT gate_cmd FROM projects WHERE id=?", (project,)).fetchone()
+        if row is None:
+            return self._error(400, "no such project")
+        if settings_view.gate_mode(row["gate_cmd"]) == settings_view.GateMode.CUSTOM:
+            return self._error(400, "a custom gate command is changed with factory project update, not here")
+        ok, msg = settings_view.apply_gate_mode(app.factory_home, project, mode, env=app.config_env)
+        target = (f"{SETTINGS_PATH}?{settings_view.Q_GATE_SAVED}={quote(project)}" if ok else
+                  f"{SETTINGS_PATH}?{settings_view.Q_GATE_ERROR}={quote(project)}&{settings_view.Q_MSG}={quote(msg)}")
+        self._send(303, "", "text/plain; charset=utf-8", {"Location": f"{target}#gate-{quote(project)}"})
+
+    def _settings_post(self, app, host):
+        """HM-1: change one curated setting. Every check refuses on its own status; nothing is written unless all pass,
+        and the write itself is `bin/factory config` (validation, role check, event)."""
+        form = self._checked_form(app, host)
+        if form is None:
+            return None
         key, value = form.get("key", ""), form.get("value", "").strip()
         if key not in settings_view.EDITABLE:
             return self._error(400, "not an editable setting")

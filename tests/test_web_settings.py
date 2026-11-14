@@ -8,6 +8,7 @@ import contextlib
 import http.client
 import io
 import re
+import sqlite3
 import sys
 import threading
 import unittest
@@ -243,6 +244,129 @@ class SettingsWrite(FactoryTestCase):
         self.assertTrue(q[settings.Q_MSG][0])
         self.assertEqual(self.value("worktree_pool_max"), before)
         self.assertIn("Not changed:", self.page(h["Location"].split("#")[0])[2].decode())
+
+
+class MergeGatePage(ServerCase):
+    """HM-53: the Merge gate group (one row per project) and its write path, POST /settings/gate."""
+
+    def setUp(self):
+        super().setUp()
+        # the web fixture schema predates the local gate: give it the two parts the group reads (as bin/factory_cli.py SCHEMA)
+        self.con.execute("ALTER TABLE projects ADD COLUMN gate_cmd TEXT NOT NULL DEFAULT ''")
+        self.con.execute("CREATE TABLE gate_runs(id INTEGER PRIMARY KEY AUTOINCREMENT, project_id TEXT NOT NULL, kind TEXT NOT NULL, "
+                         "status TEXT NOT NULL, head_sha TEXT, cmd TEXT, created TEXT NOT NULL, started TEXT, finished TEXT)")
+
+    def test_a_database_without_the_gate_columns_shows_no_rows(self):
+        self.con.execute("DROP TABLE gate_runs")
+        self.assertEqual(settings.gate_projects(self.con), [])
+        self.assertEqual(self.get("/settings")[0], 200)
+
+    def post(self, *a, **k):
+        with contextlib.redirect_stderr(io.StringIO()):
+            return post(self.httpd, *a, **k)
+
+    def token(self):
+        return TOKEN_RE.search(self.get("/settings")[2]).group(1).decode()
+
+    def row(self, pid="p1"):
+        text = self.get("/settings")[2].decode()
+        start = text.index(f'id="gate-{pid}"')
+        return text[start:text.index('class="set-row"', start + 1) if 'class="set-row"' in text[start + 1:] else None]
+
+    def test_group_lists_each_project_with_its_mode_and_no_run_yet(self):
+        text = self.get("/settings")[2].decode()
+        self.assertIn("Merge gate", text)
+        self.assertLess(text.index("Automation"), text.index("Merge gate"))
+        row = self.row()
+        self.assertIn('class="set-value">GitHub CI<', row)
+        self.assertIn("Last local run: no run yet", row)
+        self.assertIn(f'action="{settings.GATE_PATH}"', row)
+        self.assertEqual(re.findall(r'<option[^>]*value="([^"]*)"', row[:row.index("</form>")]), list(settings.GATE_CHOICES))
+        self.assertIn('id="set-gate_ignore_pending_ci"', text)
+
+    def test_local_and_custom_commands_are_told_apart_and_custom_is_read_only(self):
+        self.con.execute("UPDATE projects SET gate_cmd=? WHERE id='p1'", (settings.LOCAL_GATE_CMD,))
+        self.assertIn('class="set-value">Local test run<', self.row())
+        self.con.execute("UPDATE projects SET gate_cmd='make test' WHERE id='p1'")
+        row = self.row()
+        self.assertIn('class="set-value">Custom command<', row)
+        self.assertIn("make test", row)
+        self.assertNotIn(f'action="{settings.GATE_PATH}"', row)
+
+    def test_last_run_is_shown(self):
+        self.con.execute("INSERT INTO gate_runs(project_id,kind,status,head_sha,cmd,created,started,finished) VALUES("
+                         "'p1','pr','pass',?,'x','2026-11-15T10:00:00+00:00','2026-11-15T10:00:00+00:00','2026-11-15T10:30:00+00:00')",
+                         ("a" * 40,))
+        self.assertIn("Last local run: #1 pass, 1800 s, started ", self.row())
+        self.assertIn("head aaaaaaaa", self.row())
+
+    def test_query_count_does_not_grow_with_gate_runs(self):
+        def count():
+            n = []
+            self.con.row_factory = sqlite3.Row   # the server's connections return named rows
+            self.con.set_trace_callback(n.append)
+            settings.gate_projects(self.con)
+            self.con.set_trace_callback(None)
+            self.con.row_factory = None
+            return len(n)
+        base = count()
+        for i in range(20):
+            self.con.execute("INSERT INTO gate_runs(project_id,kind,status,cmd,created) VALUES('p1','pr','fail','x',?)", (str(i),))
+        self.assertEqual(count(), base)
+
+    def test_refusals_run_nothing(self):
+        calls = []
+        orig = settings.apply_gate_mode
+        settings.apply_gate_mode = lambda *a, **k: calls.append(a) or (True, "")
+        self.addCleanup(setattr, settings, "apply_gate_mode", orig)
+        tok = self.token()
+        good = {"project": "p1", "mode": settings.GateMode.LOCAL}
+        self.assertEqual(self.post(settings.GATE_PATH, {**good, "project": "nope"}, token=tok)[0], 400)
+        self.assertEqual(self.post(settings.GATE_PATH, {**good, "mode": settings.GateMode.CUSTOM}, token=tok)[0], 400)
+        self.assertEqual(self.post(settings.GATE_PATH, good)[0], 403)                       # no token
+        self.assertEqual(self.post(settings.GATE_PATH, good, token=tok, origin="http://evil.example")[0], 403)
+        self.con.execute("UPDATE projects SET gate_cmd='make test' WHERE id='p1'")
+        self.assertEqual(self.post(settings.GATE_PATH, good, token=tok)[0], 400)             # custom command
+        self.httpd.app.loopback = False
+        self.assertEqual(self.post(settings.GATE_PATH, good, token=tok)[0], 403)             # LAN bind
+        self.assertEqual(calls, [])
+
+
+class MergeGateWrite(FactoryTestCase):
+    """HM-53 accept path through the real CLI (`bin/factory project update`)."""
+
+    def setUp(self):
+        super().setUp()
+        e = self.env
+        e.seed_project()
+        self.httpd = server.make_server(e.db_path, "127.0.0.1", 0, (), tokens=lambda: {"rows": []}, defaults={},
+                                        factory_home=e.home_dir)
+        self.httpd.app.config_env = e.env()
+        threading.Thread(target=self.httpd.serve_forever, daemon=True).start()
+        self.addCleanup(lambda: (self.httpd.shutdown(), self.httpd.server_close()))
+
+    def switch(self, mode):
+        with contextlib.redirect_stderr(io.StringIO()):
+            tok = TOKEN_RE.search(get(self.httpd, "/settings")[2]).group(1).decode()
+            return post(self.httpd, settings.GATE_PATH, {"project": "zz-test-proj", "mode": mode}, token=tok)
+
+    def row(self):
+        return dict(self.env.sql("SELECT gate_cmd, gate_count_cmd, gate_timeout_s, required_checks FROM projects "
+                                 "WHERE id='zz-test-proj'")[0])
+
+    def test_switch_to_local_and_back_leaves_the_row_as_it_was(self):
+        before = self.row()
+        st, h, _ = self.switch(settings.GateMode.LOCAL)
+        self.assertEqual(st, 303, h)
+        self.assertEqual(parse_qs(urlsplit(h["Location"]).query), {settings.Q_GATE_SAVED: ["zz-test-proj"]})
+        on = self.row()
+        self.assertEqual((on["gate_cmd"], on["gate_count_cmd"], on["gate_timeout_s"]),
+                         (settings.LOCAL_GATE_CMD, settings.LOCAL_GATE_COUNT_CMD, settings.LOCAL_GATE_TIMEOUT_S))
+        self.assertEqual(on["required_checks"], before["required_checks"])
+        self.assertEqual(self.switch(settings.GateMode.GITHUB)[0], 303)
+        self.assertEqual(self.row(), before)
+        ev = self.env.sql("SELECT detail FROM events WHERE entity='project' AND entity_id='zz-test-proj' AND action='update'")
+        self.assertTrue(any("gate_cmd=" in r["detail"] for r in ev))
 
 
 if __name__ == "__main__":
