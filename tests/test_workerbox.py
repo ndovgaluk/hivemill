@@ -908,6 +908,8 @@ REAL_HOME = Path(nsbox.real_home())
 REAL_GO = REAL_HOME / ".local/go"
 REAL_MOD = next((REAL_HOME / rel for rel in workerbox.GO_MODCACHE_REL if (REAL_HOME / rel).is_dir()), None)
 NEEDS_GO = unittest.skipUnless((REAL_GO / "bin/go").is_file(), "no ~/.local/go/bin/go on this host")
+# HM-66: `go test -race` needs cgo, so a C compiler; a host without one (the owner's box) cannot run it
+NEEDS_CGO = unittest.skipUnless(shutil.which("cc") or shutil.which("gcc"), "no C compiler (cc/gcc): go test -race needs cgo")
 GO_HEAVY = unittest.skipUnless(os.environ.get("FACTORY_GO_SANDBOX_HEAVY") == "1", "set FACTORY_GO_SANDBOX_HEAVY=1")
 GO_KEYS = {"GOROOT", "GOCACHE", "GOTMPDIR", "GOMODCACHE", "GOPATH", "GOTOOLCHAIN", "GOPROXY", "GOSUMDB", "GOFLAGS",
            "GOENV", "GOWORK"}
@@ -1175,6 +1177,7 @@ def run_in(case, ops, *, role="coder", rw_cwd=True, cwd=None, agent=None):
 class GoRealToolchainTests(GoBoxCase):
     @NEEDS_USERNS
     @NEEDS_GO
+    @NEEDS_CGO
     def test_go_gofmt_vet_and_race_test_work_inside_offline(self):
         mod = self.box.cwd
         put(mod / "go.mod", "module example.invalid/tiny\n\ngo 1.21\n")

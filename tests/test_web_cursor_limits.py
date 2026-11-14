@@ -1,4 +1,5 @@
 """T-0878: Cursor tier, limits, and time spent on the status header, Overview System, and Resources."""
+import datetime as dt
 import json
 import re
 import sys
@@ -50,8 +51,8 @@ class UiBase(unittest.TestCase):
                 "cursor-coder-x",
                 "coder",
                 "exited",
-                "2026-10-24T08:00:00+02:00",
-                "2026-10-24T10:00:00+02:00",
+                (NOW - dt.timedelta(hours=4)).isoformat(),   # HM-66: relative to NOW, so the 2 h fall in "today" in every TZ
+                (NOW - dt.timedelta(hours=2)).isoformat(),
                 "composer-2.5",
                 json.dumps({"runtime": "cursor", "org": "cursor"}),
             ),
