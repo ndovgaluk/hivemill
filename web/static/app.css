@@ -238,6 +238,7 @@ summary { cursor: pointer; min-height: var(--tap); display: list-item; list-styl
 .navgoals { position: relative; }
 .navgoals > .nav-item { padding-right: 40px; }
 .navgroup .navsub { margin: 2px 0 6px 22px; }
+.navgroup .navsub--done { margin-top: 0; }   /* HM-36: the done list sits right under the "+" */
 .navgoal a { display: block; padding: 4px 8px; border-radius: var(--r-sm); color: var(--text-2); font: 400 12px/16px var(--font); }
 .navgoal a:hover { background: var(--fill); text-decoration: none; }
 .navgoal.is-current a { background: var(--info-bg); color: var(--info-fg); }
@@ -248,9 +249,9 @@ summary { cursor: pointer; min-height: var(--tap); display: list-item; list-styl
 .navgoal-l2 .meter { display: flex; gap: 6px; }
 .navgoal-l2 .meter-svg { width: auto; flex: 1; min-width: 40px; }
 .navgoal-l2 .lbl { font-size: 11px; color: var(--text-3); }
-.navplus { position: absolute; top: 6px; right: 8px; width: 24px; height: 24px; display: flex; align-items: center; justify-content: center;
+.navplus { position: absolute; top: 0; right: 6px; width: 28px; height: var(--tap); min-height: var(--tap); display: flex; align-items: center; justify-content: center;
            border-radius: var(--r-sm); color: var(--text-3); font: 500 15px/1 var(--font); cursor: pointer; list-style: none; }
-.navplus::-webkit-details-marker { display: none; }
+.navplus::-webkit-details-marker { display: none; }   /* the + spans the whole 36 px row (global summary min-height = --tap), so it centres on Goals/Tasks */
 .navplus:hover { background: var(--fill); color: var(--text-1); }
 .navdone .nav-on, .navdone[open] .nav-off { display: none; }
 .navdone[open] .nav-on { display: inline; }

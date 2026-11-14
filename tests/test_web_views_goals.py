@@ -212,6 +212,38 @@ class TestR3Pages(ViewCase):
         self.assertNotIn('class="agentrow"', html)
         self.assertNotIn('<ul class="lrow-list"></ul>', html)
 
+    def _header(self, gid):
+        d, html = self.page(goals.detail, id=gid)
+        return re.search(r'<p class="metarow">(.*?)</p>', html, re.S).group(1)
+
+    def _task(self, tid, status, gid="G-77"):   # G-77: a goal of its own (G-9 already has T-93 in progress)
+        self.w.execute("INSERT OR IGNORE INTO goals VALUES(?,'p1','Goal 77','i','c','active',1,'owner',NULL,?,?)",
+                       (gid, ts(8, 0), ts(9, 0)))
+        self.w.execute("INSERT INTO tasks(id,goal_id,title,status,created,updated) VALUES(?,?,?,?,'a','b')",
+                       (tid, gid, f"title {tid}", status))
+
+    def test_goal_header_links_the_task_in_work(self):  # HM-37
+        self._task("T-0019", "done")
+        self._task("T-0020", "in_review")
+        self._task("T-0021", "todo")
+        m = self._header("G-77")
+        self.assertIn("now: ", m)
+        self.assertEqual(re.findall(r'href="/task/([^"]+)"', m), ["T-0020"])
+        self.assertIn('title="title T-0020"', m)
+        self.assertIn('<span class="mono">T-0020</span>', m)
+        self.assertIn(wh.LABELS["in_review"], m)
+
+    def test_goal_header_lists_every_task_in_work_in_id_order(self):  # HM-37
+        self._task("T-0031", "in_review")
+        self._task("T-0030", "in_progress")
+        self.assertEqual(re.findall(r'href="/task/([^"]+)"', self._header("G-77")), ["T-0030", "T-0031"])
+
+    def test_goal_header_says_no_task_in_work(self):  # HM-37
+        self._task("T-0040", "todo")
+        m = self._header("G-77")
+        self.assertIn('<span class="muted">no task in work</span>', m)
+        self.assertNotIn("/task/", m)
+
     def test_goal_page_query_count_does_not_grow_with_teams(self):
         def count():
             c = self.ctx()

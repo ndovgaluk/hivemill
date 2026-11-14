@@ -207,3 +207,9 @@ One line per turn: what was asked, what was done or found. Explanations live in 
 - 2026-11-14: explained the 📬N badge next to the boss in the herdr sidebar (unread factory messages, a badge instead of a nudge). -> 15
 - 2026-11-14: explained why the boss reads mail late (wake only for escalation/request, 15 min age, 30 min cooldown). -> 15
 - 2026-11-14: HM-36 (active goals and the last 5 done goals in the sidebar) implemented on new branch hm-36-sidebar-goals from origin/main, uncommitted, In Review. -> docs/web-ui.md
+- 2026-11-14: HM-37 (goal header now: task links) and HM-43 (sidebar tasks in work + last 3 finished) implemented, uncommitted on hm-37-goal-current-task; fixed two HM-36 web test regressions; insight on running all test_web*.py for UI changes.
+- 2026-11-14: owner rule added to CLAUDE.local.md (both copies): every UI reply ends with a checked test URL, the code and data it serves.
+- 2026-11-14: Q on the sidebar task icon (in review vs stopped) → 25-web-ui-walkthrough.md
+- 2026-11-14: HM-48 (Goals + also lists the last 3 blocked/cancelled goals) implemented, uncommitted on hm-37-goal-current-task.
+- 2026-11-14: /com-tsr push: branch hm-37-goal-current-task merged with main (080362b), pushed, PR 17 opened; Q on PR reviewers and CI → 24-testing-in-the-factory.md
+- 2026-11-14: HM-49 (versioned app.css/theme.js links) and the + alignment fix (HM-36) implemented, uncommitted on hm-49-asset-version; owner saw an unstyled sidebar until a hard refresh.

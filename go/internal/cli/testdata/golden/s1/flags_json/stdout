@@ -940,6 +940,15 @@
   "current": "behind_ok"
  },
  {
+  "key": "stale_unread_alert_s",
+  "kind": "setting",
+  "default": "3600",
+  "summary": "tick: one alert to the director (for the director: to the boss) when a live agent has unread mail at least this old",
+  "goal": "G-003",
+  "doc": "docs/hq-nudges.md",
+  "current": "3600"
+ },
+ {
   "key": "state_dump_interval_s",
   "kind": "setting",
   "default": "3600",

@@ -350,6 +350,19 @@ def _goal_flow_section(d):
     return flow_mount(FlowScope.GOAL, gf["goal_id"], head, charts.goal_diagram(gf), el("div", *blocks, class_="flow-blocks"))
 
 
+IN_WORK = ("in_progress", "in_review")   # HM-37: what the goal header calls "now"
+
+
+def _now_tasks(tasks):
+    """HM-37: the goal header's "now:" part, one link per task in progress or in review, in id order."""
+    now = sorted((t for t in tasks if t["status"] in IN_WORK), key=lambda t: t["id"])
+    if not now:
+        return el("span", "no task in work", class_="muted")
+    links = [el("a", el("span", t["id"], class_="mono"), " ", task_badge(t["status"]), href=f"/task/{t['id']}", title=t["title"])
+             for t in now]
+    return el("span", "now: ", *[x for i, a in enumerate(links) for x in ((", ",) if i else ()) + (a,)])
+
+
 def _detail_render(ctx, d):
     if not d.get("found"):
         return not_found("goal", d.get("id"), "/goals", "Back to Goals", _crumb(d.get("id") or "?"))
@@ -360,7 +373,7 @@ def _detail_render(ctx, d):
     team = d["teams_detail"][0]["id"] if d["teams_detail"] else None
     meta = el("p", status_badge(d["status"]), " ", org_badge(d.get("org")), " · ",
               f"P{d['priority']}" if d["priority"] is not None else "no priority",
-              " · ", team or "no team", " · updated ", ts(d["updated"]), class_="metarow")
+              " · ", team or "no team", " · updated ", ts(d["updated"]), " · ", _now_tasks(d["tasks"]), class_="metarow")
     main = el("div", _intent(d), _teams(d, ctx.now), charts.meter(done, total, summary), _cost_time_card(d),
               _blocking(d, ctx.now), _criteria(d), _tasks_table(d, ctx.now), class_="gd-main")
     # DVDG-561: the flow debugger sits above the two columns, so it gets the full content width

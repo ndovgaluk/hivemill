@@ -39,17 +39,17 @@
       window.scrollTo(0, kept.y || 0);
     }
   } catch (e) { /* unreadable or junk sessionStorage: keep the page defaults */ }
-  // 3. The sidebar's "+" (last done goals, HM-36): its open state is kept across pages; the name follows the state.
-  var NAV_DONE = "factory-nav-done";
+  // 3. The sidebar's "+" lists (done goals HM-36, finished tasks HM-43): each one's open state is kept across pages
+  //    under its data-key; the name follows the state (data-show / data-hide).
   [].forEach.call(document.querySelectorAll("details.navdone"), function (d) {
-    var s = d.querySelector("summary");
+    var s = d.querySelector("summary"), store = "factory-" + d.getAttribute("data-key");
     function sync() {
       s.setAttribute("aria-expanded", String(d.open));
-      s.setAttribute("aria-label", d.open ? "Hide done goals" : "Show the last 5 done goals");
+      s.setAttribute("aria-label", d.getAttribute(d.open ? "data-hide" : "data-show"));
     }
-    if (!d.open && get("localStorage", NAV_DONE) === "1") d.open = true;
+    if (!d.open && get("localStorage", store) === "1") d.open = true;
     sync();
-    d.addEventListener("toggle", function () { put("localStorage", NAV_DONE, d.open ? "1" : "0"); sync(); });
+    d.addEventListener("toggle", function () { put("localStorage", store, d.open ? "1" : "0"); sync(); });
   });
   window.addEventListener("pagehide", function () {
     put("sessionStorage", KEEP, JSON.stringify({ path: here, at: Date.now(), y: window.scrollY,

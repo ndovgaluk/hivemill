@@ -37,6 +37,7 @@ Every page under `docs/`, grouped by what you want to do. New to the factory? St
 - [unblocking-a-worker.md](unblocking-a-worker.md): getting an agent out of a stuck permission dialog.
 - [auto-clear-dialogs.md](auto-clear-dialogs.md): the tick dismisses blocking dialogs so nobody has to click.
 - [boss-mail.md](boss-mail.md): why the tick never prompts the boss pane directly.
+- [hq-nudges.md](hq-nudges.md): how mail prompts reach the boss and the director after a relaunch, the alert for a prompt that cannot be delivered, and the alert for unread mail older than an hour.
 - [ci-cost.md](ci-cost.md): the $0 CI budget, owner billing and fork-approval steps, the kill switch.
 - [CUTOVER.md](CUTOVER.md): the runbook that moves factory development to the public repository.
 - [ISSUES.md](ISSUES.md): labels, the triage rule that turns public issues into factory tasks, and release milestones.

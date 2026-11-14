@@ -25,3 +25,5 @@ With `owner_alert_send=1` **and** `owner_alert_feed=1` the tick sends each open,
 - Failure: the first failure ends the tick's sending, nothing is tried for 300 s, the row stays unsent and is retried. One `owner-alert-send-failed` event per hour, holding only an exception class name or `HTTP <status>`.
 - Flap guard: a row is held while the same kind + ref was sent in the last 24 h; if still open after that it is sent.
 - Rollback: `factory config owner_alert_send 0`.
+
+How the tick finds the boss pane after a relaunch, and the alerts for an undeliverable prompt and for stale unread mail: [hq-nudges.md](hq-nudges.md).

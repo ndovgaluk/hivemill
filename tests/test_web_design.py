@@ -215,7 +215,7 @@ class Shell(unittest.TestCase):
 
     def test_scripts_only_local_deferred(self):
         scripts = re.findall(r"<script\b[^>]*>", self.doc)
-        self.assertEqual(scripts, ['<script src="/static/theme.js" defer>'])
+        self.assertEqual(scripts, [f'<script src="{wh.asset("theme.js")}" defer>'])
         self.assertNotIn("<script>", self.doc)
         self.assertNotRegex(self.doc, r"\son\w+=")
         self.assertNotRegex(self.doc, r"""(src|href)=["']https?:""")

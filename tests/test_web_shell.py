@@ -9,6 +9,7 @@ import sys
 import tempfile
 import threading
 import unittest
+from unittest import mock
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -58,7 +59,7 @@ class TestEveryRouteRenders(ServerCase):
         sections = re.findall(r'<a href="([^"]+)" class="nav-item', nav)   # HM-36: goal links sit under "Goals" too
         self.assertEqual(sections, [p for p, _ in wh.NAV])
         self.assertEqual(len(sections), 10)
-        self.assertEqual(re.findall(r"<script\b[^>]*>", text), ['<script src="/static/theme.js" defer>'])
+        self.assertEqual(re.findall(r"<script\b[^>]*>", text), [f'<script src="{wh.asset("theme.js")}" defer>'])
 
     def test_phone_more_nav_lists_every_page_and_tabbar_has_five_items(self):
         text = self.get("/tasks")[2].decode()
@@ -200,6 +201,23 @@ class TestShellStatus(unittest.TestCase):
 
 
 class TestHelpers(unittest.TestCase):
+    def test_assets_are_linked_with_a_version_that_follows_the_file(self):  # HM-49
+        out = str(wh.page("T", ""))
+        for name in ("app.css", "theme.js", "favicon.svg"):
+            self.assertRegex(out, r'"/static/%s\?v=[0-9a-f]+"' % re.escape(name))
+        with mock.patch.object(wh, "STATIC_DIR", wh.STATIC_DIR / "missing-dir"):
+            self.assertEqual(wh.asset("app.css"), "/static/app.css")
+        import os
+        import shutil
+        import tempfile
+        with tempfile.TemporaryDirectory() as d:
+            shutil.copy(wh.STATIC_DIR / "app.css", d)
+            with mock.patch.object(wh, "STATIC_DIR", Path(d)):
+                first = wh.asset("app.css")
+                os.utime(Path(d) / "app.css", (1_000_000, 1_000_000))
+                self.assertNotEqual(wh.asset("app.css"), first)
+                self.assertEqual(wh.asset("app.css"), "/static/app.css?v=%x" % 1_000_000)
+
     def test_status_is_glyph_plus_human_label(self):
         out = str(wh.status("in_progress"))
         self.assertIn("In progress", out)
@@ -365,6 +383,88 @@ class TestMemoryLowServed(unittest.TestCase):
         self.assertNotIn("Memory low", self.page(999999))
 
 
+class TestSidebarTasks(ShellDb):
+    """HM-43: tasks in work under "Tasks", and a "+" with the last 3 finished tasks."""
+
+    def setUp(self):
+        super().setUp()
+        self.con.execute("DELETE FROM tasks")
+        self.con.execute("INSERT INTO projects(id,name,created) VALUES('pst','P','x')")
+        self.con.execute("ALTER TABLE goals ADD COLUMN org TEXT NOT NULL DEFAULT 'claude'")
+        for gid, org in (("G-701", None), ("G-702", "cursor")):
+            self.con.execute("INSERT INTO goals(id,project_id,title,status,priority,created,updated) VALUES(?,?,?,?,?,?,?)",
+                             (gid, "pst", gid, "active", 2, "x", "x"))
+            if org:
+                self.con.execute("UPDATE goals SET org=? WHERE id=?", (org, gid))
+
+    def task(self, tid, status, updated="2026-10-01T10:00:00+00:00", gid="G-701"):
+        self.con.execute("INSERT INTO tasks(id,goal_id,title,status,created,updated) VALUES(?,?,?,?,?,?)",
+                         (tid, gid, f"Title of {tid}", status, "x", updated))
+
+    def tasks_li(self, path="/goals"):
+        nav = main_nav(self.get(path))
+        return nav.split('href="/tasks"', 1)[1].split('href="/agents"', 1)[0]
+
+    @staticmethod
+    def ids(text, cls):
+        m = re.search(r'<ul class="%s">(.*?)</ul>' % cls, text, re.S)
+        return re.findall(r'href="/task/([^"?]+)', m.group(1)) if m else []
+
+    def test_in_work_under_tasks_and_done_under_the_plus(self):
+        self.task("T-1", "in_progress")
+        self.task("T-2", "in_review")
+        self.task("T-3", "todo")
+        self.task("T-4", "done")
+        li = self.tasks_li()
+        self.assertEqual(self.ids(li, "navsub"), ["T-1", "T-2"])
+        self.assertEqual(self.ids(li, "navsub navsub--done"), ["T-4"])
+        self.assertIn('data-key="nav-done-tasks"', li)
+        self.assertIn('aria-label="Show the last 3 finished tasks" aria-expanded="false"', li)
+        self.assertIn("G-701", li)
+
+    def test_plus_lists_the_three_updated_last(self):
+        self.task("T-9", "in_progress")
+        for n, day in ((1, 3), (2, 7), (3, 5), (4, 1), (5, 6)):
+            self.task(f"T-D{n}", "done", updated=f"2026-10-0{day}T10:00:00+00:00")
+        self.assertEqual(self.ids(self.tasks_li(), "navsub navsub--done"), ["T-D2", "T-D5", "T-D3"])
+
+    def test_open_when_nothing_in_work_and_no_plus_without_done(self):
+        self.task("T-4", "done")
+        self.assertRegex(self.tasks_li(), r'<details class="navdone" data-key="nav-done-tasks"[^>]* open>')
+        self.con.execute("DELETE FROM tasks")
+        self.task("T-1", "in_progress")
+        li = self.tasks_li()
+        self.assertNotIn("navdone", li)
+        self.assertEqual(self.ids(li, "navsub"), ["T-1"])
+
+    def test_org_filter_and_current_task(self):
+        self.task("T-1", "in_progress")
+        self.task("T-2", "in_progress", gid="G-702")
+        nav = main_nav(self.get("/task/T-1?org=claude"))
+        li = nav.split('href="/tasks?org=claude"', 1)[1].split('href="/agents', 1)[0]
+        self.assertIn('href="/task/T-1?org=claude"', li)
+        self.assertNotIn("T-2", li)
+        self.assertIn('<li class="navgoal is-current"><a href="/task/T-1?org=claude"', li)
+        self.assertEqual(self.get("/task/T-1").count('aria-current="page"'), 1)
+
+    def test_query_count_does_not_grow_with_tasks(self):
+        from web import queries
+
+        def count():
+            n = []
+            self.con.set_trace_callback(n.append)
+            queries.nav_tasks(self.con)
+            self.con.set_trace_callback(None)
+            return len(n)
+        self.task("T-1", "in_progress")
+        self.task("T-2", "done")
+        base = count()
+        for i in range(10):
+            self.task(f"T-X{i}", "in_review")
+            self.task(f"T-Y{i}", "done")
+        self.assertEqual(count(), base)
+
+
 class TestSidebarGoals(ShellDb):
     """HM-36: active goals under "Goals" with the Goals page's indicators, and a "+" with the last 5 done goals."""
 
@@ -389,6 +489,22 @@ class TestSidebarGoals(ShellDb):
         m = re.search(r'<ul class="%s">.*?</ul>' % cls, main_nav(text), re.S)
         return m.group(0) if m else ""
 
+    def test_plus_lists_stopped_goals_after_the_done_ones(self):  # HM-48
+        self.goal("G-001", "done", closed="2026-10-02T10:00:00+00:00")
+        self.goal("G-002", "blocked", updated="2026-10-05T10:00:00+00:00")
+        self.goal("G-003", "cancelled", updated="2026-10-06T10:00:00+00:00")
+        self.goal("G-004", "active")
+        nav = main_nav(self.get("/tasks"))
+        self.assertEqual(re.findall(r'href="/goal/(G-\d+)"', self.sub(nav, "navsub")), ["G-004"])
+        self.assertEqual(re.findall(r'href="/goal/(G-\d+)"', self.sub(nav, "navsub navsub--done")), ["G-001", "G-003", "G-002"])
+
+    def test_only_three_stopped_goals_and_plus_open_with_only_a_blocked_goal(self):  # HM-48
+        for n in range(1, 5):
+            self.goal(f"G-01{n}", "blocked", updated=f"2026-10-0{n}T10:00:00+00:00")
+        nav = main_nav(self.get("/tasks"))
+        self.assertEqual(re.findall(r'href="/goal/(G-\d+)"', self.sub(nav, "navsub navsub--done")), ["G-014", "G-013", "G-012"])
+        self.assertRegex(nav, r'<details class="navdone" data-key="nav-done-goals"[^>]* open>')
+
     def test_only_active_goals_with_the_goals_page_indicators(self):
         from web import charts
         from web.components import row_status
@@ -410,7 +526,7 @@ class TestSidebarGoals(ShellDb):
         self.goal("G-200", "done", updated="2026-10-04T12:00:00+00:00")   # no status event: placed by updated
         nav = main_nav(self.get("/tasks"))
         plus = re.search(r'<summary class="navplus"[^>]*>', nav).group(0)
-        self.assertIn('aria-label="Show the last 5 done goals"', plus)
+        self.assertIn('aria-label="Show done and stopped goals"', plus)
         self.assertIn('aria-expanded="false"', plus)
         self.assertLess(nav.index('class="navplus"'), nav.index('<ul class="navsub navsub--done">'))
         done = self.sub(self.get("/tasks"), "navsub navsub--done")
@@ -420,8 +536,8 @@ class TestSidebarGoals(ShellDb):
         self.goal("G-001", "done", closed="2026-10-02T10:00:00+00:00")
         self.goal("G-002", "planning")
         nav = main_nav(self.get("/tasks"))
-        self.assertRegex(nav, r'<details class="navdone" data-key="nav-done-goals" open>')
-        self.assertIn('aria-label="Hide done goals" aria-expanded="true"', nav)
+        self.assertRegex(nav, r'<details class="navdone" data-key="nav-done-goals"[^>]* open>')
+        self.assertIn('aria-label="Hide done and stopped goals" aria-expanded="true"', nav)
         self.goal("G-003", "active")
         self.assertNotRegex(main_nav(self.get("/tasks")), r'<details class="navdone"[^>]* open>')
 
@@ -451,7 +567,7 @@ class TestSidebarGoals(ShellDb):
         self.assertEqual(text.count('aria-current="page"'), 1)
         text = self.get("/goal/G-001")
         nav = main_nav(text)
-        self.assertRegex(nav, r'<details class="navdone" data-key="nav-done-goals" open>')
+        self.assertRegex(nav, r'<details class="navdone" data-key="nav-done-goals"[^>]* open>')
         self.assertIn('aria-expanded="true"', nav)
         self.assertRegex(self.sub(text, "navsub navsub--done"), r'<li class="navgoal is-current"><a href="/goal/G-001"')
         self.assertEqual(text.count('aria-current="page"'), 1)
