@@ -115,6 +115,22 @@ The flip is proven end to end by `tests/test_gate_sandbox.py` `FlagRollback.test
 `gate_sandbox 1` (pass, note says `sandboxed`), then after `factory config gate_sandbox 0` (pass, no `sandboxed`), then with
 `1` again (pass, `sandboxed`). The test skips with the reason where user namespaces are unavailable.
 
+## Nothing waits for GitHub (`gate_ignore_pending_ci`, HM-52)
+
+Config `gate_ignore_pending_ci` (`0` or `1`, default `0`) has an effect only for a project in local mode. With it on, the
+head's local gate run is the one test run that anything waits for:
+
+| Step | Key off (and every project not in local mode) | Key on, local mode |
+|---|---|---|
+| Merge gate (`factory judge`, the mechanical merger) | GitHub's checks must have finished green, and the local run must pass | the local run must pass; a GitHub check that has not finished is not waited for (`judge_wait_ci` does not poll it); a check that **finished red** still refuses |
+| First review (`review_autospawn` with `coder_ci_handoff` on) | reviewer and QA start when GitHub's CI is green on the head | they start when the head's local run passed; with no run for the head one is queued; the wait is logged as a `review-autospawn-wait` event of kind `local-gate` |
+| Coder restart on red (`coder_ci_resume_tick`) | a red GitHub head restarts the coder | a `fail` run of the head restarts it, once per head, with the failing tests read from the run's log (`FAIL:`/`ERROR:` lines) and `factory gate show <id>` in its kickoff; the `coder-ci-resume` event says `source: local-gate` and the run id |
+| Coder pre-check (`factory prcheck` check 5) | runs `ci/affected.py --run` in the worktree | met by a `pass` run of `HEAD`; does not start `ci/affected.py`; with no run it queues one and fails with "local gate run queued; run factory done when it has passed" |
+
+The gate runs themselves log `gate-queued`/`gate-enqueued`, `gate-launched`, `gate-pass`, `gate-fail` and `gate-error`
+events on entity `gate` (see "What a run does"). Switch: `factory config gate_ignore_pending_ci 1`; off again with `0`.
+Tests: `tests/test_gate_ignore_pending.py`.
+
 ## This factory (HM-51, measured 2026-11-15)
 
 The `hivemill` project is **not** in local mode: its `gate_cmd` is empty and GitHub's CI clears its pull requests. The owner

@@ -226,6 +226,7 @@ INSERT INTO "config"("key","value") VALUES('test_tasks_max','512');
 INSERT INTO "config"("key","value") VALUES('test_sandbox_subuid','0');
 INSERT INTO "config"("key","value") VALUES('gate_post_status','0');
 INSERT INTO "config"("key","value") VALUES('gate_retry_error','1');
+INSERT INTO "config"("key","value") VALUES('gate_ignore_pending_ci','0');
 INSERT INTO "config"("key","value") VALUES('herdr_socket','~/.config/herdr/herdr.sock');
 INSERT INTO "config"("key","value") VALUES('terminal_backend','auto');
 INSERT INTO "config"("key","value") VALUES('stop_timeout_s','300');

@@ -82,6 +82,7 @@ var DefaultConfig = []ConfigDefault{
 	{"test_sandbox_subuid", "0"},
 	{"gate_post_status", "0"},
 	{"gate_retry_error", "1"},
+	{"gate_ignore_pending_ci", "0"},
 	{"herdr_socket", "~/.config/herdr/herdr.sock"},
 	{"terminal_backend", "auto"},
 	{"stop_timeout_s", "300"},

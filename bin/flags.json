@@ -190,6 +190,15 @@
    "promoted_in": "baseline"
   },
   {
+   "key": "gate_ignore_pending_ci",
+   "kind": "flag",
+   "default": "0",
+   "summary": "1 = in local gate mode the local run is the one test run: merge, first review and the coder pre-check do not wait for GitHub checks (a finished red check still refuses)",
+   "goal": "",
+   "doc": "docs/local-gate.md",
+   "state": "off"
+  },
+  {
    "key": "gate_max_load_ratio",
    "kind": "setting",
    "default": "1.25",

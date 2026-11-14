@@ -227,6 +227,7 @@ DEFAULT_CONFIG = {
     "test_sandbox_subuid": "0",  # 1 (with test_sandbox 1) = the test box runs as a subordinate host uid via newuidmap, not the owner uid; no newuidmap/subuid range = exit 3, never as the owner (T-0682)
     "gate_post_status": "0",     # 1 = mirror each PR gate result as the commit status factory/local-gate (written only, never read back)
     "gate_retry_error": "1",     # error (infra, not a test failure) runs are retried this many times by the T-B tick wiring
+    "gate_ignore_pending_ci": "0",  # HM-52: 1 = in local mode nothing waits for GitHub checks; the local run is the test run
     "herdr_socket": "~/.config/herdr/herdr.sock",  # herdr() pins this for every herdr call, whatever the caller env holds
     "terminal_backend": "auto",  # auto | herdr | hc — which CLI talks to the agent host (herdr TUI vs herdr-core `hc`); auto prefers herdr when both are on PATH
     "stop_timeout_s": "300",     # `factory stop`: the tick force-closes the pane of a stopped agent still live after this long
@@ -5226,7 +5227,9 @@ def judge_wait_ci(con, url, pr, new_head=None, had_checks=False):
     """Poll the PR while its only non-green checks are pending (`judge_ci_wait_s`). With `new_head` (just pushed by a
     refresh) it first waits for GitHub to report that head, and for its checks to appear (required ones, or any when the
     old head had some): an empty rollup right after a push is not green. Returns (pr, seconds waited)."""
-    local = gate_project_for(con, url) is not None  # T-0516: the gate is gate_runs, GitHub checks need not exist
+    gproj = gate_project_for(con, url)
+    local = gproj is not None  # T-0516: the gate is gate_runs, GitHub checks need not exist
+    ignore_pending = gate_ignores_pending(con, gproj)  # HM-52: the local gate run is the one test run
 
     def waiting(pr):
         if new_head:
@@ -5234,6 +5237,8 @@ def judge_wait_ci(con, url, pr, new_head=None, had_checks=False):
                 return f"PR head still {pr['headRefOid'][:8]}, waiting for {new_head[:8]}"
             if not local and (missing_checks(con, pr, url) or (had_checks and not pr.get("statusCheckRollup"))):
                 return "checks of the new head not started"
+        if ignore_pending:
+            return ""
         bad = checks_ok(pr)
         return ", ".join(bad) if _judge_pending(bad) else ""
 
@@ -6153,7 +6158,7 @@ def _judge_gate_and_merge(con, t, a, reason, pr, sha, waited, proj, stack):
             problems.append("PR is a draft")
         if pr["mergeable"] == "CONFLICTING":
             problems.append("PR has conflicts")
-        bad = checks_ok(pr)
+        bad = finished_failed_checks(pr) if gate_ignores_pending(con, proj) else checks_ok(pr)  # HM-52: unfinished checks are not waited for
         if bad:
             problems.append("checks not green: " + ", ".join(bad) + (f" (waited {waited}s)" if waited else ""))
         if proj:
@@ -11561,6 +11566,20 @@ def prcheck_affected(wt, base, con=None, pr_url=None, project_id=None):
     if not script.is_file():
         return False, "ci/affected.py is missing in the worktree: git fetch origin && git merge origin/main"
     con = con or db()
+    gproj = gate_project_for(con, pr_url) if pr_url else None
+    if gate_ignores_pending(con, gproj):  # HM-52: the local gate run of HEAD is the test run; ci/affected.py is not started
+        rc, head = _git_out(wt, "rev-parse", "HEAD")
+        if rc != 0:
+            return False, "cannot read HEAD"
+        pre = "not run here: the local gate is the test run (gate_ignore_pending_ci)"
+        r = gate_run_for_head(con, pr_url, head)
+        if r and r["status"] == "pass":
+            return True, f"{pre}; local gate run #{r['id']} passed on {head[:8]}"
+        if r and r["status"] == "fail":
+            return False, f"{pre}; local gate run #{r['id']} FAILED on {head[:8]}: `factory gate show {r['id']}`, fix, push, rerun"
+        why = gate_head_wait(con, gproj, pr_url, head)
+        con.commit()  # the queued run must be visible to the tick, which launches it
+        return False, f"{pre}; {why}; local gate run queued; run factory done when it has passed"
     if project_id and project_id in cfg(con, "gate_fast_projects").split():  # never run locally, no slot (M16816, T-0924)
         rc, head = _git_out(wt, "rev-parse", "HEAD")
         ok, why = ci_green_on_head(con, head, pr_url) if rc == 0 and pr_url else (False, "no PR url or HEAD")
@@ -14909,6 +14928,62 @@ def gate_notify_fail(con, pr_url, r):
     send(con, goal_alert_to(con, t["goal_id"], team=t["team_id"]), f"local gate {r['status']}: {t['id']} @{(r['head_sha'] or '?')[:8]}",
          f"gate run #{r['id']} {r['status']} (exit {r['exit_code']}); {r['note'] or ''}\nlog: {r['log_path']}\n"
          f"`factory gate show {r['id']}`. Fix the head and push; the tick enqueues a new run.", "report", t["goal_id"], t["id"], sender="tick")
+
+
+def gate_ignores_pending(con, proj):
+    """HM-52: True when `proj` (a gate_project_for row, None outside local mode) is in local mode and config
+    gate_ignore_pending_ci is 1. The head's local gate run is then the one test run: the merge gate, the first review and
+    the coder's pre-check wait for it, not for GitHub's checks; a GitHub check that has FINISHED red still refuses a merge."""
+    return proj is not None and cfg(con, "gate_ignore_pending_ci") == "1"
+
+
+def finished_failed_checks(pr):
+    """checks_ok without the checks that have not finished: only a completed check with a failing result is listed."""
+    return [b for b in checks_ok(pr) if b.rsplit("=", 1)[-1].upper() not in PENDING_CHECK_STATES]
+
+
+GATE_FAIL_RE = re.compile(r"^(?:FAIL|ERROR): \S+ \(([\w.]+)\)", re.M)  # unittest's summary lines in a gate log
+GATE_FAILED_MAX = 20
+
+
+def gate_failed_tests(r):
+    """The failing tests a gate run's log names (module.Class.test, first GATE_FAILED_MAX), else the run itself."""
+    text = ""
+    if r["log_path"]:
+        with contextlib.suppress(OSError):
+            text = Path(r["log_path"]).read_text(errors="replace")
+    names = list(dict.fromkeys(GATE_FAIL_RE.findall(text)))
+    return names[:GATE_FAILED_MAX] or [f"gate run #{r['id']}"]
+
+
+def gate_head_wait(con, proj, pr_url, sha):
+    """HM-52: why the local gate does not clear `sha` yet for a review start or a pre-check, or None on a pass of it.
+    No run (or an error run within gate_retry_error) queues one; a fail is reported, the coder restart path picks it up."""
+    r = gate_run_for_head(con, pr_url, sha)
+    if r and r["status"] == "pass":
+        return None
+    if r and r["status"] == "error":
+        errs = con.execute("SELECT count(*) c FROM gate_runs WHERE kind='pr' AND pr_url=? AND head_sha=? AND status='error'",
+                           (pr_url, sha)).fetchone()["c"]
+        if errs > _int_cfg(con, "gate_retry_error", 1):
+            return f"local gate run #{r['id']} error on {sha[:8]}: {(r['note'] or '')[:120]}"
+        r = None
+    if not r:
+        return f"local gate run #{gate_enqueue(con, proj, pr_url, sha)} queued on {sha[:8]}"
+    return f"local gate run #{r['id']} {r['status']} on {sha[:8]}"
+
+
+def coder_gate_resume_kickoff(sha, r, failed, resumed, fresh_wt, branch):
+    """The coder restart text for a failed local gate run (HM-52): the same steps as a red CI, but the log is local."""
+    text = (f"The local test gate is RED on PR head {sha[:8]} of your task: gate run #{r['id']} failed; failing tests: "
+            f"{', '.join(failed)}. Read the failures with `factory gate show {r['id']}` (log: {r['log_path'] or 'see gate show'}), "
+            "fix what you caused, run `git fetch origin && git merge origin/main`, push to the existing PR (same branch, no new PR), "
+            "rerun pre-pr-check, then `factory done` again. The task stays in_review; do not change its status (the tick has already counted this run in attempts).")
+    if not resumed:
+        text += " You are a fresh session: read `factory task show` and the PR first."
+    if fresh_wt:
+        text += f" Your worktree was missing: after it is created run `git fetch origin && git reset --hard origin/{branch}` so you start from the pushed head."
+    return text
 
 
 _RES_HQ_ROLES = ("boss", "director", "staff-engineer")
@@ -18263,7 +18338,13 @@ def review_autospawn_tick(con):
         pr = _review_probe(t["pr_url"], CI_WAKE_GH_TIMEOUT_S, con, clock, _ci_remote_head(t["branch"], batch) if t["branch"] else None)
         if _review_pr_problem(con, t, pr, batch, clock):
             continue
-        if handoff and ci_verdict(pr.get("statusCheckRollup"))[0] != "green":
+        gproj = gate_project_for(con, t["pr_url"]) if handoff else None
+        if gate_ignores_pending(con, gproj):  # HM-52: the first review waits for the head's local gate pass, not GitHub's CI
+            why = gate_head_wait(con, gproj, t["pr_url"], pr["headRefOid"])
+            if why:
+                _review_wait(con, t, pr["headRefOid"], "local-gate", why, clock)
+                continue
+        elif handoff and ci_verdict(pr.get("statusCheckRollup"))[0] != "green":
             _review_wait(con, t, pr["headRefOid"], "ci", "CI is not green on the head (coder_ci_handoff waits for green)", clock)
             continue  # coder_ci_handoff: the coder left at PR open; first-round review waits for green on the head
         if _review_hold(con, t, pr["headRefOid"], clock):
@@ -18389,7 +18470,15 @@ def coder_ci_resume_tick(con):
                      f"head {sha}: merge conflict with main (mergeStateStatus DIRTY). The tick does not start the coder for a conflict.",
                      "report", t["goal_id"], tid, sender="tick")
             continue
-        if not latest_checks(rollup):
+        gproj = gate_project_for(con, t["pr_url"])
+        grun = None
+        if gate_ignores_pending(con, gproj):  # HM-52: in local mode a failed gate run of the head is the red signal
+            grun = gate_run_for_head(con, t["pr_url"], sha)
+            if not grun or grun["status"] != "fail":
+                _throttle_set(con, probe_key, clock)
+                continue
+            names = gate_failed_tests(grun)
+        elif not latest_checks(rollup):
             _throttle_set(con, probe_key, clock)
             nk = f"coder-resume-nochecks:{tid}:{sha}"
             if not _throttled(con, nk, clock, float("inf")):
@@ -18399,10 +18488,11 @@ def coder_ci_resume_tick(con):
                 send(con, to, f"no CI checks for over 60 min: {label}",
                      f"head {sha} has had no checks since the tick first saw it. Coder not started.", "report", t["goal_id"], tid, sender="tick")
             continue
-        verdict, names = ci_verdict(rollup)
-        if verdict != "red":
-            _throttle_set(con, probe_key, clock)
-            continue
+        if grun is None:
+            verdict, names = ci_verdict(rollup)
+            if verdict != "red":
+                _throttle_set(con, probe_key, clock)
+                continue
         mark = f"coder-resume:{tid}:{sha}"
         if _throttled(con, mark, clock, float("inf")):
             continue
@@ -18427,7 +18517,9 @@ def coder_ci_resume_tick(con):
                   and org_runtime(con, "coder", org) == "claude" else None)
         dropped = bool(resume) and bool(_resume_runtime_change(con, prior, "coder", org))  # spawn drops a session recorded on another runtime and starts fresh
         resumed = bool(resume) and not dropped
-        kick = coder_ci_resume_kickoff(sha, _failed_runs(rollup, names), resumed, not wt_ok, t["branch"] or f"factory/{tid.lower()}")
+        branch = t["branch"] or f"factory/{tid.lower()}"
+        kick = (coder_gate_resume_kickoff(sha, grun, names, resumed, not wt_ok, branch) if grun is not None
+                else coder_ci_resume_kickoff(sha, _failed_runs(rollup, names), resumed, not wt_ok, branch))
         if not gate(con, role="coder")[0]:
             return
         try:
@@ -18446,10 +18538,15 @@ def coder_ci_resume_tick(con):
             continue
         _throttle_set(con, mark, clock)
         con.execute("UPDATE tasks SET attempts=attempts+1 WHERE id=?", (tid,))  # T-1098: a tick resume is an attempt
+        red = "local gate red" if grun is not None else "CI red"
         if resumed:  # a resume sends no kickoff of its own: the mail is what the agent reads (the nudge wakes it)
-            send(con, name, f"CI red: {label}", kick, "request", t["goal_id"], tid, sender="tick")
-        event(con, "task", tid, "coder-ci-resume", {"agent": name, "mode": "resume" if resumed else "fresh", "head": sha[:8], "failed": names})
-        send(con, to, f"coder restarted on red CI: {label}", f"{name} started ({'resume' if resumed else 'fresh'}) for failed {', '.join(names)}. "
+            send(con, name, f"{red}: {label}", kick, "request", t["goal_id"], tid, sender="tick")
+        detail = {"agent": name, "mode": "resume" if resumed else "fresh", "head": sha[:8], "failed": names}
+        if grun is not None:
+            detail.update(source="local-gate", gate_run=grun["id"])
+        event(con, "task", tid, "coder-ci-resume", detail)
+        restarted = "coder restarted on a red local gate" if grun is not None else "coder restarted on red CI"
+        send(con, to, f"{restarted}: {label}", f"{name} started ({'resume' if resumed else 'fresh'}) for failed {', '.join(names)}. "
              "This mail does not wake you.", "fyi", t["goal_id"], tid, sender="tick")
         starts += 1
 
