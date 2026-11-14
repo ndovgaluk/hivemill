@@ -16,7 +16,7 @@ The redesign plan, the page audit and the per-task split are in `docs/web-redesi
 
 ## Themes
 
-`:root` holds the light tokens. Dark tokens are defined twice with identical values: in `@media (prefers-color-scheme: dark)` for `:root:not([data-theme=light])`, and for `:root[data-theme=dark]`. So the OS decides unless the reader picked a theme. `theme.js` (optional, deferred, served from `/static/`) adds a "Theme: auto / light / dark" button to the nav, stores the choice in `localStorage`, and sets `data-theme` on `<html>`. Without JS, or with storage blocked, the page follows the OS. A reader who chose a theme may see one frame of the OS theme before the deferred script runs.
+`:root` holds the light tokens. Dark tokens are defined twice with identical values: in `@media (prefers-color-scheme: dark)` for `:root:not([data-theme=light])`, and for `:root[data-theme=dark]`. So the OS decides unless the reader picked a theme. `theme.js` (optional, served from `/static/`, loaded in `<head>` without `defer`) adds a "Theme: auto / light / dark" button to the nav, stores the choice in `localStorage`, and sets `data-theme` on `<html>`. Without JS, or with storage blocked, the page follows the OS. The script sets `data-theme` as soon as it loads, before the first paint, so a reader whose choice differs from the OS theme sees no flash of the OS theme on load or on the 60 s refresh; the controls are added once the DOM is ready.
 
 ## Contrast
 

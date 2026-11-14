@@ -51,7 +51,7 @@ def get(httpd, path, host="auto", method="GET"):
         c.close()
 
 
-THEME_SCRIPT = f'<script src="{wh.asset("theme.js")}" defer></script>'   # the deferred theme toggle (versioned, HM-49)
+THEME_SCRIPT = f'<script src="{wh.asset("theme.js")}"></script>'   # the theme toggle (versioned, HM-49)
 FLOW_SCRIPT = '<script type="module" src="/static/flow/flow.js"></script>'  # DVDG-561: the committed React flow bundle
 
 

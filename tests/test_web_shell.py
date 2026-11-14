@@ -59,7 +59,7 @@ class TestEveryRouteRenders(ServerCase):
         sections = re.findall(r'<a href="([^"]+)" class="nav-item', nav)   # HM-36: goal links sit under "Goals" too
         self.assertEqual(sections, [p for p, _ in wh.NAV])
         self.assertEqual(len(sections), 10)
-        self.assertEqual(re.findall(r"<script\b[^>]*>", text), [f'<script src="{wh.asset("theme.js")}" defer>'])
+        self.assertEqual(re.findall(r"<script\b[^>]*>", text), [f'<script src="{wh.asset("theme.js")}">'])
 
     def test_phone_more_nav_lists_every_page_and_tabbar_has_five_items(self):
         text = self.get("/tasks")[2].decode()

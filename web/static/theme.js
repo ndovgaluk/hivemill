@@ -1,6 +1,6 @@
 /* Optional enhancements; every page is complete without them (theme then follows the OS, nav is plain links).
-   1. Auto/Light/Dark segmented control in each [data-theme-slot]. 2. Keep scroll and open <details> across the 60 s meta refresh.
-   3. Remember whether the sidebar's done goals are shown. */
+   Loaded in <head> without defer: the stored theme is set before the first paint (no flash of the OS theme); init() waits for the DOM.
+   1. Auto/Light/Dark segmented control in each [data-theme-slot]. 2. Keep scroll and open <details> across the 60 s meta refresh. 3. Remember whether the sidebar's done goals are shown. */
 (function () {
   var KEY = "factory-theme", KEEP = "factory-keep", root = document.documentElement, order = ["auto", "light", "dark"];
   var ICONS = {
@@ -14,6 +14,7 @@
   var mode = get("localStorage", KEY);
   if (order.indexOf(mode) < 0) mode = "auto";
   apply(mode);
+  function init() {
   function mark() {
     [].forEach.call(document.querySelectorAll(".seg button"), function (b) { b.setAttribute("aria-pressed", String(b.dataset.mode === mode)); });
   }
@@ -54,5 +55,6 @@
   window.addEventListener("pagehide", function () {
     put("sessionStorage", KEEP, JSON.stringify({ path: here, at: Date.now(), y: window.scrollY,
       open: details.map(did).filter(function (id, i) { return details[i].open; }) }));
-  });
+  }); }
+  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", init); else init();
 })();

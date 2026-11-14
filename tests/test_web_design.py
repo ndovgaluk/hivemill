@@ -117,6 +117,16 @@ class Css(unittest.TestCase):
         self.assertIn("aria-pressed", js)
         self.assertNotIn("nav.appendChild", js)
 
+    def test_theme_js_sets_the_stored_theme_before_the_dom_is_ready(self):
+        # Loaded blocking in <head>: the stored theme must be applied at load, not in the DOM-ready part, or a reader
+        # whose choice differs from the OS theme sees the OS theme flash on every load and 60 s refresh.
+        js = (STATIC / "theme.js").read_text()
+        early = js.split("function init()")[0]
+        self.assertIn('get("localStorage", KEY)', early)
+        self.assertIn("apply(mode);", early)
+        self.assertNotIn("querySelector", early)   # nothing before init() may need <body>
+        self.assertIn('addEventListener("DOMContentLoaded", init)', js)
+
     def test_favicon_is_svg(self):
         self.assertIn("<svg", (STATIC / "favicon.svg").read_text())
 
@@ -213,9 +223,9 @@ class Shell(unittest.TestCase):
         self.assertIn('name="viewport" content="width=device-width, initial-scale=1"', self.doc)
         self.assertIn('name="color-scheme" content="light dark"', self.doc)
 
-    def test_scripts_only_local_deferred(self):
+    def test_scripts_only_local_and_blocking_in_head(self):
         scripts = re.findall(r"<script\b[^>]*>", self.doc)
-        self.assertEqual(scripts, [f'<script src="{wh.asset("theme.js")}" defer>'])
+        self.assertEqual(scripts, [f'<script src="{wh.asset("theme.js")}">'])
         self.assertNotIn("<script>", self.doc)
         self.assertNotRegex(self.doc, r"\son\w+=")
         self.assertNotRegex(self.doc, r"""(src|href)=["']https?:""")

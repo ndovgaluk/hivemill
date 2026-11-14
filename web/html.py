@@ -578,7 +578,7 @@ def page(title, body, active="/", refresh=True, shell=None, crumb_trail=None, or
               el("title", f"{title} - factory"),
               el("link", rel="icon", href=asset("favicon.svg"), type="image/svg+xml"),
               el("link", rel="stylesheet", href=asset("app.css")),
-              el("script", src=asset("theme.js"), defer=True))
+              el("script", src=asset("theme.js")))  # blocking on purpose: sets the stored theme before the first paint
     org_nav = org_filter(path, query, org) if path and shell else None
     main = el("div", shell_header(title, shell, crumb_trail, org_nav, path), el("main", Safe(body) if not isinstance(body, Safe) else body, id="content", class_="page"),
               more, class_="main")
