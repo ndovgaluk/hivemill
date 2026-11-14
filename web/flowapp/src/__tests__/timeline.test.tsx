@@ -45,8 +45,9 @@ describe("timeline: quick info on a mark (HM-19)", () => {
       fireEvent.click(document.querySelector(`[data-mark="${e.id}"]`)!);
       expect(api!.selection).toEqual({ kind: SelectionKind.Event, id: e.id });
       const box = screen.getByTestId("flow-quick-info");
-      expect(within(box).getByText(KIND_INFO[kind].name)).toBeTruthy();
-      expect(box.textContent).toContain(KIND_INFO[kind].shape);
+      expect(within(box).getAllByText(KIND_INFO[kind].name).length).toBeGreaterThan(0);   // header and explanation
+      expect(box.textContent).toContain(`${KIND_INFO[kind].name}: ${KIND_INFO[kind].means}`);   // the type, not the shape (HM-28)
+      expect(box.textContent).not.toMatch(/circle|square/i);
       expect(box.textContent).toContain(colourInfo(e));
       expect(box.textContent).toContain(e.title);
     }

@@ -12,13 +12,12 @@ import styles from "./timeline.module.css";
 export const QUICK_INFO = "Quick info";
 const ESCAPE = "Escape";
 
-/** Mark shape per event kind, with what it stands for (shapes from timeline.module.css .msg/.status/.verdict). */
-export const KIND_INFO: Record<EventKind, { name: string; shape: string; means: string }> = {
-  [EventKind.Msg]: { name: "Message", shape: "Small circle",
-    means: "a message between agents (request, report, decision, escalation)." },
-  [EventKind.Status]: { name: "Status update", shape: "Square",
-    means: "something that happened: an agent started or ended, a PR opened, a merge, a gate log line, a task spec." },
-  [EventKind.Verdict]: { name: "Verdict", shape: "Large circle", means: "a reviewer, QA or judge verdict on a PR." },
+/** The step type per event kind and what it stands for (HM-28: named by type, not by the mark's shape). */
+export const KIND_INFO: Record<EventKind, { name: string; means: string }> = {
+  [EventKind.Msg]: { name: "Message", means: "one agent wrote to another (request, report, decision, escalation)." },
+  [EventKind.Status]: { name: "Action",
+    means: "something happened: an agent started or ended, a PR opened, a merge, a gate log line, a task spec." },
+  [EventKind.Verdict]: { name: "Verdict", means: "a reviewer, QA or judge verdict on a PR." },
 };
 
 /** Mark colour per severity; a passing verdict is green, any other ok mark grey. */
@@ -79,7 +78,7 @@ export function QuickInfo({ data, ev, at, onClose }: {
       <p className={styles.quickTitle}>{ev.title}</p>
       <p className={styles.quickMeta}>{who(data, ev.from, ev.from_node)} → {who(data, ev.to, ev.to_node)}</p>
       <p className={styles.quickMeta}>{clock(ev.ts)} · {fmtTokens(tokenSum(ev.tokens))} tok · {fmtCost(ev.cost)}</p>
-      <p className={styles.quickWhat}><b>{k.shape}</b>: {k.means} {colourInfo(ev)}</p>
+      <p className={styles.quickWhat}><b>{k.name}</b>: {k.means} {colourInfo(ev)}</p>
     </div>
   );
 }

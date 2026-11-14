@@ -21,6 +21,7 @@ export interface DiagramHandlers {
 }
 
 const NODE_TYPES = { [BOX]: BoxNode };
+const PRO_OPTIONS = { hideAttribution: true };
 const noop = () => {};
 const LEGEND_TIME = "Box = work time, cost";
 const LEGEND_COST = "Box = cost, share bar";
@@ -136,6 +137,8 @@ function DiagramInner({ data, onOpenFindings = noop, onExpandLanes = noop, onOpe
           zoomOnDoubleClick={false}
           // HM-6: a plain wheel scrolls the page; React Flow then zooms only on a ctrl wheel (and trackpad pinch)
           preventScrolling={false}
+          // HM-30: React Flow's corner credit link rendered as an empty grey box under the page styles
+          proOptions={PRO_OPTIONS}
           // React Flow sets pointer-events:none on nodes that are neither selectable nor draggable unless a node
           // handler exists; the box's own button does the selecting
           onNodeClick={noop}

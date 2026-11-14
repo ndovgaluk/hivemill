@@ -118,6 +118,11 @@ describe("diagram", () => {
     expect(onOpenFindings).toHaveBeenCalledWith(NodeId.Qa);
   });
 
+  it("draws no corner attribution box (HM-30)", () => {
+    show(fresh());
+    expect(document.querySelector(".react-flow__attribution")).toBeNull();
+  });
+
   it("Reviewer and QA are two boxes inside a dashed Review gate frame (HM-17)", () => {
     const data = fresh();
     show(data);

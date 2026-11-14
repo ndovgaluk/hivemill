@@ -96,6 +96,13 @@ Promoted: no
 
 ## Codebase Patterns
 
+### 2026-11-14 · context · The installed factory fast-forwards itself to `origin/main`, so a merge into the fork's `main` is a deploy within a minute
+Symptom: `~/factory` was at the merge commit of a pull request 43 seconds after the merge, with nobody running a deploy.
+Cause: the tick's sync step fetches `origin/main` and runs `merge --ff-only`; `git reflog` in `~/factory` shows one such fast-forward per merge.
+Rule: Treat "merge into main" as "live in the factory". Hold the merge, not the deploy, when a running goal must keep its code.
+Evidence: `git -C ~/factory reflog` (8c8f973 at 16:57:43 on 2026-11-14); `bin/factory_cli.py`, "explicit fetch of origin/main and merge --ff-only"
+Promoted: no
+
 ### 2026-11-13 · context · A coder's worktree holds only committed files; nothing copies `.env`, `.env.test` or `.tsr` into it
 Cause: `prepare_worktree` runs `git worktree add` from `origin/<base>`; a reused pooled worktree is reset with `git clean -f -f -d` (no `-x`), so ignored files of the previous task stay and untracked non-ignored files go. There is no setup hook, copy list or per-project setup column.
 Rule: a project that needs local-only files in worktrees must say so in a committed file the coder reads (`worktree-postinit-rules.md` + a pointer); check each file with `git check-ignore` first (in hivemill only `.env.test` is ignored). The coder can read the main checkout but the guard refuses writes there.
@@ -172,6 +179,7 @@ Promoted: no
 
 ## Session Notes
 
+- 2026-11-14: merge of pull request 11 reached the installed factory by itself → added: the installed factory fast-forwards itself to `origin/main`
 - 2026-11-14: HM-35 review fixes → added: workflow.db query inside its transaction hangs; pgrep -f in bash -lc kills itself
 
 - 2026-11-14: DVDG-565 engine children HM-22..HM-27, HM-33 → added: systemd-run does not pass the tick's environment; agent ended statuses; pyright indexes the D: checkout; golden update reports FAIL; 127.0.0.1:1 hangs in WSL
