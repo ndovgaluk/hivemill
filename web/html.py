@@ -482,11 +482,12 @@ def _nav_goal(g, org, current):
 
 def _nav_goals(shell, org, current):
     """The sidebar's goal lists under "Goals" (HM-36): the active goals, and a "+" disclosure (native details, so it works
-    without script) with the last done goals. Nothing without shell data or without goals."""
+    without script) with the last done goals, open when the current goal is one of them or no goal is active (owner,
+    2026-11-14). Nothing without shell data or without goals."""
     active, done = (shell or {}).get("goals") or [], (shell or {}).get("goals_done") or []
     parts = [el("ul", [_nav_goal(g, org, current) for g in active], class_="navsub")] if active else []
     if done:
-        opened = any(g["id"] == current for g in done)
+        opened = not active or any(g["id"] == current for g in done)
         summary = el("summary", el("span", "+", class_="nav-off", aria_hidden="true"), el("span", "−", class_="nav-on", aria_hidden="true"),
                      class_="navplus", aria_label="Hide done goals" if opened else "Show the last 5 done goals",
                      aria_expanded="true" if opened else "false")

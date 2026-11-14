@@ -416,6 +416,15 @@ class TestSidebarGoals(ShellDb):
         done = self.sub(self.get("/tasks"), "navsub navsub--done")
         self.assertEqual(re.findall(r'href="/goal/(G-\d+)"', done), ["G-106", "G-105", "G-200", "G-104", "G-103"])
 
+    def test_done_goals_open_by_themselves_when_no_goal_is_active(self):  # owner follow-up 2026-11-14
+        self.goal("G-001", "done", closed="2026-10-02T10:00:00+00:00")
+        self.goal("G-002", "planning")
+        nav = main_nav(self.get("/tasks"))
+        self.assertRegex(nav, r'<details class="navdone" data-key="nav-done-goals" open>')
+        self.assertIn('aria-label="Hide done goals" aria-expanded="true"', nav)
+        self.goal("G-003", "active")
+        self.assertNotRegex(main_nav(self.get("/tasks")), r'<details class="navdone"[^>]* open>')
+
     def test_no_done_goal_no_plus_and_no_goals_no_lists(self):
         self.assertNotIn("navsub", main_nav(self.get("/tasks")))
         self.goal("G-002", "active", done=0, total=0)
