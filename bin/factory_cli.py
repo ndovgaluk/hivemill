@@ -15286,6 +15286,115 @@ def classify_dialog(text):
     return ("permission",) if b[0] == "permission" else ("settings-warning", b[3], b[4], b[5])
 
 
+def _hq_pane_text(name):
+    """Last 60 lines of an agent pane (herdr agent read), or None when unreadable."""
+    tail = herdr("agent", "read", name, "--source", "recent", "--lines", "60", check=False)
+    if not isinstance(tail, dict):
+        return None
+    text = tail.get("text")
+    return tail.get("raw") if text is None else text
+
+
+def _hq_nudge_host(con, r, h, list_ok=True):
+    """Where a due HQ (boss/director) nudge goes: (name_to_prompt, None), (None, reason) when it cannot be delivered
+    ("host-list-failed", "no-host-entry"), or (None, None) when the pane is busy (a deferral, not a failure).
+    herdr may list a relaunched HQ pane by name with no agent_status ("unknown"): that counts as idle only when the
+    pane foreground is just the agent, nothing is typed and no dialog is open (G-003 SC1)."""
+    if not list_ok:
+        return None, "host-list-failed"
+    if not h:
+        return None, "no-host-entry"
+    st = h.get("agent_status")
+    if st in ("idle", "done"):
+        return h.get("name") or r["name"], None
+    if st != "unknown":
+        return None, None
+    an = h.get("name") or r["name"]
+    if _pane_busy(h.get("pane_id") or r["pane_id"]):
+        return None, None
+    text = _hq_pane_text(an)
+    if text is None or has_unsent_input(text) or classify_dialog(text)[0] != "unknown":
+        return None, None
+    key = f"hq-nudge-fallback:{r['name']}"
+    if not con.execute("SELECT 1 FROM throttle WHERE key=?", (key,)).fetchone():
+        _throttle_set(con, key, digest_clock().timestamp())
+        event_as(con, "tick", "agent", r["name"], "hq-nudge-fallback",
+                 {"agent": r["name"], "pane": h.get("pane_id") or r["pane_id"], "reason": "status-unknown"})
+    return an, None
+
+
+def _hq_report_undeliverable(con, r, h, reason):
+    """Once per (agent, reason) until the next successful nudge: a nudge-undeliverable event and an alert to the other HQ role."""
+    key = f"nudge-undeliverable:{r['name']}:{reason}"
+    if con.execute("SELECT 1 FROM throttle WHERE key=?", (key,)).fetchone():
+        return
+    _throttle_set(con, key, digest_clock().timestamp())
+    pane = (h or {}).get("pane_id") or r["pane_id"]
+    event_as(con, "tick", "agent", r["name"], "nudge-undeliverable",
+             {"agent": r["name"], "role": r["role"], "pane": pane, "reason": reason})
+    unread = con.execute("SELECT count(*) c, min(id) o FROM messages WHERE recipient=? AND read_at IS NULL",
+                         (r["name"],)).fetchone()
+    oldest = f"M{unread['o']}" if unread["o"] else "none"
+    body = (f"The tick could not deliver a nudge to {r['name']} ({r['role']}): {reason}.\n"
+            f"pane: {pane}\nunread: {unread['c']}, oldest {oldest}\n"
+            f"Check the pane (`factory relaunch {r['name']}` if it is gone or stuck); the alert is sent once per reason "
+            "until a nudge gets through.")
+    send(con, "director" if r["role"] == "boss" else "boss",
+         f"nudge undeliverable: {r['name']} ({reason})", body, "alert", sender="tick")
+
+
+def _hq_nudge_tick(con, r, h, list_ok, t, cooldown, starting):
+    """Tick step 3 for one live boss or director. The boss is woken only by stale escalation/request mail (T-1199),
+    the director by any unread mail or its cycle. A nudge that was due but cannot be delivered is reported (SC3)."""
+    name = r["name"]
+    if r["role"] == "boss":
+        if r["last_nudge"] and t - r["last_nudge"] < int(cfg(con, "boss_wake_cooldown_s")):
+            return
+        clock = digest_clock().timestamp()
+        qualifying = _boss_wake_qualifying(con, name, int(cfg(con, "boss_wake_after_s")), clock)
+        if not qualifying:
+            return
+        kinds = ",".join(sorted({m["kind"] for m in qualifying}))
+        oldest = qualifying[0]
+        age_min = int((clock - _ts(oldest["created"]).timestamp()) // 60)
+        text = (f"📬 {len(qualifying)} unread factory message(s) [{kinds}], oldest {age_min} min. "
+                "Run `factory inbox` and act on them.")
+        wake = {"count": len(qualifying), "oldest": f"M{oldest['id']}", "kinds": kinds}
+    else:
+        if name in starting:
+            return  # start pending or just kicked off: no second prompt
+        if r["last_nudge"] and t - r["last_nudge"] < cooldown:
+            return
+        unread = con.execute("SELECT count(*) c, group_concat(DISTINCT kind) k FROM messages WHERE recipient=? AND read_at IS NULL",
+                             (name,)).fetchone()
+        if unread["c"]:
+            text = f"📬 {unread['c']} unread factory message(s) [{unread['k']}]. Run `factory inbox` and act on them."
+        elif not r["last_nudge"] or t - r["last_nudge"] > int(cfg(con, "director_cycle_s")):
+            text = "⏱ Director cycle: run your cycle checklist (survey, resources, unblock, report)."
+        else:
+            return
+        wake = None
+    an, reason = _hq_nudge_host(con, r, h, list_ok)
+    if reason:
+        _hq_report_undeliverable(con, r, h, reason)
+        return
+    if not an:
+        return
+    if r["role"] == "boss":
+        pane_text = _hq_pane_text(an)
+        if pane_text is None or has_unsent_input(pane_text) or classify_dialog(pane_text)[0] != "unknown":
+            return
+    if herdr("agent", "prompt", an, text, check=False) is None:
+        _hq_report_undeliverable(con, r, h, "prompt-failed")  # last_nudge stays: the next tick retries
+        return
+    _cursor_enter_after_prompt(an, agent_runtime_of(r), True)
+    con.execute("UPDATE agents SET last_nudge=? WHERE name=?", (t, name))
+    con.execute("DELETE FROM throttle WHERE substr(key,1,?)=? OR key=?",
+                (len(f"nudge-undeliverable:{name}:"), f"nudge-undeliverable:{name}:", f"hq-nudge-fallback:{name}"))
+    if wake:
+        event_as(con, "tick", "agent", name, "boss-wake", wake)
+
+
 def dialog_now(con, name, role, want):
     """Right before a key send: herdr reports `name` blocked on THIS tick AND its bottom region still classifies as
     `want`; for the boss pane also no unsent input (L-019). Returns the classification or None (then: no keys)."""
@@ -16394,6 +16503,7 @@ def cmd_tick(a, locked=False):
     nudge_eff = terminal_backend_effective(con)[1]
     nudge_hc_by = {}
     tui_by_name, tui_by_pane, tui_list_ok = {}, {}, True
+    nudge_list_ok = True
     if nudge_eff == "hc":
         nudge_agents = herdr_agents() or []
         if con.execute(
@@ -16404,47 +16514,24 @@ def cmd_tick(a, locked=False):
             tui_list_ok = tui_agents is not None
             tui_by_name, tui_by_pane = _agents_index(tui_agents or [])
     else:
-        nudge_agents = _host_agents_list("herdr") or []
+        nudge_listed = _host_agents_list("herdr")
+        nudge_list_ok = nudge_listed is not None
+        nudge_agents = nudge_listed or []
         nudge_hc_list = _host_agents_list("hc") or []
         nudge_hc_by = {x["name"]: x for x in nudge_hc_list if x.get("name")}
     nudge_by_name, nudge_by_pane = _agents_index(nudge_agents)
     for r in con.execute("SELECT * FROM agents WHERE status='live'").fetchall():
-        if r["role"] == "boss":
+        if r["role"] in ("boss", "director"):
+            list_ok = True
             if nudge_eff == "hc" and _agent_host_exe(con, r) == "herdr":
-                if not tui_list_ok:
-                    continue
+                list_ok = tui_list_ok
                 h = tui_by_name.get(r["name"]) or tui_by_pane.get(r["pane_id"])
             elif nudge_eff != "hc" and _agent_host_exe(con, r) == "hc":
                 h = nudge_hc_by.get(r["name"])
             else:
+                list_ok = nudge_list_ok
                 h = nudge_by_name.get(r["name"]) or nudge_by_pane.get(r["pane_id"])
-            if h and h.get("agent_status") in ("idle", "done"):
-                boss_cd = int(cfg(con, "boss_wake_cooldown_s"))
-                if not (r["last_nudge"] and t - r["last_nudge"] < boss_cd):
-                    wake_after = int(cfg(con, "boss_wake_after_s"))
-                    clock = digest_clock().timestamp()
-                    qualifying = _boss_wake_qualifying(con, r["name"], wake_after, clock)
-                    if qualifying:
-                        an = h.get("name") or r["name"]
-                        tail = herdr("agent", "read", an, "--source", "recent", "--lines", "60", check=False)
-                        pane_text = None
-                        if isinstance(tail, dict):
-                            pane_text = tail.get("text")
-                            if pane_text is None:
-                                pane_text = tail.get("raw")
-                        if (tail is not None and pane_text is not None and not has_unsent_input(pane_text)
-                                and classify_dialog(pane_text)[0] == "unknown"):
-                            kinds = ",".join(sorted({m["kind"] for m in qualifying}))
-                            oldest = qualifying[0]
-                            age_min = int((clock - _ts(oldest["created"]).timestamp()) // 60)
-                            n = len(qualifying)
-                            msg = (f"📬 {n} unread factory message(s) [{kinds}], oldest {age_min} min. "
-                                   "Run `factory inbox` and act on them.")
-                            if herdr("agent", "prompt", an, msg, check=False) is not None:
-                                _cursor_enter_after_prompt(an, agent_runtime_of(r), True)
-                                con.execute("UPDATE agents SET last_nudge=? WHERE name=?", (t, r["name"]))
-                                event_as(con, "tick", "agent", r["name"], "boss-wake",
-                                         {"count": n, "oldest": f"M{oldest['id']}", "kinds": kinds})
+            _hq_nudge_tick(con, r, h, list_ok, t, cooldown, starting)
             continue
         if r["name"] in starting:
             continue  # start pending or just kicked off: no second prompt
