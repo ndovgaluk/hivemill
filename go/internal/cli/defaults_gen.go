@@ -44,6 +44,7 @@ var DefaultConfig = []ConfigDefault{
 	{"nudge_cooldown_s", "120"},
 	{"boss_wake_after_s", "900"},
 	{"boss_wake_cooldown_s", "1800"},
+	{"boss_wake_other_after_s", "0"},
 	{"director_cycle_s", "900"},
 	{"blocked_alert_s", "600"},
 	{"hq_unblock_s", "900"},

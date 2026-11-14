@@ -189,6 +189,7 @@ DEFAULT_CONFIG = {
     "nudge_cooldown_s": "120",
     "boss_wake_after_s": "900",    # tick step 3: boss pane is prompted only when an unread escalation/request is at least this old (T-1199)
     "boss_wake_cooldown_s": "1800",  # at most one boss wake per this many seconds (agents.last_nudge)
+    "boss_wake_other_after_s": "0",  # HM-38: an unread report/msg/decision/alert this old wakes the boss too; 0 = never
     "director_cycle_s": "900",
     "blocked_alert_s": "600",
     "hq_unblock_s": "900",       # T-0268: the tick denies (Esc) a permission dialog on an HQ pane after this long
@@ -15246,13 +15247,20 @@ def _dialog_block(text):
     return ("settings-warning", line_of(mark_start), set(opts), body, m.group(0) if m else "?", warning[:500])
 
 
-def _boss_wake_qualifying(con, recipient, wake_after_s, clock_ts):
-    """Unread escalation/request messages at least wake_after_s old (for the boss tick wake, T-1199)."""
+BOSS_WAKE_URGENT_KINDS = ("escalation", "request")
+
+
+def _boss_wake_qualifying(con, recipient, wake_after_s, clock_ts, other_after_s=0):
+    """Unread messages that wake the boss (tick, T-1199): escalation/request at least wake_after_s old, and (HM-38)
+    any other kind at least other_after_s old when other_after_s > 0. Oldest first."""
     out = []
-    for m in con.execute("SELECT id, kind, created FROM messages WHERE recipient=? AND read_at IS NULL "
-                         "AND kind IN ('escalation','request') ORDER BY id", (recipient,)).fetchall():
+    for m in con.execute("SELECT id, kind, created FROM messages WHERE recipient=? AND read_at IS NULL ORDER BY id",
+                         (recipient,)).fetchall():
+        urgent = m["kind"] in BOSS_WAKE_URGENT_KINDS
+        if not urgent and other_after_s <= 0:
+            continue
         ts = _ts(m["created"])
-        if ts is not None and clock_ts - ts.timestamp() >= wake_after_s:
+        if ts is not None and clock_ts - ts.timestamp() >= (wake_after_s if urgent else other_after_s):
             out.append(m)
     return out
 
@@ -16423,7 +16431,8 @@ def cmd_tick(a, locked=False):
                 if not (r["last_nudge"] and t - r["last_nudge"] < boss_cd):
                     wake_after = int(cfg(con, "boss_wake_after_s"))
                     clock = digest_clock().timestamp()
-                    qualifying = _boss_wake_qualifying(con, r["name"], wake_after, clock)
+                    qualifying = _boss_wake_qualifying(con, r["name"], wake_after, clock,
+                                                       int(cfg(con, "boss_wake_other_after_s")))
                     if qualifying:
                         an = h.get("name") or r["name"]
                         tail = herdr("agent", "read", an, "--source", "recent", "--lines", "60", check=False)
