@@ -110,6 +110,60 @@ _Avoid_: Ping, notification
 A row one agent sends another through the factory database (`M23`); the only way agents talk.
 _Avoid_: Chat, mail, comment
 
+## Workflows
+
+**Workflow**:
+The fixed way a goal gets from request to merged: which roles take part and in which order. A goal runs under exactly one.
+_Avoid_: Pipeline, process, flow (that is the diagram of a run)
+
+**Old workflow**:
+The original workflow: boss, director, lead and pm plan the goal, one coder per factory task opens one PR each, and every PR passes the merge gate; an audit and a sign-off close the goal.
+_Avoid_: Old factory (the factory stays; only this workflow is being replaced), legacy
+
+**Workflow engine**:
+The part of the factory that runs story runs. It is not a second factory: it uses the same agents, worktrees, worker guard and tick.
+_Avoid_: New factory, runtime (that is the agent program), orchestrator
+
+**Story run**:
+One goal under the workflow engine: one or more stories built by one builder on one branch, each child reviewed as it is built (`G-006`).
+_Avoid_: Run (alone, when a test run or a CI run could be meant), job
+
+**Story**:
+A TSR task with children that a story run builds (`HM-39`); the factory does not plan it, the owner prepares it.
+_Avoid_: Goal (that is the factory's own record of the run), epic
+
+**Child**:
+One TSR task under a story, built and reviewed on its own commits inside a story run (`HM-40`).
+_Avoid_: Factory task (a story run has one factory task for all its children), subtask
+
+**Prepared**:
+Said of a story or child that a story run accepts: it has a description, acceptance criteria and its tests written down.
+_Avoid_: Ready, groomed
+
+**Builder**:
+The one coder agent of a story run; it builds every child in order and keeps its session for the whole run.
+_Avoid_: Coder (when the story run's single agent is meant), developer
+
+**Child review**:
+The review of one child on that child's own commits, by a reviewer started for it; there is no PR and no CI wait between children.
+_Avoid_: Review gate (that is the reviewer and QA of the merge gate), PR review
+
+**Fix round**:
+One pass of findings from a child review back to the builder and to review again; a child has a limit of them, after which the story run stops for the owner.
+_Avoid_: Attempt (that is a coder restart in the old workflow), iteration
+
+**Batch**:
+Several prepared stories given to one story run, built by one builder on one branch.
+_Avoid_: Sprint, queue
+
+**Local gate**:
+The full test suite run on the owner's machine, in parallel, whose result for a head decides whether it may be merged.
+_Avoid_: CI (that is GitHub's run), prcheck (that is the coder's own pre-review check)
+
+**Direct push**:
+Landing a change by merging it into `main` on the owner's machine and pushing `main`, with no PR; allowed only after green local tests, and never by rewriting `main`'s history.
+_Avoid_: Force push
+
 ## Merge gate
 
 **Verdict**:

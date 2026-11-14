@@ -24,6 +24,13 @@ Add entries with `/engineering-insights`
 
 ## What Doesn't Work
 
+### 2026-11-14 · mistake · A merge-gate design built on a GitHub commit status was overtaken by an open story nobody had read
+Symptom: three answers proposed DevDigest as a gate through a GitHub status plus `required_checks`; story HM-34 (To Do) makes local tests the gate and removes pull requests from engine runs, so the design was redone.
+Cause: the design was drawn from the code alone; the open Taskosaur stories of the epic change that code's direction and were not listed first.
+Rule: before designing a change to the review, merge or gate path, run `list_tasks project=Dev epic=DVDG-539 type=STORY open=true` and read every story that touches that path.
+Evidence: docs/knowledgebase/44-devdigest-integration.md (the correction in its last section); TSR HM-34, HM-55
+Promoted: no
+
 ### 2026-11-14 · mistake · A web UI change checked only with the modules the task names broke two other web tests
 Symptom: HM-36 (sidebar goals) passed test_web_shell, test_web_views_goals and test_web_server, then broke test_web_detail test_sort_whitelist and test_web_design test_every_class_has_a_rule on main.
 Cause: other web tests read the whole page (the sidebar adds goal ids with `mono lrow-id`), and test_web_design needs a CSS rule for every class in CLASSES; `ci/affected.py --quick` did not pick those modules.
@@ -110,6 +117,18 @@ Promoted: no
 
 ## Codebase Patterns
 
+### 2026-11-14 · context · The dashboard cannot read `workflow.db`, so an engine feature is visible only through factory events
+Cause: `web/db.py` opens `factory.db` read-only and nothing in `web/` reads `workflow.db`; no run, child or incident state of the engine is shown today.
+Rule: plan the dashboard side of an engine feature as factory events (entity `workflow`, id the goal, JSON detail) that a `web/queries.py` function folds; add a new action to `PR_CYCLE_ACTIONS` when a task page must list it.
+Evidence: web/db.py, web/queries.py (`PR_CYCLE_ACTIONS`), go/internal/workflow/engine.go (`Record`); TSR HM-62
+Promoted: no
+
+### 2026-11-14 · context · `workflow.db` has no migration step: the engine refuses any `user_version` but its own
+Cause: `initState` creates the schema only on an empty file and returns `ErrStateVersion` for any other version, so a new table or column added to `schema` stops every running story on the live database.
+Rule: a change to the engine's schema first needs a migration step in `initState` (TSR HM-59 adds it); never edit `schema` alone, and do not push such a change while a story run is active.
+Evidence: go/internal/workflow/state.go (`UserVersion`, `initState`)
+Promoted: no
+
 ### 2026-11-14 · context · The installed factory fast-forwards itself to `origin/main`, so a merge into the fork's `main` is a deploy within a minute
 Symptom: `~/factory` was at the merge commit of a pull request 43 seconds after the merge, with nobody running a deploy.
 Cause: the tick's sync step fetches `origin/main` and runs `merge --ff-only`; `git reflog` in `~/factory` shows one such fast-forward per merge.
@@ -193,6 +212,7 @@ Promoted: no
 
 ## Session Notes
 
+- 2026-11-14: DevDigest integration planned as TSR tasks (DD-6, HM-55, HM-65) → added: gate design overtaken by an unread open story; dashboard cannot read workflow.db; workflow.db has no migration step
 - 2026-11-14: merge of pull request 11 reached the installed factory by itself → added: the installed factory fast-forwards itself to `origin/main`
 - 2026-11-14: HM-35 review fixes → added: workflow.db query inside its transaction hangs; pgrep -f in bash -lc kills itself
 

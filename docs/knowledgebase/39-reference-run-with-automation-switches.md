@@ -256,3 +256,15 @@ Answered 2026-11-14, from `owner_pending` in `web/queries.py`.
 "Needs you" is a fixed list, not a judgement about each item. It counts four things: goals that are proposed or blocked, tasks blocked on the owner, tasks whose merge is held because auto-merge is off, and every unread message of kind `escalation` or `request` whose recipient is the owner or a boss. The boss is treated as the owner's inbox: the code's own comment calls the list "things waiting on the owner/boss".
 
 So the item appears because an escalation addressed to the boss is unread, whatever it says. This one asks nothing of the owner: it is the director telling the boss to read its mail. The dashboard cannot tell "the boss must read this" from "the owner must decide this"; both are one unread escalation in the boss's inbox. That is a case for TSR task HM-47 (clear states): the item should say who has to act.
+
+## Q: The coder is waiting and the boss has 17 unread messages. Is everything all right? What is the coder waiting for?
+
+Answered 2026-11-14 23:13, from the process list and the factory database (read-only).
+
+**The coder (builder of engine run G-006)** is waiting for its own `factory prcheck`, started at 22:33 and still running. Check 5 of `prcheck` runs `ci/affected.py --base origin/main --run`. For this branch `ci/affected.py` prints `FULL (no test module mentions go/internal/workflow/merge_test.go; run the full suite)`: the diff holds a Go test file that no Python test module names, and the selector's rule for a path nobody mentions is "run everything". So the pre-check runs the whole Python suite as one process, one module after another. `ci/shard_timings.json` sums to about 55 minutes of test time for the 317 modules; at 23:13 it had run 39 minutes. Expected end: about 23:30 to 23:40 (estimate). After it, `factory done`, then the factory's review and QA, then the merge, then the engine's closing steps.
+
+Nothing is broken there; it is slow by design of the old gate. TSR task HM-52 replaces this check with the one parallel local gate run.
+
+**The boss's 17 unread messages** are a real defect, found by the director (message M682, 21:04): the tick never wakes the boss, because `has_unsent_input` reads the boss pane as holding a draft. The region it scans contains an old, already sent prompt line ("❯ read inbox") and the empty "❯" prompt followed by the status bar lines of Claude Code; either counts as typed text, so the boss wake is skipped on every tick. The wake timings are fine (`boss_wake_after_s` 120, `boss_wake_other_after_s` 600), a resumed relaunch keeps the same screen, and the fix of G-003 covers a pane with unknown status, not this. `agents.last_nudge` of the boss is still 14:28.
+
+Among the unread mail are owner decisions and alerts of the evening (pause and close of G-003, two failed stops, the blocked engine runs). The director acted on the G-003 ones itself. Proposed fix (director's wording): treat only the last prompt line as a draft and ignore status-bar lines below it, with a test from the real pane text. Not fixed.

@@ -289,3 +289,17 @@ TSK-586 was written on 2026-11-13 for the earlier design, DVDG-545: Hivemill mir
 Commit links are already safe to repeat: `TaskCommitsService.link()` is an upsert on (task, sha), read in the Taskosaur code on 2026-11-14.
 
 Open: whether the mirroring of DVDG-545 is still wanted for goals that do not start from a Taskosaur story. If not, TSK-588, TSK-589 and the rest of DVDG-545 can go to the backlog. Nothing was changed in TSR.
+
+## Q: Why does the diagram of an engine run still show Judge, "Coders" instead of the builder, and no Architect?
+
+Answered 2026-11-14 20:42, looking at the task page of T-0028 (run G-004, story HM-39).
+
+The flow debugger draws one fixed picture, the roles of the old workflow (Boss, Director, Lead, PM, Coders, Review gate, Judge, Merged), for every goal and task. It does not know that a goal is a story run of the workflow engine.
+
+- "Coders" is the builder. The engine starts its builder with the factory role `coder` (the agent is `builder-t-0028`), and the diagram groups agents by role.
+- The Judge box is there because the picture is fixed, and because a story run still ends with one pull request through the factory's own gate, where a judge or the mechanical merger merges.
+- There is no Architect because the first version of the engine has no architect step: it takes stories that are already prepared. The architect step is listed as later work.
+- PM and Lead show "no sessions" because the engine uses neither.
+- What the picture does not show at all: the engine's own steps (the review of each child and its rounds, the run's state, its incidents). Those are in `factory wf status --goal G-004` and `factory wf incidents`.
+
+No TSR task exists yet for a flow view of engine runs. Under the owner's rule of the same day (every feature must be trackable in the UI) the engine is not finished in this respect.
