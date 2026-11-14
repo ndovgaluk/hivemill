@@ -1022,9 +1022,44 @@ def _cfg_num(cfg, defaults, key, fallback):
         return float(fallback)
 
 
-def shell_status(con, usage, defaults, mem=None, now=None):
+NAV_DONE_GOALS = 5   # HM-36: done goals the sidebar's "+" lists, completed last first
+_NAV_GOAL_ACTIVE, _NAV_GOAL_DONE = "active", "done"
+_CLOSED_PREFIXES = ("done", "cancelled")   # bin/factory_cli.py goal_closed_at
+_TS_FLOOR = dt.datetime.min.replace(tzinfo=dt.timezone.utc)
+
+
+def goals_closed_at(con, rows):
+    """{goal id: when it was closed} for goal rows, in one query for all of them: the newest `status` event whose detail
+    starts with done or cancelled, else the goal's `updated` (the rule of bin/factory_cli.py goal_closed_at)."""
+    ids = [g["id"] for g in rows]
+    seen = {}
+    if ids:
+        for r in con.execute("SELECT entity_id, ts, detail FROM events WHERE entity='goal' AND action='status' AND entity_id IN "
+                             f"({','.join('?' * len(ids))}) ORDER BY id DESC", ids):
+            if r["entity_id"] not in seen and (r["detail"] or "").startswith(_CLOSED_PREFIXES):
+                seen[r["entity_id"]] = r["ts"]
+    return {g["id"]: seen.get(g["id"], g["updated"]) for g in rows}
+
+
+def nav_goals(con, org=None):
+    """(active, done) goals for the sidebar (HM-36), each {id, title, status, org, done, total}: every active goal by
+    priority then id (the Goals page's order within a status), and the NAV_DONE_GOALS done goals completed last, newest
+    first, each with `closed`. `org` (a whitelisted name or None) keeps only that org's goals. Two queries plus goals()."""
+    rows = [g for g in goals(con) if org is None or g["org"] == org]
+    pick = lambda g: {"id": g["id"], "title": g["title"], "status": g["status"], "org": g["org"],   # noqa: E731
+                      "done": g["tasks_done"], "total": g["tasks_total"]}
+    active = sorted((g for g in rows if g["status"] == _NAV_GOAL_ACTIVE),
+                    key=lambda g: (99 if g["priority"] is None else g["priority"], g["id"]))
+    done = [g for g in rows if g["status"] == _NAV_GOAL_DONE]
+    closed = goals_closed_at(con, done)
+    done.sort(key=lambda g: (parse_ts(closed[g["id"]]) or _TS_FLOOR, g["id"]), reverse=True)
+    return [pick(g) for g in active], [{**pick(g), "closed": closed[g["id"]]} for g in done[:NAV_DONE_GOALS]]
+
+
+def shell_status(con, usage, defaults, mem=None, now=None, org=None):
     """Data for the global status header and nav badges, the same on every page:
-    {needs, agents_attention, health: {tone, text}, cursor: {...}}. `usage` is the usage_fn() dict (or None), `defaults` the caps.
+    {needs, agents_attention, health: {tone, text}, cursor: {...}, goals, goals_done}. `usage` is the usage_fn() dict (or
+    None), `defaults` the caps; `org` (the ?org= filter) narrows the sidebar's goal lists (nav_goals).
     needs = what owner_pending lists; agents_attention = queued or blocked agents (running agents never count).
     `mem` = MB available (mem_fn()), None when unknown.
     health, worst first: memory low, usage cap reached, gate closed, usage high, usage unknown, else all normal."""
@@ -1058,8 +1093,9 @@ def shell_status(con, usage, defaults, mem=None, now=None):
     from web import cursor_limits
 
     t = _now(now)
+    active_goals, done_goals = nav_goals(con, org)
     return {"needs": needs, "agents_attention": queued + n.get("blocked", 0), "health": health,
-            "cursor": cursor_limits.display(con, t)}
+            "cursor": cursor_limits.display(con, t), "goals": active_goals, "goals_done": done_goals}
 
 
 # ───────────────────────────── overview (G-019 B4) ─────────────────────────────

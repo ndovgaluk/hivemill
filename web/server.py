@@ -228,7 +228,8 @@ class Handler(BaseHTTPRequestHandler):
                 body, ctype = json.dumps(data, default=str), "application/json"
             else:
                 shell = {**queries.shell_status(con, app.usage_fn() if app.usage_fn else None, app.defaults,
-                                                 mem=app.mem_fn() if app.mem_fn else None, now=ctx.now), "now": ctx.now}
+                                                 mem=app.mem_fn() if app.mem_fn else None, now=ctx.now,
+                                                 org=queries.org_param(ctx.query)), "now": ctx.now}
                 # DVDG-561: the goal and task pages refresh their flow data themselves; no 60 s full-page reload there
                 body = page(getattr(view, "TITLE", active), view.render(ctx, data), active, shell=shell,
                             refresh=getattr(view, "REFRESH", True),

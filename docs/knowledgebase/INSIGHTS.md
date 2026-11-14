@@ -24,6 +24,13 @@ Add entries with `/engineering-insights`
 
 ## What Doesn't Work
 
+### 2026-11-14 · mistake · A preview server run from a working clone changes when you switch that clone's branch
+Symptom: the owner's preview of HM-36 on port 18637 lost the sidebar goal lists after the clone was switched to the HM-38 branch.
+Cause: `factory serve` reloads its code every 60 s (`watch_code`), so it serves whatever branch the clone is on now.
+Rule: serve a preview from an export of the commit (`git archive <branch> | tar -x -C /tmp/<name>`), never from a clone you keep working in.
+Evidence: HM-36 preview, 2026-11-14; web/server.py `watch_code`
+Promoted: no
+
 ### 2026-11-14 · mistake · A query on `workflow.db` inside an open transaction hangs the engine forever
 Symptom: `go test ./internal/workflow` never finished (moved to background after 300 s); the first `factory wf tsr status … in_review` test hung.
 Cause: `OpenState` sets `SetMaxOpenConns(1)`; `recordInReview` called `e.State.QueryRow` (via `previousHead`) while its own `tx` held the only connection.
