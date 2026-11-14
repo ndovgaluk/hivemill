@@ -114,3 +114,41 @@ The flip is proven end to end by `tests/test_gate_sandbox.py` `FlagRollback.test
 `FACTORY_HOME` it runs a real unittest module (`test_nsbox_allow.GoldenDefaultsTests`) through `factory gate run` with
 `gate_sandbox 1` (pass, note says `sandboxed`), then after `factory config gate_sandbox 0` (pass, no `sandboxed`), then with
 `1` again (pass, `sandboxed`). The test skips with the reason where user namespaces are unavailable.
+
+## This factory (HM-51, measured 2026-11-15)
+
+The `hivemill` project is **not** in local mode: its `gate_cmd` is empty and GitHub's CI clears its pull requests. The owner
+decided to keep it that way after this measurement, because the local full suite is slower than CI on this machine.
+
+Full suite through `python3 $FACTORY_MAIN/tests/gate_shards.py`, from a clean checkout of `main` at `e95bf31`, on the owner's
+machine (12 threads, 32 GB), with no goal or engine run active:
+
+| `GATE_SHARDS` | Wall | CPU | Tests | Peak memory used |
+|---|---|---|---|---|
+| 4 | 2622 s (44 min) | 11430 s | 7606 | 1.1 GB |
+| 8 | 2300 s (38 min) | 16897 s | 7606 | 1.9 GB |
+| 12 | 1788 s (30 min) | 16615 s | 7606 | 2.2 GB |
+
+- The suite is CPU-bound here: the modules add up to about 17000 s, the 12 shards were evenly loaded (1327 to 1783 s each), so
+  12 threads cannot go much below 24 min. GitHub's CI takes about 22 min on about 20 runners.
+- Slowest modules: `test_screenshots` (591 s), `test_scout_fetch` (527 s), `test_worker_guard_push_pin` (442 s),
+  `test_worker_guard_nopush_gitfile` (411 s), `test_routed_rest_selector` (383 s), `test_mech_merge` (349 s).
+- Go checks that run locally: `gofmt -l` (0 s), `go vet ./...` (2 s), `go test -count=1 ./...` without `-race` (161 s, 15
+  packages), `go build ./...` (1 s). `-race` needs cgo, and the machine has no C compiler.
+- Test count: `python3 $FACTORY_MAIN/ci/test_count_gate.py count .` prints the same 7606 as the shard total.
+- Four tests failed only on this machine (timezone, CPU count, no C compiler) and were fixed in HM-66; with them, the suite is
+  meant to be green here. Two timing tests (`test_scrub_scan` "scans fast", `test_skilleval_vendor` "linear time") can fail
+  when the machine is fully loaded.
+
+To switch on later, with 12 shards and twice the measured wall time as the timeout:
+
+```
+factory config gate_shards 12
+factory project update hivemill --gate-cmd 'python3 $FACTORY_MAIN/tests/gate_shards.py' \
+  --gate-count-cmd 'python3 $FACTORY_MAIN/ci/test_count_gate.py count .' --gate-timeout-s 3600
+factory gate run --main hivemill        # prove it: a pass row in `factory gate list`
+```
+
+To switch back: `factory project update hivemill --gate-cmd ""`. Local mode alone saves no time today: the judge and the
+mechanical merger still wait for GitHub's checks to finish green and then also need the local pass, and the first review and
+the coder's pre-check still use GitHub's CI (HM-51's code reading; HM-52 would change that).
