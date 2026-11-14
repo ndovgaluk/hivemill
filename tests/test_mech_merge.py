@@ -9,8 +9,9 @@ import sys
 import time
 import unittest
 
-from harness import FACTORY, PR_URL, REPO, FactoryTestCase, gates_summary
+from harness import FACTORY, FACTORY_SRC, PR_URL, REPO, FactoryTestCase, _literal, gates_summary
 from test_gate_integration import seed_run
+from test_guard_build import write_go
 from test_judge_wait import GH_STUB, GREEN, FAILED, git
 
 # st["run_list"] answers `gh run list` (the main push run check): {"exit": n} fails, {"raw": text} prints text, {"runs": [...]}
@@ -708,6 +709,120 @@ class MechMergeTests(FactoryTestCase):
         self.assert_held(self.mech("on"), "cannot read main push run")
         blocked = "; ".join(self.events("mech-blocked"))
         self.assertNotIn("main-run check skipped", blocked)
+
+
+class WorkflowEngineSeamTests(FactoryTestCase):
+    """DVDG-565 / HM-22: the workflow engine's seams in bin/factory_cli.py. The tick launches a detached
+    `factory-workflow tick` like the mechanical merger; `factory wf` hands its arguments to the binary. A stub binary
+    with a stamp equal to the home's go/ tree stands in for the real build."""
+
+    def setUp(self):
+        super().setUp()
+        self.lib = self.env.user_home / ".local" / "lib" / "factory"
+        self.lib.mkdir(parents=True)
+        self.bin, self.marker = self.lib / "factory-workflow", self.env.home / "wf-calls"
+        self.stub(f'#!/bin/sh\necho "$@" >> {self.marker}\nexit 7\n')
+        (self.lib / "factory-workflow.stamp").write_text(write_go(self.env.home_dir) + "\n")
+
+    def stub(self, text):
+        self.bin.write_text(text)
+        self.bin.chmod(0o755)
+
+    def calls(self, wait_s=0.0):
+        end = time.time() + wait_s
+        while not self.marker.exists() and time.time() < end:
+            time.sleep(0.05)
+        return self.marker.read_text().splitlines() if self.marker.exists() else []
+
+    def test_the_seams_are_in_factory_cli(self):
+        import ast
+        tree = ast.parse(FACTORY_SRC.read_text())
+        funcs = {n.name: n for n in tree.body if isinstance(n, ast.FunctionDef)}
+
+        def calls_in(fn):
+            return [c for c in ast.walk(funcs.get(fn, ast.Module(body=[], type_ignores=[]))) if isinstance(c, ast.Call)]
+
+        def name(c):
+            return getattr(c.func, "id", None) or getattr(c.func, "attr", None)
+
+        seams = {
+            "DEFAULT_CONFIG key workflow_engine (default off)": _literal("DEFAULT_CONFIG").get("workflow_engine") == "off",
+            "guard_tick builds ./cmd/workflow": any(name(c) == "build_guard_go" and any(
+                getattr(k.value, "value", None) == "./cmd/workflow" for k in c.keywords) for c in calls_in("guard_tick")),
+            "cmd_tick calls tick_workflow": any(name(c) == "tick_workflow" for c in calls_in("cmd_tick")),
+            "the wf subcommand": any(isinstance(c, ast.Call) and name(c) == "add_parser" and c.args
+                                     and getattr(c.args[0], "value", None) == "wf" for c in ast.walk(tree)),
+            "cmd_spawn passes --resume to spawn": any(name(c) == "spawn" and any(k.arg == "resume" for k in c.keywords)
+                                                      for c in calls_in("cmd_spawn")),
+        }
+        missing = [k for k, ok in seams.items() if not ok]
+        self.assertEqual(missing, [], "workflow engine seam(s) missing from bin/factory_cli.py (lost in an upstream "
+                                      "merge?), see docs/workflow-engine.md: " + "; ".join(missing))
+
+    def test_off_launches_and_builds_nothing(self):
+        before = sorted(p.name for p in self.lib.iterdir())
+        self.ok("tick")
+        self.assertEqual(self.calls(wait_s=1), [])
+        self.assertEqual(sorted(p.name for p in self.lib.iterdir()), before)
+
+    def test_on_launches_one_engine_tick(self):
+        self.ok("config", "workflow_engine", "on")
+        self.ok("tick")
+        self.assertEqual(self.calls(wait_s=5), ["tick"])
+
+    def test_a_failing_launch_is_a_workflow_error_event(self):
+        self.ok("config", "workflow_engine", "on")
+        self.stub("not an executable format\n")  # exec bit set, no #!: Popen raises ENOEXEC
+        self.ok("tick")
+        rows = self.env.sql("SELECT detail FROM events WHERE action='workflow-error'")
+        self.assertEqual(len(rows), 1, rows)
+
+    def test_wf_passes_arguments_and_exit_code(self):
+        p = self.env.run("wf", "status", "--goal", "G-001")
+        self.assertEqual(p.returncode, 7, p.stderr)
+        self.assertEqual(self.calls(), ["status --goal G-001"])
+
+    def test_wf_tells_the_engine_the_home_and_the_cli(self):
+        self.stub(f'#!/bin/sh\necho "$FACTORY_HOME|$FACTORY_CLI" >> {self.marker}\n')
+        self.ok("wf", "status")
+        self.assertEqual(self.calls(), [f"{self.env.home_dir}|{REPO / 'bin' / 'factory'}"])
+
+    def test_under_systemd_the_engine_gets_its_environment_through_setenv(self):
+        # a transient unit starts with the user manager's environment, so the tick must pass the values explicitly
+        rec = self.env.home / "systemd-run-args"
+        sd = self.env.stub_bin / "systemd-run"
+        sd.write_text(f'#!/bin/sh\nfor a in "$@"; do echo "$a"; done > {rec}\n')
+        sd.chmod(0o755)
+        self.ok("config", "workflow_engine", "on")
+        self.ok("tick", extra_env={"INVOCATION_ID": "zz-test"})
+        args = rec.read_text().splitlines()
+        self.assertIn(f"--setenv=FACTORY_HOME={self.env.home_dir}", args)
+        self.assertIn(f"--setenv=FACTORY_CLI={REPO / 'bin' / 'factory'}", args)
+        self.assertEqual(args[args.index("--") + 1:], [str(self.bin), "tick"])
+
+    def test_spawn_resume_is_for_the_owner_and_reviewer_or_coder(self):
+        e = self.env
+        e.seed_project()
+        e.seed_goal(project="zz-test-proj")
+        e.seed_task()
+        e.seed_agent("zz-test-boss", "boss")
+        msg = "--resume is for the owner (the workflow engine) and roles reviewer and coder only"
+        p = self.refused(3, "spawn", "reviewer", "--goal", "G-001", "--task", "T-0001", "--resume", "zz-sess", agent="zz-test-boss")
+        self.assertIn(msg, p.stderr)
+        self.assertIn(msg, self.refused(3, "spawn", "judge", "--task", "T-0001", "--resume", "zz-sess").stderr)
+        p = self.env.run("spawn", "reviewer", "--goal", "G-001", "--task", "T-0001", "--name", "review-zz", "--resume", "zz-sess")
+        self.assertNotIn(msg, p.stderr)
+        starts = [c["argv"] for c in e.calls("herdr") if c["argv"][:2] == ["agent", "start"]]
+        self.assertEqual(len(starts), 1, p.stdout + p.stderr)
+        self.assertEqual(starts[0][starts[0].index("--resume") + 1], "zz-sess")
+
+    def test_wf_without_a_current_build_exits_2(self):
+        msg = "factory-workflow is not built; set workflow_engine on and wait for a tick, or run factory up"
+        (self.lib / "factory-workflow.stamp").write_text("stale\n")
+        self.assertIn(msg, self.refused(2, "wf", "status").stderr)
+        self.bin.unlink()
+        self.assertIn(msg, self.refused(2, "wf", "status").stderr)
+        self.assertEqual(self.calls(), [])
 
 
 if __name__ == "__main__":
