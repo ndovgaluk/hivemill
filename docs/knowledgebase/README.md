@@ -51,3 +51,4 @@ live install at the time; anything marked "not verified" was not.
 | 40 | [40-handover-workflow-redesign.md](40-handover-workflow-redesign.md) | Handover of 2026-11-13 22:18: state of reference run 2, Taskosaur tasks, design decisions and open questions, uncommitted work, known problems |
 | 41 | `41-workflow-engine-build-plan.md` | Go workflow engine: code facts from the installed factory and the build plan behind tasks HM-22 to HM-27 |
 | 42 | [42-handover-2026-11-14.md](42-handover-2026-11-14.md) | Handover of 2026-11-14: reference run 2, engine tasks HM-22 to HM-27, flow debugger state, what is uncommitted |
+| 43 | [43-reference-run-2-result.md](43-reference-run-2-result.md) | Result of reference run 2 (G-002) against G-001: the numbers, where the 19 hours went, what the switches changed, limits |

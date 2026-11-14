@@ -208,3 +208,51 @@ Answered 2026-11-14. Correct, the merge does not touch the run.
 Not checked: that nothing in the installed factory pulls `main` by itself. This rests on the deploy being a manual command, not on reading the tick code for a pull.
 
 The thing to avoid while G-002 runs is the deploy, not the merge.
+
+## Q: All tasks look completed. Why is the goal not marked as completed?
+
+Answered 2026-11-14 18:23, from the factory database (read-only) and the CI list of the reference repository.
+
+A goal is not closed by its tasks finishing. Three steps come after the last task: an audit recorded as ready, the director's sign-off, and the close. G-002 is between the first and the second.
+
+- All 13 factory tasks of G-002 are `done`; the last code task, T-0020, was merged at 17:56.
+- Audit round 2 (T-0024) was recorded `ready` at 18:14 (`audits` table). Round 1, at 06:36, had found gaps, which is where T-0020 to T-0023 came from.
+- The lead asked the director for the sign-off at 18:14 (message M620).
+- The director accepted the audit at 18:16 (M623) and holds the sign-off for one thing: success criterion 6 says "CI green on main", and the CI run on `main` of the reference repository for the last merge (`f99c1cf`, started 17:56) was still in progress. The director signs off when it is green, and told the lead to report if it fails or is still stuck at 18:45.
+- At 18:22 that run was still `in_progress`, 26 minutes after its start. The `signoffs` table has no row for G-002 yet.
+
+So the goal is waiting for one GitHub CI run. Nothing is needed from the owner unless that run fails.
+
+## Q: What is going on, why is the coder working right now?
+
+Answered 2026-11-14 19:21, from the factory database (read-only).
+
+It is the coder of G-003, the goal the owner approved at about 18:30 (reliable mail nudges for HQ agents and an alert on unread mail older than 60 minutes), on the real repository.
+
+- G-003 has a plan (T-0025, done) and two code tasks: T-0026 (the nudge fix, in review, pull request 13 on `ndovgaluk/hivemill`) and T-0027 (the stale-mail alert, not started).
+- `coder-t-0026` (Sonnet) has been live since 18:45. It opened pull request 13 at 19:03 and CI was green at 19:04.
+- It is still running because its own pre-review check failed on the pull request text: `prcheck` at 19:18 reports `"failed": ["body"]`. It is rewriting the description.
+- The reviewer and QA have not started: with `review_autospawn` on they wait while a coder of the task is live (`review-autospawn-wait` at 19:04).
+- The lead told the coder at 19:17 to finish by 19:30 and parked.
+
+Nothing is waiting on the owner. The same pattern (a correct change held up by the pull request text) cost T-0020 of G-002 two of its three attempts.
+
+## Q: Why do I still see "Needs you 1: Escalation, 7 unread incl. 2 owner decisions (M659, M672)"?
+
+Answered 2026-11-14 20:19, from the factory database (read-only).
+
+It is an escalation from the director to the boss (message M674, 20:13), not a new problem. The boss has not read its mail since 18:33; among its unread messages are the two decisions sent as owner that evening: M659 (pause G-003, 19:28) and M672 (G-003 closed, 20:11). An unread escalation addressed to the boss is listed under "Needs you".
+
+How it came about: the new stale-mail step (T-0027) went live at about 20:11 and fired at 20:12 (`stale-unread-alert` for the boss, to the director); the director then escalated to the boss and reported having acted on both decisions itself (hold kept, team g-003-a closed).
+
+It clears when the boss reads its inbox: type "read your inbox" in the boss pane.
+
+Open: the tick has not prompted the boss since 14:28 (`agents.last_nudge`), although `boss_wake_after_s` is 120 and an unread escalation has been due since 20:15. There is no `boss-wake`, `hq-nudge-fallback` or `nudge-undeliverable` event after the fix went live at 20:01, so the new code judged the pane busy and waited (a status of working or blocked, or an unknown status with text typed in the input or a dialog open). Which of these was not checked: the terminal host's agent list could not be read from this session.
+
+## Q: Why does the dashboard tell me that it needs me (for that escalation)?
+
+Answered 2026-11-14, from `owner_pending` in `web/queries.py`.
+
+"Needs you" is a fixed list, not a judgement about each item. It counts four things: goals that are proposed or blocked, tasks blocked on the owner, tasks whose merge is held because auto-merge is off, and every unread message of kind `escalation` or `request` whose recipient is the owner or a boss. The boss is treated as the owner's inbox: the code's own comment calls the list "things waiting on the owner/boss".
+
+So the item appears because an escalation addressed to the boss is unread, whatever it says. This one asks nothing of the owner: it is the director telling the boss to read its mail. The dashboard cannot tell "the boss must read this" from "the owner must decide this"; both are one unread escalation in the boss's inbox. That is a case for TSR task HM-47 (clear states): the item should say who has to act.
