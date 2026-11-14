@@ -111,7 +111,9 @@ func (f *fakeTracker) TaskByKey(k string) (tsr.Task, error) {
 func (f *fakeTracker) Children(s tsr.Task) ([]tsr.Task, error) {
 	var out []tsr.Task
 	for _, k := range f.children[s.Key] {
-		out = append(out, f.tasks[k])
+		row := f.tasks[k] // as Taskosaur's list does: a row has no description and no tests field
+		row.Description, row.E2ETests = "", ""
+		out = append(out, row)
 	}
 	return out, nil
 }
