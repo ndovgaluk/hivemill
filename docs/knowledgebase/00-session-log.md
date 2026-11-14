@@ -206,3 +206,4 @@ One line per turn: what was asked, what was done or found. Explanations live in 
 - 2026-11-14: HM-35 (nine review findings of the workflow engine) fixed on hm-22-workflow-engine, uncommitted; the move to In Review failed with a Taskosaur 500 (GET /task-statuses/project). -> docs/workflow-engine.md
 - 2026-11-14: explained the 📬N badge next to the boss in the herdr sidebar (unread factory messages, a badge instead of a nudge). -> 15
 - 2026-11-14: explained why the boss reads mail late (wake only for escalation/request, 15 min age, 30 min cooldown). -> 15
+- 2026-11-14: HM-36 (active goals and the last 5 done goals in the sidebar) implemented on new branch hm-36-sidebar-goals from origin/main, uncommitted, In Review. -> docs/web-ui.md

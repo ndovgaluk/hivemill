@@ -49,6 +49,8 @@ CLASSES = frozenset({
     "settings", "set-intro", "set-row", "set-text", "set-name", "set-key", "set-help", "set-ctl", "set-now", "set-value",
     "set-default", "set-form", "set-input", "set-btn", "set-cmd", "set-note", "set-note--ok", "set-note--bad",
     "flow-full", "flow-root",   # DVDG-561: the React flow debugger's full-width section and mount element
+    # HM-36 goals in the sidebar
+    "navgoals", "navsub", "navsub--done", "navgoal", "navgoal-l1", "navgoal-l2", "navgoal-t", "navdone", "navplus", "nav-on", "nav-off",
     *(f"flow-node--{s}" for s in ("done", "current", "pending", "skipped")),
 })
 
@@ -458,9 +460,51 @@ def _item_link(path, label, icon, active, shell, cls, size=16, org=None):
               href=_with_org(path, org), class_=classes or None, aria_current="page" if here and main_nav else None)
 
 
-def _shell_navs(active, shell, org=None):
-    groups = [el("div", el("h2", g), el("ul", [el("li", _item_link(p, label, ic, active, shell, "nav-item", org=org))
-                                              for p, label, ic in items]),
+NAV_GOALS_PATH = "/goals"
+GOAL_PAGE_PREFIX = "/goal/"
+_NAV_DONE_KEY = "nav-done-goals"   # data-key of the "+" disclosure; theme.js keeps its open state
+
+
+def _nav_goal(g, org, current):
+    """One sidebar goal (HM-36): line 1 the status glyph, id and title; line 2 the Goals page's progress meter and
+    "{done}/{total} tasks". The whole entry is one link whose name says status, id, title and progress."""
+    from web import charts
+    from web.components import row_status
+
+    done, total = g["done"], g["total"]
+    name = f"{LABELS.get(g['status'], g['status'])}, {g['id']}, {g['title']}, {done} of {total} tasks done"
+    line1 = el("div", row_status(g["status"]), el("span", g["id"], class_="mono lrow-id"), el("span", g["title"], class_="navgoal-t"),
+               class_="navgoal-l1")
+    line2 = el("div", charts.meter(done, total, f"{done}/{total} tasks"), class_="navgoal-l2")
+    return el("li", el("a", line1, line2, href=_with_org(f"{GOAL_PAGE_PREFIX}{g['id']}", org), aria_label=name),
+              class_="navgoal is-current" if g["id"] == current else "navgoal")
+
+
+def _nav_goals(shell, org, current):
+    """The sidebar's goal lists under "Goals" (HM-36): the active goals, and a "+" disclosure (native details, so it works
+    without script) with the last done goals, open when the current goal is one of them or no goal is active (owner,
+    2026-11-14). Nothing without shell data or without goals."""
+    active, done = (shell or {}).get("goals") or [], (shell or {}).get("goals_done") or []
+    parts = [el("ul", [_nav_goal(g, org, current) for g in active], class_="navsub")] if active else []
+    if done:
+        opened = not active or any(g["id"] == current for g in done)
+        summary = el("summary", el("span", "+", class_="nav-off", aria_hidden="true"), el("span", "−", class_="nav-on", aria_hidden="true"),
+                     class_="navplus", aria_label="Hide done goals" if opened else "Show the last 5 done goals",
+                     aria_expanded="true" if opened else "false")
+        parts.append(el("details", summary, el("ul", [_nav_goal(g, org, current) for g in done], class_="navsub navsub--done"),
+                        class_="navdone", data_key=_NAV_DONE_KEY, open=opened or None))
+    return parts
+
+
+def _shell_navs(active, shell, org=None, current_goal=None):
+    def side_li(p, label, ic):
+        link_ = _item_link(p, label, ic, active, shell, "nav-item", org=org)
+        if p != NAV_GOALS_PATH:
+            return el("li", link_)
+        subs = _nav_goals(shell, org, current_goal)
+        return el("li", link_, subs, class_="navgoals") if subs else el("li", link_)
+
+    groups = [el("div", el("h2", g), el("ul", [side_li(p, label, ic) for p, label, ic in items]),
                  class_="navgroup") for g, items in GROUPS]
     side = el("nav", _wordmark(org), groups, el("div", data_theme_slot=True, class_="themebox"), aria_label="Main", class_="sidebar")
     flat = {p: (label, ic) for _, items in GROUPS for p, label, ic in items}
@@ -479,7 +523,8 @@ def page(title, body, active="/", refresh=True, shell=None, crumb_trail=None, or
     path) turns on the org filter in the header; `org` is the whitelisted ?org= value (None = all) and `query` the
     request's query dict, kept on the filter's links."""
     org = org if org in _orgs.ORGS else None
-    side, more, tabs = _shell_navs(active, shell, org)
+    current_goal = path[len(GOAL_PAGE_PREFIX):] if path and str(path).startswith(GOAL_PAGE_PREFIX) else None
+    side, more, tabs = _shell_navs(active, shell, org, current_goal)
     head = el("head",
               el("meta", charset="utf-8"),
               el("meta", name="viewport", content="width=device-width, initial-scale=1"),
