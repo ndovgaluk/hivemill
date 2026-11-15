@@ -250,3 +250,8 @@ One line per turn: what was asked, what was done or found. Explanations live in 
 - 2026-11-15: Q: purpose of the Judge in the simple workflow (HM-50 demo) → 30-flow-debugger-implementation.md, "Q: What's the purpose of the judge in the simple workflow?"
 - 2026-11-15: Q: are the workflow diagrams dynamic or hardcoded, and are CI local/none shown → 30-flow-debugger-implementation.md, "Q: If there's no CI setup, or it's local…"
 - 2026-11-15: HM-69 layout changed at the owner request: engine finish boxes on the work row (horizontal), shorter gap between rows; demo restarted at http://127.0.0.1:18641.
+- 2026-11-15: HM-50 committed (7987381, notes 3765aa1) and pushed to main on the owner approval; HM-50 and HM-68..71 Done with commits linked; dashboard http://127.0.0.1:18625 moved to the new main and restarted.
+- 2026-11-15: Q: how to restart the live dashboard (factory-serve) → 09-installation-and-updates.md, "Q: How can I restart the live dashboard's serve process?"
+- 2026-11-15: Q: where to run the factory-serve restart (Claude prompt with !, WSL terminal, PowerShell) → 09-installation-and-updates.md, "Q: Should I run the command from the WSL command line?"
+- 2026-11-15: Q: why the agent did not restart factory-serve, and which permissions to add → 09-installation-and-updates.md, "Q: Why couldn't you restart it?"
+- 2026-11-15: HM-72 (boss wake: has_unsent_input counts only the last prompt line, status bar under the input box ignored) fixed and tested, uncommitted, In Review; factory-serve restart allowed (CLAUDE.local.md, .claude/settings.local.json); TSK-607 created in the Taskosaur epic DVDG-16 (task jump across boards), blocked by TSK-606.
