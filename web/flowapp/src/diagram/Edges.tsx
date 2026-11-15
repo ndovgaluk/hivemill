@@ -8,7 +8,8 @@ import { useSelection } from "../selection";
 import type { FlowData, FlowEdge } from "../types";
 import styles from "./diagram.module.css";
 import { groupOf, nodeLabel } from "../groups";
-import { BUS_BRANCHES, BUS_LABEL, CANVAS_H, CANVAS_W, EDGES, FRAMES, toPath } from "./layout";
+import { geometryOf } from "./geometry";
+import { BUS_BRANCHES, BUS_LABEL, toPath } from "./layout";
 
 const FLOW_FORWARD = "forward";
 const HEAD_ACCENT = "accent";   // the selected arrow's head when its severity is ok
@@ -40,6 +41,7 @@ export function Edges({ data, motion, onOpenInstructions }: {
     const k = e.id === pickedId && e.severity === Severity.Ok ? HEAD_ACCENT : e.severity;
     return { markerEnd: `url(#${headId(k)})`, markerStart: e.counts.back > 0 ? `url(#${headId(k)})` : undefined };
   };
+  const geo = geometryOf(data);
   const instructions = new Set(data.events.filter((e) => e.is_instruction && e.edge).map((e) => e.edge));
 
   const click = (e: FlowEdge) => {
@@ -51,7 +53,7 @@ export function Edges({ data, motion, onOpenInstructions }: {
     <>
       {/* HM-17: a dashed frame around boxes that act as one step, labelled on its top border; not clickable */}
       {(data.groups ?? []).map((g) => {
-        const f = FRAMES[g.id];
+        const f = geo.frames[g.id];
         return f ? (
           <div key={g.id} className={styles.frame} style={{ left: f.x, top: f.y, width: f.w, height: f.h }}
                data-testid={`flow-group-${g.id}`} aria-hidden="true">
@@ -59,7 +61,7 @@ export function Edges({ data, motion, onOpenInstructions }: {
           </div>
         ) : null;
       })}
-      <svg className={styles.edges} width={CANVAS_W} height={CANVAS_H} aria-hidden="true">
+      <svg className={styles.edges} width={geo.canvas.w} height={geo.canvas.h} aria-hidden="true">
         <defs>
           {HEADS.map((k) => (
             <marker key={k} id={headId(k)} className={`${styles.head} ${styles[`head_${k}`] ?? ""}`} data-head={k}
@@ -73,8 +75,8 @@ export function Edges({ data, motion, onOpenInstructions }: {
           const active = event?.edge === e.id;
           const flow = active ? (event?.dir === Dir.Back ? FLOW_REVERSE : FLOW_FORWARD) : undefined;
           const hot = sel.hot.edges.has(e.id);
-          const cls = `${styles.edge} ${styles[e.severity] ?? ""} ${e.pending ? styles.pendingEdge : ""} ${dim && !hot ? styles.dimEdge : ""}`;
-          if (e.id === EdgeId.Bus) {
+          const cls = `${styles.edge} ${styles[e.severity] ?? ""} ${e.pending ? styles.pendingEdge : ""} ${e.planned ? styles.plannedEdge : ""} ${dim && !hot ? styles.dimEdge : ""}`;
+          if (e.id === EdgeId.Bus && geo.bus) {
             // a box in a group (Reviewer, QA) has its branch on the group's frame
             const worker = [event?.from_node, event?.to_node].map((n) => (n ? groupOf(data, n) ?? n : n))
               .find((n) => n && n in BUS_BRANCHES) as NodeId | undefined;
@@ -85,20 +87,20 @@ export function Edges({ data, motion, onOpenInstructions }: {
                            data-testid={`flow-edge-path-${e.id}-${node}`} data-flow={on ? flow : undefined} />;
             });
           }
-          const geo = EDGES[e.id as keyof typeof EDGES];
-          return geo ? [<path key={e.id} d={toPath(geo.points)} {...heads(e)} className={`${cls} ${active && motion ? styles.animated : ""} ${glow(e.id)}`}
-                              data-picked={e.id === pickedId}
+          const g = geo.edges[e.id];
+          return g ? [<path key={e.id} d={toPath(g.points)} {...heads(e)} className={`${cls} ${active && motion ? styles.animated : ""} ${glow(e.id)}`}
+                              data-picked={e.id === pickedId} data-planned={e.planned ?? false}
                               data-testid={`flow-edge-path-${e.id}`} data-flow={flow} />] : [];
         })}
       </svg>
       {data.edges.map((e) => {
-        const at = e.id === EdgeId.Bus ? BUS_LABEL : EDGES[e.id as keyof typeof EDGES]?.label;
+        const at = e.id === EdgeId.Bus && geo.bus ? BUS_LABEL : geo.edges[e.id]?.label;
         if (!at) return null;
         const active = event?.edge === e.id;
         return (
-          <button key={e.id} type="button" className={`${styles.chip} ${styles[e.severity] ?? ""} ${e.id === pickedId && motion ? styles.glowBox : ""}`}
+          <button key={e.id} type="button" className={`${styles.chip} ${styles[e.severity] ?? ""} ${e.planned ? styles.plannedChip : ""} ${e.id === pickedId && motion ? styles.glowBox : ""}`}
                   style={{ left: at[0], top: at[1] }}
-                  data-testid={`flow-edge-${e.id}`} data-severity={e.severity} data-pending={e.pending}
+                  data-testid={`flow-edge-${e.id}`} data-severity={e.severity} data-pending={e.pending} data-planned={e.planned ?? false}
                   data-flow={active ? (event?.dir === Dir.Back ? FLOW_REVERSE : FLOW_FORWARD) : undefined}
                   aria-pressed={sel.selection?.kind === SelectionKind.Edge && sel.selection.id === e.id}
                   aria-label={`${nodeLabel(data, e.from)} to ${e.to.map((t) => nodeLabel(data, t)).join(", ")}: ${labelOf(e)}`}

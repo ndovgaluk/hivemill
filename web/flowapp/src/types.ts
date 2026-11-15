@@ -1,5 +1,6 @@
 // The flow JSON payload (DVDG-551 "Shared contract"). null = unknown, never 0 or a guess.
 import type {
+  CiMode,
   Dir,
   EdgeId,
   EventKind,
@@ -11,6 +12,7 @@ import type {
   Severity,
   SourceTable,
   SpanKind,
+  WorkflowKind,
 } from "./constants";
 
 export interface Tokens {
@@ -58,6 +60,8 @@ export interface FlowNode {
   /** The Waiting box only: the pull requests it waits on. */
   links?: { label: string; url: string }[];
   agents: Agent[];
+  /** HM-50: a step the engine does not run yet: drawn dashed, no sessions. Absent from older servers. */
+  planned?: boolean;
 }
 
 export interface FlowEdge {
@@ -71,6 +75,8 @@ export interface FlowEdge {
   counts: { forward: number; back: number };
   /** Per task, on the wait edges (pm → coders queue, coders → gate review start). */
   waits: Wait[];
+  /** HM-50: an arrow of a step not built yet. */
+  planned?: boolean;
 }
 
 export interface Wait {
@@ -128,6 +134,45 @@ export interface FlowEvent {
   cost: number | null;
   cost_note: string | null;
   cost_exact: boolean;
+  /** HM-70: an incident of the workflow engine, with its reason. */
+  incident?: Incident;
+}
+
+export interface Incident {
+  kind: string;
+  cause: string;
+  summary: string;
+  child: string | null;
+  round: number | null;
+}
+
+/** HM-50: the workflow the scope ran under (kind "old" for the factory's own flow). */
+export interface Workflow {
+  kind: WorkflowKind;
+  origin: string | null;
+  ci: CiMode | null;
+  ci_text: string | null;
+  state: string | null;
+  story: string | null;
+  /** Why the engine's database could not be read, when it could not. */
+  note: string | null;
+}
+
+export interface Child {
+  key: string;
+  story: string;
+  state: string;
+  rounds: number;
+}
+
+export type Pt = [number, number];
+
+/** HM-50: where an engine diagram's boxes, frames and arrows sit, computed by the server. */
+export interface Layout {
+  canvas: { w: number; h: number };
+  boxes: Record<string, { x: number; y: number }>;
+  frames: Record<string, { x: number; y: number; w: number; h: number }>;
+  edges: Record<string, { points: Pt[]; label: Pt }>;
 }
 
 export interface Finding {
@@ -165,6 +210,10 @@ export interface FlowData {
   events: FlowEvent[];
   findings: Finding[];
   phases: Phase[];
+  workflow?: Workflow;
+  children?: Child[];
+  /** null: the old workflow, drawn with the app's own fixed layout. */
+  layout?: Layout | null;
 }
 
 export interface FlowGroup {

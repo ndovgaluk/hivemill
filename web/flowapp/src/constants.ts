@@ -20,6 +20,17 @@ export const NodeId = {
   Judge: "judge",
   Main: "main",
   Wait: "wait",
+  // HM-50: the workflow engine's boxes (web/flowdefs.py N); Boss, the review gate, Judge, Merged and Wait are shared
+  Engine: "engine",
+  Architect: "architect",
+  Builder: "builder",
+  ChildReview: "child_review",
+  BranchQa: "branch_qa",
+  MergeQueue: "merge_queue",
+  Pr: "pr",
+  Tests: "tests",
+  Land: "land",
+  Done: "done",
 } as const;
 export type NodeId = (typeof NodeId)[keyof typeof NodeId];
 
@@ -33,6 +44,24 @@ export const EdgeId = {
   GateJudge: "gj",
   JudgeMain: "jm",
   Rework: "rw",
+  // HM-50: the engine's arrows (web/flowdefs.py E); their geometry comes with the payload's layout
+  BossEngine: "be",
+  EngineBuilder: "eb",
+  EngineArchitect: "ea",
+  ArchitectBuilder: "ab",
+  BuildReview: "br",
+  Changes: "rb",
+  NonConvergence: "ra",
+  ReviewQa: "rq",
+  QaQueue: "qm",
+  QueueFinish: "mf",
+  ReviewFinish: "rf",
+  PrGate: "pg",
+  MainDone: "md",
+  GateRework: "fr",
+  TestsLand: "tl",
+  TestsRed: "tb",
+  LandDone: "ld",
 } as const;
 export type EdgeId = (typeof EdgeId)[keyof typeof EdgeId];
 
@@ -47,6 +76,9 @@ export const LaneId = {
   Qa: "qa",
   Judge: "judge",
   Wait: "wait",
+  Engine: "engine",
+  Builder: "builder",
+  ChildReview: "child_review",
 } as const;
 export type LaneId = (typeof LaneId)[keyof typeof LaneId];
 
@@ -62,7 +94,8 @@ export type SpanKind = (typeof SpanKind)[keyof typeof SpanKind];
 export const EventKind = { Msg: "msg", Status: "status", Verdict: "verdict" } as const;
 export type EventKind = (typeof EventKind)[keyof typeof EventKind];
 
-export const SourceTable = { Messages: "messages", Verdicts: "verdicts", Events: "events", Tasks: "tasks" } as const;
+export const SourceTable = { Messages: "messages", Verdicts: "verdicts", Events: "events", Tasks: "tasks",
+  Incidents: "incidents" } as const;   // HM-70: incidents live in workflow.db
 export type SourceTable = (typeof SourceTable)[keyof typeof SourceTable];
 
 export const FindingTarget = { Node: "node", Edge: "edge", Event: "event" } as const;
@@ -70,6 +103,12 @@ export type FindingTarget = (typeof FindingTarget)[keyof typeof FindingTarget];
 
 export const SelectionKind = { Node: "node", Edge: "edge", Event: "event" } as const;
 export type SelectionKind = (typeof SelectionKind)[keyof typeof SelectionKind];
+
+/** HM-50: the workflow a goal ran under, and the CI mode that ends an engine run (web/flowdefs.py Kind, Ci). */
+export const WorkflowKind = { Old: "old", Simple: "simple", Medium: "medium", Huge: "huge" } as const;
+export type WorkflowKind = (typeof WorkflowKind)[keyof typeof WorkflowKind];
+export const CiMode = { Github: "github", Local: "local", None: "none" } as const;
+export type CiMode = (typeof CiMode)[keyof typeof CiMode];
 
 export const Lens = { Time: "time", Cost: "cost" } as const;
 export type Lens = (typeof Lens)[keyof typeof Lens];

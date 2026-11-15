@@ -23,6 +23,29 @@ Three linked views share one selection:
 
 The page is a small React app (`web/flowapp/`) built into committed files under `web/static/flow/`; it reads `/api/flow/goal/<id>.json` and `/api/flow/task/<id>.json`, built by `web/flow.py` (structure), `web/flowcost.py` (tokens and cost) and `web/flow_findings.py` (findings and phases). The server needs no Node.
 
+### Diagram per workflow (HM-50)
+
+The diagram and the timeline lanes show the workflow the goal or task really ran under. The Flow header names it: `Workflow: old workflow`, or for a story run of the workflow engine (`docs/workflow-engine.md`) the workflow, how it was picked (`chosen` from the story's size and complexity, `given` with `--workflow`), the CI mode and the run's state, e.g. `Workflow: huge (chosen) · CI none: no PR, no tests · run building`.
+
+| Workflow | Boxes |
+|---|---|
+| old | Boss, Director, Lead, System, PM, Coders, the Review gate (Reviewer, QA), Judge, Merged, Waiting |
+| `simple` | Boss, Engine, Builder, Reviewer (one per child, with the children's progress), then the CI mode's finish, Done, Waiting |
+| `medium` | as `simple`, plus Architect (planned: design and design freeze) |
+| `huge` | as `medium`, plus QA on the whole branch (planned), Merge queue (planned), and a planned arrow "non-convergence" from Reviewer to Architect |
+
+| CI mode | Finish after the last child is reviewed |
+|---|---|
+| `github` | Pull request → Review gate (Reviewer, QA) → Judge → Merged; a gate rejection goes back to the Builder |
+| `local` | Affected tests → Land on main; a red run goes back to the Builder |
+| `none` | Land on main, marked "no tests" |
+
+- A **planned** box or arrow is a step the engine does not run yet (`workflows/<name>.md`, "What is planned to differ"): drawn dashed, labelled "planned, not built", with no sessions; it cannot be selected.
+- The run's **children** are listed under the diagram with their state and fix rounds; the task page of the run's factory task shows the same diagram and children as its goal page.
+- The engine's **incidents** (a refused start, review changes, a red test run, a refused landing, a stopped run) are marks on the Engine lane, or on the Reviewer lane when they concern one child; the mark's quick info gives kind, cause and the full reason.
+- The data comes from the engine's own database `<home>/db/workflow.db`, opened read-only and never created. A goal that is not a run there, or a home without the file, is the old workflow; a file that cannot be read (another schema version) is shown as the old workflow with the reason in the header.
+- The definitions live in `web/flowdefs.py` (one per workflow and CI mode, with the box and arrow coordinates); the old diagram keeps its fixed layout in `web/flowapp/src/diagram/layout.ts`. The findings of the old workflow (queue waits, review staffing, lead overhead) are not computed for an engine run.
+
 ## 2. Setup
 
 Nothing to install to use it: `factory serve` serves the page and the committed bundle.
@@ -97,6 +120,7 @@ cd web/flowapp && npm test
 | "Cursor agents record no token usage" | the agent ran on Cursor | none |
 | "session log larger than the read cap" | one log file is over 64 MB | values for that agent stay unknown |
 | "That item is not in this flow any more" | a link names a step that is gone | pick the step again |
+| A story run is drawn with the old boxes | `workflow.db` has no run for this goal, or the header says it is unreadable | check `factory wf status --goal G`; an unreadable file names its `user_version` |
 | The old static diagram shows and nothing reacts | JavaScript is off, or the bundle did not load | check `/static/flow/flow.js` loads; rebuild if the bundle test fails |
 
 Limits worth knowing:

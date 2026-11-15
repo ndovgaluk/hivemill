@@ -164,7 +164,7 @@ describe("diagram", () => {
     expect(onOpenEvents).toHaveBeenCalledWith(NodeId.Lead);
   });
 
-  it("zoom buttons change the zoom label between the allowed steps and Fit resets it", () => {
+  it("zoom buttons change the zoom label between the allowed steps and Fit resets it (100 % when the width is unknown)", () => {
     show(fresh());
     const label = screen.getByTestId("flow-zoom");
     expect(label.textContent).toBe("100%");

@@ -263,7 +263,9 @@ def phases(d, con, now=None):
 
 
 def attach(d, con, now=None):
-    """Fill d["findings"] and d["phases"] in place; returns d."""
-    d["findings"] = findings(d)
+    """Fill d["findings"] and d["phases"] in place; returns d. The detectors read the old workflow's boxes and arrows (the
+    PM queue, the lead, the review gate), so an engine run (HM-50) gets none of them; its incidents are its findings."""
+    old = (d.get("workflow") or {}).get("kind", "old") == "old"
+    d["findings"] = findings(d) if old else []
     d["phases"] = phases(d, con, now)
     return d

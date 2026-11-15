@@ -1,0 +1,858 @@
+{
+ "scope": "goal",
+ "id": "G-90",
+ "title": "Story run",
+ "status": "active",
+ "goal_id": "G-90",
+ "start": "2026-10-24T08:00:00+11:00",
+ "now": "2026-10-24T12:00:00+11:00",
+ "show_text": false,
+ "elapsed_s": 14400,
+ "totals": {
+  "agent_s": 14700,
+  "tokens": null,
+  "cost": null,
+  "cost_as_of": null,
+  "cost_note": "token usage not loaded",
+  "unattributed_cost": null,
+  "rejections": 0,
+  "messages": 0
+ },
+ "nodes": [
+  {
+   "id": "boss",
+   "label": "Boss",
+   "state": "idle",
+   "planned": false,
+   "work_s": null,
+   "current_s": null,
+   "note": null,
+   "links": [],
+   "tokens": null,
+   "cost": null,
+   "cost_note": "token usage not loaded",
+   "agents": []
+  },
+  {
+   "id": "engine",
+   "label": "Engine",
+   "state": "live",
+   "planned": false,
+   "work_s": null,
+   "current_s": null,
+   "note": "run building",
+   "links": [],
+   "tokens": null,
+   "cost": null,
+   "cost_note": "token usage not loaded",
+   "agents": []
+  },
+  {
+   "id": "architect",
+   "label": "Architect",
+   "state": "idle",
+   "planned": true,
+   "work_s": null,
+   "current_s": null,
+   "note": "planned, not built",
+   "links": [],
+   "tokens": null,
+   "cost": null,
+   "cost_note": "token usage not loaded",
+   "agents": []
+  },
+  {
+   "id": "builder",
+   "label": "Builder",
+   "state": "live",
+   "planned": false,
+   "work_s": 14100,
+   "current_s": null,
+   "note": null,
+   "links": [],
+   "tokens": null,
+   "cost": null,
+   "cost_note": "token usage not loaded",
+   "agents": [
+    {
+     "name": "coder-t-90",
+     "status": "live",
+     "work_s": 14100,
+     "cost": null,
+     "task_id": "T-90",
+     "session_id": null,
+     "after_last_event": null
+    }
+   ]
+  },
+  {
+   "id": "child_review",
+   "label": "Reviewer",
+   "state": "fail",
+   "planned": false,
+   "work_s": 600,
+   "current_s": null,
+   "note": "1 of 2 reviewed, 3 fix rounds",
+   "links": [],
+   "tokens": null,
+   "cost": null,
+   "cost_note": "token usage not loaded",
+   "agents": [
+    {
+     "name": "review-hm-2-r1",
+     "status": "done",
+     "work_s": 600,
+     "cost": null,
+     "task_id": "T-90",
+     "session_id": null,
+     "after_last_event": null
+    }
+   ]
+  },
+  {
+   "id": "branch_qa",
+   "label": "QA",
+   "state": "idle",
+   "planned": true,
+   "work_s": null,
+   "current_s": null,
+   "note": "planned, not built: the whole branch",
+   "links": [],
+   "tokens": null,
+   "cost": null,
+   "cost_note": "token usage not loaded",
+   "agents": []
+  },
+  {
+   "id": "merge_queue",
+   "label": "Merge queue",
+   "state": "idle",
+   "planned": true,
+   "work_s": null,
+   "current_s": null,
+   "note": "planned, not built",
+   "links": [],
+   "tokens": null,
+   "cost": null,
+   "cost_note": "token usage not loaded",
+   "agents": []
+  },
+  {
+   "id": "land",
+   "label": "Land on main",
+   "state": "pending",
+   "planned": false,
+   "work_s": null,
+   "current_s": null,
+   "note": "no tests",
+   "links": [],
+   "tokens": null,
+   "cost": null,
+   "cost_note": "token usage not loaded",
+   "agents": []
+  },
+  {
+   "id": "done",
+   "label": "Done",
+   "state": "pending",
+   "planned": false,
+   "work_s": null,
+   "current_s": null,
+   "note": null,
+   "links": [],
+   "tokens": null,
+   "cost": null,
+   "cost_note": "token usage not loaded",
+   "agents": []
+  },
+  {
+   "id": "wait",
+   "label": "Waiting",
+   "state": "idle",
+   "planned": false,
+   "work_s": 0,
+   "current_s": null,
+   "note": null,
+   "links": [],
+   "tokens": null,
+   "cost": null,
+   "cost_note": "token usage not loaded",
+   "agents": []
+  }
+ ],
+ "groups": [],
+ "edges": [
+  {
+   "id": "be",
+   "from": "boss",
+   "to": [
+    "engine"
+   ],
+   "label": "start",
+   "wait_s": null,
+   "planned": false,
+   "severity": "ok",
+   "pending": false,
+   "counts": {
+    "forward": 0,
+    "back": 0
+   },
+   "waits": []
+  },
+  {
+   "id": "eb",
+   "from": "engine",
+   "to": [
+    "builder"
+   ],
+   "label": "kickoff",
+   "wait_s": 300,
+   "planned": false,
+   "severity": "ok",
+   "pending": false,
+   "counts": {
+    "forward": 1,
+    "back": 0
+   },
+   "waits": [
+    {
+     "task_id": "T-90",
+     "wait_s": 300,
+     "start_s": 0,
+     "end_s": 300,
+     "open": false,
+     "note": null
+    }
+   ]
+  },
+  {
+   "id": "ea",
+   "from": "engine",
+   "to": [
+    "architect"
+   ],
+   "label": "design",
+   "wait_s": null,
+   "planned": true,
+   "severity": "ok",
+   "pending": true,
+   "counts": {
+    "forward": 0,
+    "back": 0
+   },
+   "waits": []
+  },
+  {
+   "id": "ab",
+   "from": "architect",
+   "to": [
+    "builder"
+   ],
+   "label": "frozen design",
+   "wait_s": null,
+   "planned": true,
+   "severity": "ok",
+   "pending": true,
+   "counts": {
+    "forward": 0,
+    "back": 0
+   },
+   "waits": []
+  },
+  {
+   "id": "br",
+   "from": "builder",
+   "to": [
+    "child_review"
+   ],
+   "label": "in review",
+   "wait_s": null,
+   "planned": false,
+   "severity": "ok",
+   "pending": false,
+   "counts": {
+    "forward": 0,
+    "back": 0
+   },
+   "waits": []
+  },
+  {
+   "id": "rb",
+   "from": "child_review",
+   "to": [
+    "builder"
+   ],
+   "label": "changes",
+   "wait_s": null,
+   "planned": false,
+   "severity": "ok",
+   "pending": false,
+   "counts": {
+    "forward": 0,
+    "back": 0
+   },
+   "waits": []
+  },
+  {
+   "id": "ra",
+   "from": "child_review",
+   "to": [
+    "architect"
+   ],
+   "label": "non-convergence",
+   "wait_s": null,
+   "planned": true,
+   "severity": "ok",
+   "pending": true,
+   "counts": {
+    "forward": 0,
+    "back": 0
+   },
+   "waits": []
+  },
+  {
+   "id": "rq",
+   "from": "child_review",
+   "to": [
+    "branch_qa"
+   ],
+   "label": "reviewed",
+   "wait_s": null,
+   "planned": true,
+   "severity": "ok",
+   "pending": true,
+   "counts": {
+    "forward": 0,
+    "back": 0
+   },
+   "waits": []
+  },
+  {
+   "id": "qm",
+   "from": "branch_qa",
+   "to": [
+    "merge_queue"
+   ],
+   "label": "passed",
+   "wait_s": null,
+   "planned": true,
+   "severity": "ok",
+   "pending": true,
+   "counts": {
+    "forward": 0,
+    "back": 0
+   },
+   "waits": []
+  },
+  {
+   "id": "rf",
+   "from": "child_review",
+   "to": [
+    "land"
+   ],
+   "label": "all reviewed",
+   "wait_s": null,
+   "planned": false,
+   "severity": "ok",
+   "pending": false,
+   "counts": {
+    "forward": 0,
+    "back": 0
+   },
+   "waits": []
+  },
+  {
+   "id": "ld",
+   "from": "land",
+   "to": [
+    "done"
+   ],
+   "label": "close",
+   "wait_s": null,
+   "planned": false,
+   "severity": "ok",
+   "pending": true,
+   "counts": {
+    "forward": 0,
+    "back": 0
+   },
+   "waits": []
+  },
+  {
+   "id": "mf",
+   "from": "merge_queue",
+   "to": [
+    "land"
+   ],
+   "label": "merge",
+   "wait_s": null,
+   "planned": true,
+   "severity": "ok",
+   "pending": true,
+   "counts": {
+    "forward": 0,
+    "back": 0
+   },
+   "waits": []
+  }
+ ],
+ "lanes": [
+  {
+   "id": "boss",
+   "node": "boss",
+   "label": "Boss",
+   "rows": []
+  },
+  {
+   "id": "engine",
+   "node": "engine",
+   "label": "Engine",
+   "rows": []
+  },
+  {
+   "id": "builder",
+   "node": "builder",
+   "label": "Builder",
+   "rows": [
+    {
+     "name": "coder-t-90",
+     "task_id": "T-90",
+     "spans": [
+      {
+       "start_s": 0,
+       "end_s": 300,
+       "kind": "wait",
+       "note": "queued before coding"
+      },
+      {
+       "start_s": 300,
+       "end_s": 14400,
+       "kind": "work",
+       "note": "running"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "child_review",
+   "node": "child_review",
+   "label": "Reviewer (child)",
+   "rows": [
+    {
+     "name": "review-hm-2-r1",
+     "task_id": "T-90",
+     "spans": [
+      {
+       "start_s": 1800,
+       "end_s": 2400,
+       "kind": "work",
+       "note": null
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "wait",
+   "node": "wait",
+   "label": "Waiting",
+   "rows": []
+  }
+ ],
+ "events": [
+  {
+   "id": "S-T-90",
+   "key": "S-T-90",
+   "ref": {
+    "table": "tasks",
+    "rowid": 7
+   },
+   "task_id": "T-90",
+   "goal_id": "G-90",
+   "t_s": 0,
+   "ts": "2026-10-24T08:00:00+11:00",
+   "lane": "engine",
+   "row": null,
+   "edge": "eb",
+   "dir": 1,
+   "from": null,
+   "to": "coder-t-90",
+   "from_node": "engine",
+   "to_node": "builder",
+   "kind": "status",
+   "severity": "ok",
+   "title": "T-90 spec and acceptance",
+   "is_instruction": true,
+   "body_html": null,
+   "tokens": null,
+   "cost": null,
+   "cost_note": "token usage not loaded",
+   "cost_exact": false
+  },
+  {
+   "id": "W1",
+   "key": "W1",
+   "ref": {
+    "table": "incidents",
+    "rowid": 1
+   },
+   "task_id": "T-90",
+   "goal_id": "G-90",
+   "t_s": 2700,
+   "ts": "2026-10-24T08:45:00+11:00",
+   "lane": "child_review",
+   "row": null,
+   "edge": null,
+   "dir": null,
+   "from": "engine",
+   "to": null,
+   "from_node": "child_review",
+   "to_node": null,
+   "kind": "status",
+   "severity": "bad",
+   "title": "rejection review-changes: two findings on the parser",
+   "is_instruction": false,
+   "body_html": null,
+   "tokens": null,
+   "cost": null,
+   "cost_note": "token usage not loaded",
+   "cost_exact": false,
+   "incident": {
+    "kind": "rejection",
+    "cause": "review-changes",
+    "summary": "two findings on the parser",
+    "child": "HM-3",
+    "round": null
+   }
+  },
+  {
+   "id": "W2",
+   "key": "W2",
+   "ref": {
+    "table": "incidents",
+    "rowid": 2
+   },
+   "task_id": "T-90",
+   "goal_id": "G-90",
+   "t_s": 4800,
+   "ts": "2026-10-24T09:20:00+11:00",
+   "lane": "engine",
+   "row": null,
+   "edge": null,
+   "dir": null,
+   "from": "engine",
+   "to": null,
+   "from_node": "engine",
+   "to_node": null,
+   "kind": "status",
+   "severity": "warn",
+   "title": "warning land-refused: the checkout has uncommitted changes",
+   "is_instruction": false,
+   "body_html": null,
+   "tokens": null,
+   "cost": null,
+   "cost_note": "token usage not loaded",
+   "cost_exact": false,
+   "incident": {
+    "kind": "warning",
+    "cause": "land-refused",
+    "summary": "the checkout has uncommitted changes",
+    "child": null,
+    "round": null
+   }
+  }
+ ],
+ "findings": [],
+ "phases": [],
+ "workflow": {
+  "kind": "huge",
+  "origin": "chosen",
+  "ci": "none",
+  "ci_text": "no PR, no tests",
+  "state": "building",
+  "story": "HM-1",
+  "note": null
+ },
+ "children": [
+  {
+   "key": "HM-2",
+   "story": "HM-1",
+   "state": "reviewed",
+   "rounds": 1
+  },
+  {
+   "key": "HM-3",
+   "story": "HM-1",
+   "state": "fixing",
+   "rounds": 2
+  }
+ ],
+ "layout": {
+  "canvas": {
+   "w": 1408,
+   "h": 278
+  },
+  "boxes": {
+   "boss": {
+    "x": 10,
+    "y": 16
+   },
+   "engine": {
+    "x": 218,
+    "y": 16
+   },
+   "architect": {
+    "x": 426,
+    "y": 16
+   },
+   "builder": {
+    "x": 218,
+    "y": 136
+   },
+   "child_review": {
+    "x": 426,
+    "y": 136
+   },
+   "branch_qa": {
+    "x": 634,
+    "y": 136
+   },
+   "merge_queue": {
+    "x": 842,
+    "y": 136
+   },
+   "land": {
+    "x": 1050,
+    "y": 136
+   },
+   "done": {
+    "x": 1258,
+    "y": 136
+   },
+   "wait": {
+    "x": 634,
+    "y": 16
+   }
+  },
+  "frames": {},
+  "edges": {
+   "be": {
+    "points": [
+     [
+      150,
+      48.0
+     ],
+     [
+      218,
+      48.0
+     ]
+    ],
+    "label": [
+     184.0,
+     30.0
+    ]
+   },
+   "eb": {
+    "points": [
+     [
+      288.0,
+      80
+     ],
+     [
+      288.0,
+      136
+     ]
+    ],
+    "label": [
+     288.0,
+     108.0
+    ]
+   },
+   "ea": {
+    "points": [
+     [
+      358,
+      48.0
+     ],
+     [
+      426,
+      48.0
+     ]
+    ],
+    "label": [
+     392.0,
+     30.0
+    ]
+   },
+   "ab": {
+    "points": [
+     [
+      456.0,
+      80
+     ],
+     [
+      456.0,
+      108
+     ],
+     [
+      328.0,
+      108
+     ],
+     [
+      328.0,
+      136
+     ]
+    ],
+    "label": [
+     392.0,
+     108
+    ]
+   },
+   "br": {
+    "points": [
+     [
+      358,
+      168.0
+     ],
+     [
+      426,
+      168.0
+     ]
+    ],
+    "label": [
+     392.0,
+     150.0
+    ]
+   },
+   "rb": {
+    "points": [
+     [
+      456.0,
+      200
+     ],
+     [
+      456.0,
+      222
+     ],
+     [
+      328.0,
+      222
+     ],
+     [
+      328.0,
+      200
+     ]
+    ],
+    "label": [
+     392.0,
+     222
+    ]
+   },
+   "ra": {
+    "points": [
+     [
+      496.0,
+      136
+     ],
+     [
+      496.0,
+      80
+     ]
+    ],
+    "label": [
+     562.0,
+     108.0
+    ]
+   },
+   "rq": {
+    "points": [
+     [
+      566,
+      168.0
+     ],
+     [
+      634,
+      168.0
+     ]
+    ],
+    "label": [
+     600.0,
+     150.0
+    ]
+   },
+   "qm": {
+    "points": [
+     [
+      774,
+      168.0
+     ],
+     [
+      842,
+      168.0
+     ]
+    ],
+    "label": [
+     808.0,
+     150.0
+    ]
+   },
+   "rf": {
+    "points": [
+     [
+      536.0,
+      200
+     ],
+     [
+      536.0,
+      248
+     ],
+     [
+      1120.0,
+      248
+     ],
+     [
+      1120.0,
+      200
+     ]
+    ],
+    "label": [
+     828.0,
+     248
+    ]
+   },
+   "ld": {
+    "points": [
+     [
+      1190,
+      168.0
+     ],
+     [
+      1258,
+      168.0
+     ]
+    ],
+    "label": [
+     1224.0,
+     150.0
+    ]
+   },
+   "mf": {
+    "points": [
+     [
+      982,
+      168.0
+     ],
+     [
+      1050,
+      168.0
+     ]
+    ],
+    "label": [
+     1016.0,
+     150.0
+    ]
+   }
+  }
+ }
+}

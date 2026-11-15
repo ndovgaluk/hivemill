@@ -1,6 +1,7 @@
 // Fixed layout of the design mock (grilling DVDG-552 Q9): command row on top, work row below, rework loop under it.
 // HM-17: the review gate is a dashed frame holding Reviewer above QA, so the work row is taller in that column.
 import { EdgeId, NodeId } from "../constants";
+import type { Pt } from "../types";
 
 export const NODE_W = 140;
 export const NODE_H = 64;
@@ -43,7 +44,6 @@ const GATE = FRAMES[NodeId.Gate]!;
 const GATE_MID = GATE.x + GATE.w / 2;
 const GATE_BOTTOM = GATE.y + GATE.h;           // 326
 
-type Pt = [number, number];
 
 /** Polyline from the edge's `from` end to its `to` end, and where the label chip sits. */
 export interface EdgeGeo {
@@ -56,7 +56,7 @@ const LEAD_BOTTOM: Pt = [496, 80];
 const busTo = (x: number, y = WORK_Y): Pt[] => [LEAD_BOTTOM, [LEAD_BOTTOM[0], BUS_Y], [x, BUS_Y], [x, y]];
 const REWORK_Y = GATE_BOTTOM + 20;
 
-export const EDGES: Record<Exclude<EdgeId, typeof EdgeId.Bus>, EdgeGeo> = {
+export const EDGES: Partial<Record<EdgeId, EdgeGeo>> = {   // the old workflow's arrows; the engine sends its own
   [EdgeId.BossDirector]: { points: [[150, 48], [218, 48]], label: [184, 30] },
   [EdgeId.DirectorLead]: { points: [[358, 48], [426, 48]], label: [392, 30] },
   [EdgeId.SystemLead]: { points: [[634, 48], [566, 48]], label: [600, 30] },

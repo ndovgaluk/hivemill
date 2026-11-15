@@ -7,6 +7,7 @@ verdict summaries, the task's spec and acceptance, an agent's end summary) is se
 `show_text` (web/server.show_text_allowed); otherwise those columns are never read.
 """
 from web.html import is_pr_url
+from web import flowdefs as fd
 from web import queries as q
 from web.html import md
 
@@ -113,10 +114,12 @@ class FindingTarget:
 class Key:
     """Event keys: the factory's own message key style (`M62`, printed by the CLI), extended to verdicts and events."""
     MESSAGE, VERDICT, EVENT, SPEC = "M", "V", "E", "S-"
+    INCIDENT = "W"   # HM-70: an incident of the workflow engine (workflow.db), W7 = incidents row 7
 
 
 class Table:
     MESSAGES, VERDICTS, EVENTS, TASKS = "messages", "verdicts", "events", "tasks"
+    INCIDENTS = "incidents"   # in workflow.db, not factory.db
 
 
 class Action:
@@ -153,6 +156,23 @@ WAIT_QUEUE = "next task not started"
 WAIT_UNKNOWN = "no agent running"
 WAIT_LINK_LABEL = "PR"
 WAIT_ROW = "no agent running"   # the one row of the Waiting lane
+
+
+# HM-50: the old workflow as a definition like the engine's (web/flowdefs.py); its fixed layout stays in the flow app
+OLD = fd.Def(fd.Kind.OLD, None, tuple((n, label, None, None, False, None) for n, label in NODES), GROUPS, EDGES, LANES,
+             work=Node.CODERS, spec_from=Node.PM, spec_edge=Edge.PC, rework_edge=Edge.RW, review_edge=Edge.CG,
+             gate_nodes=GATE_NODES, verdict_node=VERDICT_NODE, merged=Node.MAIN, judge_edge=Edge.GJ, merge_edge=Edge.JM,
+             workers=WORKERS)
+OLD.edge_of, OLD.node_lane = _EDGE_OF, _NODE_LANE   # hand-made: the lead's bus, and Merged on the judge's lane
+INCIDENT_SEVERITY = {"rejection": Severity.BAD, "failure": Severity.BAD, "escalation": Severity.BAD, "warning": Severity.WARN}
+INCIDENT_CHILD_LANE = fd.N.CHILD_REVIEW   # an incident on one child sits on the child reviewer's lane, the rest on the engine's
+RUN_LIVE = ("starting", "building", "built", "merging", "gating", "landing", "linking", "reporting", "closing", "announcing")
+RUN_FAILED = ("failed", "blocked")
+RUN_PAST_GATING = ("landing", "linking", "reporting", "closing", "announcing", "done")
+CHILD_FIXING = ("fixing", "stuck")
+CHILD_BLOCKED = ("blocked",)
+CHILD_REVIEWED = ("reviewed", "reported", "done")
+TESTS_FAILED = "local-tests-failed"
 
 
 def _sev_max(*sevs):
@@ -195,6 +215,9 @@ def build(con, scope, oid, now=None, show_text=False):
             "OR (role=? AND goal_id=?) OR name=? ORDER BY started, name",
             (oid, Role.LEAD, goal_id, add["actor"] if add else None)))
     start_e = q._epoch(start)
+    run, run_note = fd.read_run(con, goal_id, oid if scope == Scope.TASK else None)
+    D = fd.ENGINE_DEFS[(run.kind, run.ci)] if run else OLD
+    engine = run is not None
     roles = {r["name"]: r["role"] for r in con.execute("SELECT name, role FROM agents")}
     task_ids = [t["id"] for t in tasks]
     names = [a["name"] for a in agents]
@@ -206,14 +229,17 @@ def build(con, scope, oid, now=None, show_text=False):
     def rel(ts):
         return off(q._epoch(ts))
 
+    def agent_lane(name, role):
+        if engine:
+            return fd.engine_lane(D, name, role)
+        return Lane.SYSTEM if name in SYSTEM_SENDERS else _ROLE_LANE.get(role)
+
     def lane_of(name):
-        if name in SYSTEM_SENDERS:
-            return Lane.SYSTEM
-        return _ROLE_LANE.get(roles.get(name, name))
+        return agent_lane(name, roles.get(name, name))
 
     def node_of(name):
         lane = lane_of(name)
-        return _LANE_NODE.get(lane) if lane else None
+        return D.lane_node.get(lane) if lane else None
 
     # ── sessions per agent: spawn → done/reaped/stopped/lost events (every session, not only the latest row) ──
     sess = {n: [] for n in names}
@@ -267,10 +293,10 @@ def build(con, scope, oid, now=None, show_text=False):
     for a in agents:
         if a["role"] == Role.CODER and a["task_id"]:
             coder_of[a["task_id"]] = a["name"]   # the latest coder (rows are ordered by start)
-    rows_by_lane = {lane: [] for lane, _, _ in LANES}
+    rows_by_lane = {lane: [] for lane, _, _ in D.lanes}
     row_names = set()
     for a in agents:
-        lane = _ROLE_LANE.get(a["role"])
+        lane = agent_lane(a["name"], a["role"])
         if lane is None:
             continue
         spans = []
@@ -304,28 +330,30 @@ def build(con, scope, oid, now=None, show_text=False):
         pc_waits.append({"task_id": t["id"], "wait_s": queued[t["id"]], "start_s": off(c0), "end_s": off(end),
                          "open": f is None, "note": None})
         span = {"start_s": off(c0), "end_s": off(end), "kind": SpanKind.WAIT, "note": NOTE_QUEUED}
-        row = next((r for r in rows_by_lane[Lane.CODERS] if r["name"] == name), None) if name else None
+        work_lane = D.node_lane[D.work]
+        row = next((r for r in rows_by_lane[work_lane] if r["name"] == name), None) if name else None
         if row is None:
             row = {"name": t["id"], "task_id": t["id"], "spans": []}
-            rows_by_lane[Lane.CODERS].append(row)
+            rows_by_lane[work_lane].append(row)
         row["spans"].insert(0, span)
-    lanes = [{"id": lane, "node": node, "label": label, "rows": rows_by_lane[lane]} for lane, node, label in LANES]
+    lanes = [{"id": lane, "node": node, "label": label, "rows": rows_by_lane[lane]} for lane, node, label in D.lanes]
 
     # ── events ──
     events = []
 
     def add_event(key, ref, ts, task_id, frm, to, fn, tn, kind, title, severity=Severity.OK, instruction=False, body=None,
-                  edge=None):
+                  edge=None, lane=None, incident=None):
         if edge is None:
-            edge, d = _EDGE_OF.get((fn, tn), (None, None))
+            edge, d = D.edge_of.get((fn, tn), (None, None))
         else:
             edge, d = edge
-        lane = lane_of(frm) or _NODE_LANE.get(fn)
+        lane = lane or lane_of(frm) or D.node_lane.get(fn)
         events.append({"id": key, "key": key, "ref": ref, "task_id": task_id, "goal_id": goal_id, "t_s": rel(ts), "ts": ts,
                        "lane": lane, "row": frm if frm in row_names else None, "edge": edge, "dir": d, "from": frm, "to": to,
                        "from_node": fn, "to_node": tn, "kind": kind, "severity": severity, "title": (title or "")[:TITLE_CHARS],
                        "is_instruction": instruction, "body_html": md(body) if show_text and body else None,
-                       "tokens": None, "cost": None, "cost_note": COST_NOTE, "cost_exact": False})
+                       "tokens": None, "cost": None, "cost_note": COST_NOTE, "cost_exact": False,
+                       **({"incident": incident} if incident else {})})
 
     mcols = "id, sender, recipient, kind, subject, task_id, created" + (", body" if show_text else "")
     if scope == Scope.GOAL:
@@ -342,7 +370,7 @@ def build(con, scope, oid, now=None, show_text=False):
                   m["kind"] in INSTRUCTION_KINDS, m["body"] if show_text else None)
     rejections = 0
     for v in verdicts:
-        fn = VERDICT_NODE.get(v["role"])
+        fn = D.verdict_node.get(v["role"])
         sha = f" @{v['head_sha'][:8]}" if v["head_sha"] else ""
         title = f"{v['role']} {v['verdict'].upper()}{sha}"
         ref = {"table": Table.VERDICTS, "rowid": v["id"]}
@@ -351,10 +379,10 @@ def build(con, scope, oid, now=None, show_text=False):
             rejections += 1
             coder = coder_of.get(v["task_id"])
             add_event(f"{Key.VERDICT}{v['id']}", ref, v["created"], v["task_id"], v["author"] or v["role"], coder or v["task_id"],
-                      fn, Node.CODERS, EventKind.VERDICT, title, Severity.BAD, True, body,
-                      edge=(Edge.RW, 1) if fn in GATE_NODES else (None, None))
+                      fn, D.work, EventKind.VERDICT, title, Severity.BAD, True, body,
+                      edge=(D.rework_edge, 1) if fn in D.gate_nodes and D.rework_edge else (None, None))
         else:
-            tn = Node.MAIN if v["verdict"] == MERGE_VERDICT else Node.JUDGE
+            tn = D.merged if v["verdict"] == MERGE_VERDICT else Node.JUDGE
             add_event(f"{Key.VERDICT}{v['id']}", ref, v["created"], v["task_id"], v["author"] or v["role"], tn, fn, tn,
                       EventKind.VERDICT, title, Severity.OK, False, body)
     tcols = "rowid, id, created" + (", spec, acceptance" if show_text else "")
@@ -364,8 +392,8 @@ def build(con, scope, oid, now=None, show_text=False):
         frm = adder["actor"] if adder else None
         body = f"{t['spec'] or ''}\n\n## Acceptance\n\n{t['acceptance'] or ''}" if show_text and (t["spec"] or t["acceptance"]) else None
         add_event(f"{Key.SPEC}{t['id']}", {"table": Table.TASKS, "rowid": t["rowid"]}, t["created"], t["id"], frm,
-                  coder_of.get(t["id"], t["id"]), Node.PM, Node.CODERS, EventKind.STATUS, f"{t['id']} spec and acceptance",
-                  Severity.OK, True, body, edge=(Edge.PC, 1))
+                  coder_of.get(t["id"], t["id"]), D.spec_from, D.work, EventKind.STATUS, f"{t['id']} spec and acceptance",
+                  Severity.OK, True, body, edge=(D.spec_edge, 1))
     acts = ",".join("?" * len(TIMELINE_ACTIONS))
     facts = ",".join("?" * len(FACT_DETAIL_ACTIONS))
     detail = (f"CASE WHEN action IN ({facts}) OR (entity='agent' AND action=?) THEN detail END" if show_text
@@ -383,22 +411,34 @@ def build(con, scope, oid, now=None, show_text=False):
             add_event(key, ref, e["ts"], tid, e["actor"], who, node_of(e["actor"]) or Node.SYSTEM, node_of(who), EventKind.STATUS,
                       f"{who} started")
         elif e["entity"] == "agent" and act == Action.DONE:
-            add_event(key, ref, e["ts"], tid, who, None, node_of(who), Node.LEAD if node_of(who) in WORKERS else None,
+            add_event(key, ref, e["ts"], tid, who, None, node_of(who),
+                      Node.LEAD if not engine and node_of(who) in D.workers else None,
                       EventKind.STATUS, f"{who} ended", body=det if show_text else None)
         elif act == Action.AUTO_START:
             target = det.split()[-1] if det.split() else None
             add_event(key, ref, e["ts"], tid, e["actor"], target, node_of(e["actor"]) or Node.SYSTEM, node_of(target),
                       EventKind.STATUS, f"{e['actor']}: {det}" if det else f"{e['actor']}: {act}")
         elif act == Action.PR_CREATE:
-            add_event(key, ref, e["ts"], tid, e["actor"], None, Node.CODERS, Node.GATE, EventKind.STATUS, f"{who}: PR opened")
+            add_event(key, ref, e["ts"], tid, e["actor"], None, D.work, fd.N.PR if engine else Node.GATE, EventKind.STATUS,
+                      f"{who}: PR opened")
         elif act == Action.MERGED:
-            add_event(key, ref, e["ts"], tid, e["actor"], None, Node.JUDGE, Node.MAIN, EventKind.STATUS, f"{who} merged {det}".strip())
+            frm_node = Node.JUDGE if D.judge_edge else fd.N.ENGINE
+            add_event(key, ref, e["ts"], tid, e["actor"], None, frm_node, D.merged, EventKind.STATUS, f"{who} merged {det}".strip(),
+                      edge=(D.merge_edge, 1) if engine and D.merge_edge and not D.judge_edge else None)
         elif act in VERDICT_ACTIONS:   # the verdict row is the arrow; this log line is a marker on the timeline only
             role_node = Node.QA if act in (Action.QA_PASS, Action.QA_FAIL) else Node.REVIEWER
             add_event(key, ref, e["ts"], tid, e["actor"], None, role_node, None, EventKind.STATUS, f"{who}: {act} {det}".strip(),
                       Severity.BAD if act in (Action.REVIEWER_FAIL, Action.QA_FAIL) else Severity.OK, edge=(None, None))
         else:   # task done
             add_event(key, ref, e["ts"], tid, e["actor"], None, node_of(e["actor"]), None, EventKind.STATUS, f"{who} {act}")
+    if engine:   # HM-70: the engine's incidents, with their reason, on the engine's lane (or the child reviewer's)
+        for i in run.incidents:
+            lane = INCIDENT_CHILD_LANE if i["child_key"] else fd.N.ENGINE
+            add_event(f"{Key.INCIDENT}{i['id']}", {"table": Table.INCIDENTS, "rowid": i["id"]}, i["created"], run.task_id,
+                      i["actor"], None, lane, None, EventKind.STATUS, f"{i['kind']} {i['cause']}: {i['summary']}",
+                      INCIDENT_SEVERITY.get(i["kind"], Severity.WARN), edge=(None, None), lane=lane,
+                      incident={"kind": i["kind"], "cause": i["cause"], "summary": i["summary"], "child": i["child_key"],
+                                "round": i["round"]})
     events.sort(key=lambda ev: (q._epoch(ev["ts"]) or 0, ev["ref"]["table"], ev["ref"]["rowid"]))
 
     # ── edges ──
@@ -406,7 +446,7 @@ def build(con, scope, oid, now=None, show_text=False):
                                                  "AND entity_id IN ({in})", task_ids, Action.MERGED)}
     judged = any(q._judge_reached(con, t) for t in task_ids)
     cg_waits = []
-    for t in tasks:   # PR opened (or in_review) → the first reviewer/QA start after it, per review round
+    for t in (tasks if D.review_edge else ()):   # PR opened (or in_review) → the first reviewer/QA start after it, per round
         rounds = [q._epoch(r["ts"]) for r in con.execute(
             "SELECT ts FROM events WHERE entity='task' AND entity_id=? AND action='update' AND (detail LIKE ? OR detail LIKE ?) "
             "ORDER BY id", (t["id"], f"%status={IN_REVIEW}%", "%pr=%"))]
@@ -424,14 +464,15 @@ def build(con, scope, oid, now=None, show_text=False):
                 cg_waits.append({"task_id": t["id"], "wait_s": round(now_e - r0), "start_s": off(r0), "end_s": off(now_e),
                                  "open": True, "note": None})
             # else: a verdict came without a recorded session start: this round's wait is unknown
-    per_edge = {Edge.PC: pc_waits, Edge.CG: cg_waits}
+    per_edge = {D.spec_edge: pc_waits, **({D.review_edge: cg_waits} if D.review_edge else {})}
     waits = {eid: max((w["wait_s"] for w in ws if w["wait_s"] is not None), default=None) for eid, ws in per_edge.items()}
     edges = []
-    for eid, frm, to, label in EDGES:
+    for eid, frm, to, label, *more in D.edges:
         on = [ev for ev in events if ev["edge"] == eid]
         wait = waits.get(eid)
-        pending = (eid == Edge.GJ and not judged) or (eid == Edge.JM and not merged)
-        edges.append({"id": eid, "from": frm, "to": list(to), "label": label, "wait_s": wait,
+        planned = bool(more and more[0])
+        pending = planned or (eid == D.judge_edge and not judged) or (eid == D.merge_edge and not merged)
+        edges.append({"id": eid, "from": frm, "to": list(to), "label": label, "wait_s": wait, "planned": planned,
                       "severity": _sev_max(_wait_sev(wait), *(ev["severity"] for ev in on if ev["kind"] != EventKind.STATUS)),
                       "pending": pending, "counts": {"forward": sum(ev["dir"] == 1 for ev in on),
                                                      "back": sum(ev["dir"] == -1 for ev in on)},
@@ -439,10 +480,10 @@ def build(con, scope, oid, now=None, show_text=False):
 
     # ── nodes ──
     # HM-17: a review box fails while its own role's last verdict on some unmerged task rejects
-    last_by = {g: {} for g in GATE_NODES}
+    last_by = {g: {} for g in D.gate_nodes}
     for v in verdicts:
-        if v["role"] in GATE_ROLES:
-            last_by[VERDICT_NODE[v["role"]]][v["task_id"]] = v["verdict"]
+        if v["role"] in GATE_ROLES and D.verdict_node.get(v["role"]) in last_by:
+            last_by[D.verdict_node[v["role"]]][v["task_id"]] = v["verdict"]
     open_fail = {g: any(vd in REJECT_VERDICTS and tid not in merged for tid, vd in last.items()) for g, last in last_by.items()}
     terminal = head["status"] in (TERMINAL_GOAL if scope == Scope.GOAL else TERMINAL_TASK)
     # the Waiting box (HM-13): the scope is open, it had agents, and none of them runs now
@@ -480,13 +521,20 @@ def build(con, scope, oid, now=None, show_text=False):
             {"start_s": off(g0), "end_s": off(g1), "kind": SpanKind.WAIT,
              "note": wait_note if waiting and i == len(gaps) - 1 else None} for i, (g0, g1) in enumerate(gaps)]})
     nodes = []
-    for nid, label in NODES:
-        mine = [a for a in agents if _LANE_NODE.get(_ROLE_LANE.get(a["role"])) == nid]
+    pr_opened = any(ev["edge"] is None and ev["from_node"] == D.work and ev["to_node"] == fd.N.PR for ev in events) or \
+        any(t["pr_url"] for t in tasks)
+    for nid, label, _col, _row, planned, def_note in D.nodes:
+        mine = [] if planned else [a for a in agents if D.lane_node.get(agent_lane(a["name"], a["role"])) == nid]
         works = [work_of(a["name"]) for a in mine]
         live = any(a["status"] in LIVE_STATUSES for a in mine)
-        if nid == Node.WAIT:
+        engine_state = _engine_state(nid, run, mine, live, bool(merged), pr_opened) if engine else None
+        if planned:
+            state = State.IDLE
+        elif engine_state:
+            state = engine_state
+        elif nid == Node.WAIT:
             state = State.LIVE if waiting else State.IDLE
-        elif nid == Node.MAIN:
+        elif nid in (Node.MAIN, D.merged):
             state = State.DONE if merged else State.PENDING
         elif live:
             state = State.LIVE
@@ -498,10 +546,10 @@ def build(con, scope, oid, now=None, show_text=False):
             state = State.PENDING
         else:
             state = State.IDLE
-        nodes.append({"id": nid, "label": label, "state": state,
+        nodes.append({"id": nid, "label": label, "state": state, "planned": planned,
                       "work_s": wait_total if nid == Node.WAIT else sum(works) if mine and all(w is not None for w in works) else None,
                       "current_s": wait_s if nid == Node.WAIT else None,   # the wait going on now; work_s is every wait so far
-                      "note": wait_note if nid == Node.WAIT else None,
+                      "note": wait_note if nid == Node.WAIT else _node_note(nid, run, def_note) if engine else None,
                       "links": wait_links if nid == Node.WAIT else [],
                       "tokens": None, "cost": None, "cost_note": COST_NOTE,
                       "agents": [{"name": a["name"], "status": a["status"], "work_s": w, "cost": None, "task_id": a["task_id"],
@@ -517,5 +565,54 @@ def build(con, scope, oid, now=None, show_text=False):
             "totals": {"agent_s": sum(known) if known else None,
                        "tokens": None, "cost": None, "cost_as_of": None, "cost_note": COST_NOTE, "unattributed_cost": None,
                        "rejections": rejections, "messages": n_msgs},
-            "nodes": nodes, "groups": [{"id": gid, "label": label, "nodes": list(members)} for gid, label, members in GROUPS],
-            "edges": edges, "lanes": lanes, "events": events, "findings": [], "phases": []}
+            "nodes": nodes, "groups": [{"id": gid, "label": label, "nodes": list(members)} for gid, label, members in D.groups],
+            "edges": edges, "lanes": lanes, "events": events, "findings": [], "phases": [],
+            "workflow": _workflow(run, run_note), "children": [
+                {"key": c["key"], "story": c["story"], "state": c["state"], "rounds": c["rounds"]} for c in run.children]
+            if engine else [],
+            "layout": fd.GEOMETRY[(run.kind, run.ci)] if engine else None}
+
+
+def _workflow(run, note):
+    """HM-50: which workflow the scope ran under, for the Flow header."""
+    if run is None:
+        return {"kind": fd.Kind.OLD, "origin": None, "ci": None, "ci_text": None, "state": None, "story": None,
+                "note": note}
+    return {"kind": run.kind, "origin": run.origin, "ci": run.ci, "ci_text": fd.CI_TEXT[run.ci], "state": run.state,
+            "story": run.story, "note": note}
+
+
+def _node_note(nid, run, def_note):
+    """An engine box's one line: the run's state on the engine, the children's progress on the reviewer."""
+    if nid == fd.N.ENGINE:
+        return f"run {run.state}"
+    if nid == fd.N.CHILD_REVIEW and run.children:
+        done = sum(c["state"] in CHILD_REVIEWED for c in run.children)
+        rounds = sum(c["rounds"] for c in run.children)
+        return f"{done} of {len(run.children)} reviewed, {rounds} fix round{'s' if rounds != 1 else ''}"
+    return def_note
+
+
+def _engine_state(nid, run, mine, live, merged, pr_opened):
+    """The state of an engine box that its agents alone do not tell; None: decide from the agents as for the old boxes."""
+    kids = [c["state"] for c in run.children]
+    if nid == fd.N.ENGINE:
+        return (State.LIVE if run.state in RUN_LIVE else State.FAIL if run.state in RUN_FAILED
+                else State.DONE if run.state == "done" else State.IDLE)
+    if nid == fd.N.BUILDER and not live and any(k in CHILD_BLOCKED for k in kids):
+        return State.FAIL
+    if nid == fd.N.CHILD_REVIEW and not live:
+        return State.FAIL if any(k in CHILD_FIXING for k in kids) else (State.DONE if mine else State.PENDING)
+    if nid == fd.N.PR:
+        return State.DONE if pr_opened else State.PENDING
+    if nid == fd.N.TESTS:
+        if run.state == "gating":
+            return State.LIVE
+        if merged or run.state in RUN_PAST_GATING:
+            return State.DONE
+        return State.FAIL if any(i["cause"] == TESTS_FAILED for i in run.incidents) else State.PENDING
+    if nid == fd.N.LAND:
+        return State.DONE if merged else State.LIVE if run.state == "landing" else State.PENDING
+    if nid == fd.N.DONE:
+        return State.DONE if run.state == "done" else State.PENDING
+    return None

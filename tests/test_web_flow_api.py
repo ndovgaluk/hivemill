@@ -18,7 +18,7 @@ from test_web_queries import ts  # noqa: E402
 from web import flow, server  # noqa: E402
 
 CONTRACT_KEYS = {"scope", "id", "title", "status", "start", "now", "elapsed_s", "show_text", "totals", "nodes", "edges", "lanes",
-                 "events", "findings", "phases", "groups"}
+                 "events", "findings", "phases", "groups", "workflow", "children", "layout"}
 EVENT_KEYS = {"id", "key", "ref", "task_id", "goal_id", "t_s", "ts", "lane", "row", "edge", "dir", "from", "to", "from_node",
               "to_node", "kind", "severity", "title", "is_instruction", "body_html", "tokens", "cost", "cost_note", "cost_exact"}
 SECRETS = ("BODY-SECRET", "FIX-BODY", "SUMMARY-SECRET", "SPEC-SECRET", "ACC-SECRET")

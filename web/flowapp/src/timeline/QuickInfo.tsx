@@ -10,6 +10,7 @@ import { clock } from "./time";
 import styles from "./timeline.module.css";
 
 export const QUICK_INFO = "Quick info";
+export const INCIDENT = "Engine incident";
 const ESCAPE = "Escape";
 
 /** The step type per event kind and what it stands for (HM-28: named by type, not by the mark's shape). */
@@ -76,6 +77,13 @@ export function QuickInfo({ data, ev, at, onClose }: {
         <button type="button" className={styles.quickClose} aria-label="Close" onClick={onClose}>×</button>
       </div>
       <p className={styles.quickTitle}>{ev.title}</p>
+      {ev.incident ? (
+        // HM-70: an incident of the workflow engine: its kind, structured cause and the full reason
+        <p className={styles.quickMeta} data-testid="flow-quick-incident">
+          {INCIDENT}: {ev.incident.kind} · {ev.incident.cause}{ev.incident.child ? ` · ${ev.incident.child}` : ""}
+          {ev.incident.round !== null ? ` · round ${ev.incident.round}` : ""}<br />{ev.incident.summary}
+        </p>
+      ) : null}
       <p className={styles.quickMeta}>{who(data, ev.from, ev.from_node)} → {who(data, ev.to, ev.to_node)}</p>
       <p className={styles.quickMeta}>{clock(ev.ts)} · {fmtTokens(tokenSum(ev.tokens))} tok · {fmtCost(ev.cost)}</p>
       <p className={styles.quickWhat}><b>{k.name}</b>: {k.means} {colourInfo(ev)}</p>

@@ -22,7 +22,8 @@ export interface BoxData extends Record<string, unknown> {
 export const MSGS_ONLY = "msgs only";
 export const NO_SESSIONS = "no sessions";
 export const WAITED_TOTAL = "waited in total";
-export const NOT_WAITING = "agents running";   // the Waiting box while somebody works, or the goal is closed
+export const NOT_WAITING = "agents running";
+export const PLANNED = "planned, not built";   // HM-50: a step the engine does not run yet   // the Waiting box while somebody works, or the goal is closed
 export const MESSAGE_ONLY = new Set<string>([NodeId.Boss, NodeId.Director, NodeId.System]);
 
 const NEW_TAB = "_blank";
@@ -50,23 +51,29 @@ export function BoxNode({ data }: NodeProps<BoxNodeType>) {
   const time = fmtDuration(node.work_s);
   const cost = fmtCost(node.cost);
   let [main, second] = sel.lens === Lens.Cost ? [cost, time] : [time, cost];
-  if (node.id === NodeId.Wait) {
+  if (node.planned) {
+    [main, second] = ["", node.note ?? PLANNED];
+  } else if (node.id === NodeId.Wait) {
     // the Waiting box: how long nobody has been running, and what for; no cost, whatever the lens
     // waiting now: this wait and what for; otherwise every wait so far
     [main, second] = node.state === NodeState.Live ? [fmtDuration(node.current_s ?? node.work_s), node.note ?? ""]
       : node.work_s ? [time, WAITED_TOTAL] : ["", NOT_WAITING];
   } else if (!node.agents.length && node.work_s === null && node.cost === null) {
     // no sessions at all: say why the figures are empty instead of "unknown unknown"
-    [main, second] = ["", MESSAGE_ONLY.has(node.id) ? MSGS_ONLY : node.id === NodeId.Main ? "" : NO_SESSIONS];
+    // an engine box with no sessions says what it is (run state, children reviewed, "no tests") instead
+    [main, second] = ["", node.note ?? (MESSAGE_ONLY.has(node.id) ? MSGS_ONLY : node.id === NodeId.Main ? "" : NO_SESSIONS)];
   }
   return (
     <div className={styles.box} data-testid={`flow-node-${node.id}`} data-dim={dim} data-top={top} data-pulse={pulse}
-         data-state={node.state}>
+         data-state={node.state} data-planned={node.planned ?? false}>
       <button
         type="button"
-        className={`${styles.boxButton} ${selected ? styles.selected : ""} ${selected && motion ? styles.glowBox : pulse && motion ? styles.animated : node.state === NodeState.Live && !selected && !pulse ? styles.liveBox : ""}`}
+        className={`${styles.boxButton} ${node.planned ? styles.planned : ""} ${selected ? styles.selected : ""} ${selected && motion ? styles.glowBox : pulse && motion ? styles.animated : node.state === NodeState.Live && !selected && !pulse ? styles.liveBox : ""}`}
         aria-label={node.label}
-        title={node.id === NodeId.Wait && node.work_s !== null ? `${node.note ? `${node.note} · ` : ""}${time} ${WAITED_TOTAL}` : undefined}
+        title={node.id === NodeId.Wait && node.work_s !== null ? `${node.note ? `${node.note} · ` : ""}${time} ${WAITED_TOTAL}`
+          : node.note ?? undefined}
+        // a planned step has no sessions to show: it cannot be selected
+        disabled={node.planned}
         aria-pressed={selected}
         onClick={() => sel.select({ kind: SelectionKind.Node, id: node.id })}
       >
