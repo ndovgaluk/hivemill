@@ -199,6 +199,7 @@ DEFAULT_CONFIG = {
     "state_dump_interval_s": "3600",  # tick-path export commits state/ (factory.sql, events.jsonl) to refs/heads/state at most this often; 0 = every tick (T-0902)
     "state_push": "0",           # push the state branch (full DB dump incl. messages) to origin; off by default because the dump is private
     "mech_merge": "off",         # off | shadow | on: the tick's mechanical merger for tier T0-T2 PRs (G-022 #4); shadow records mech-would-merge/block and merges nothing
+    "hand_merge_accept": "off",  # off | on: the hourly drift check closes an in_review task whose PR GitHub reports MERGED (verified, recorded as a hand merge outside the gate; HM-65, docs/hand-merge.md)
     "mech_merge_retry_s": "600", # the merger looks at a PR head it already blocked on (or shadow-recorded) at most this often
     "workflow_engine": "off",    # off | on: build go/cmd/workflow and let the tick launch `factory-workflow tick` (DVDG-565, docs/workflow-engine.md)
     "workflow_reviewer_session": "fresh",  # fresh | keep: story runs review each child with a new reviewer, or resume one per story
@@ -3064,6 +3065,10 @@ def _config_value_rules(key, value):
         a.value = a.value.strip()
         if not (a.value.isascii() and a.value.isdigit() and int(a.value) <= 50):
             die(f"worktree_pool_max must be an integer 0..50, not {a.value!r}", 2)
+    if a.key == "hand_merge_accept":
+        a.value = a.value.strip().lower()
+        if a.value not in HAND_MERGE_VALUES:
+            die(f"hand_merge_accept must be off or on, not {a.value!r}", 2)
     if a.key == "terminal_backend":
         v = a.value.strip().lower()
         if v not in ("auto", "herdr", "hc"):
@@ -4069,11 +4074,7 @@ def cmd_task(a):
             sha, err = verify_merged_externally(t["pr_url"])
             if err:
                 die(err, 3)
-            con.execute("UPDATE tasks SET status='done', updated=? WHERE id=?", (now(), a.id))
-            event(con, "task", a.id, "update",
-                  f"status=done merged-externally by={actor()} pr={t['pr_url']} merge_sha={sha} — {a.note}")
-            con.commit()
-            run_after_merge(con, t)
+            close_merged_externally(con, t, sha, actor(), a.note)
             print(f"{a.id} closed: {t['pr_url']} is MERGED on GitHub as {sha[:8]} (merged externally)")
             return
         if role == "coder" and a.status == "in_review":
@@ -4696,6 +4697,43 @@ def verify_merged_externally(pr_url):
     if cmp.get("status") not in ("identical", "behind"):
         return None, f"merge commit {sha[:8]} is not on {pr.get('baseRefName')} (compare says {cmp.get('status')}); nothing is closed"
     return sha, None
+
+
+HAND_MERGE_VALUES = ("off", "on")
+HAND_MERGE_BY = "github-hand-merge"          # the `by=` of a merge the drift check accepted (HM-65)
+HAND_MERGE_NOTE = "merged on GitHub outside the factory gate"
+MERGED_EXTERNALLY = "merged-externally"      # in both events of such a close; the dashboard keys its wording on it
+HAND_MERGE_UNVERIFIED = "hand-merge-unverified"
+
+
+def close_merged_externally(con, t, sha, by, note):
+    """Close task `t`, whose PR GitHub reports merged outside the factory's gate (verify_merged_externally passed): done,
+    the `update` event as before, and a `merged` event in record_merged's `@sha8 by=...` form, so the workflow engine's
+    finish (go/internal/workflow/merge.go mergeSHA) sees the merge (HM-65); then the post-merge hook."""
+    con.execute("UPDATE tasks SET status='done', updated=? WHERE id=?", (now(), t["id"]))
+    event(con, "task", t["id"], "update", f"status=done {MERGED_EXTERNALLY} by={by} pr={t['pr_url']} merge_sha={sha} — {note}")
+    event(con, "task", t["id"], "merged", f"@{sha[:8]} by={by}: {MERGED_EXTERNALLY} — {note}")
+    con.commit()
+    run_after_merge(con, t)
+
+
+def accept_hand_merges(con, states):
+    """HM-65, drift hook: with hand_merge_accept on, every in_review task whose PR the drift check just saw MERGED is
+    verified (GitHub merged it and its merge commit is on the base) and closed as a hand merge. A merge that cannot be
+    verified closes nothing: one `hand-merge-unverified` event per task and reason, and its D2 drift line stays."""
+    if cfg(con, "hand_merge_accept") != "on":
+        return
+    for t in con.execute("SELECT * FROM tasks WHERE status='in_review' AND pr_url IS NOT NULL ORDER BY id").fetchall():
+        if states.get(t["pr_url"]) != "MERGED":
+            continue
+        sha, err = verify_merged_externally(t["pr_url"])
+        if sha:
+            close_merged_externally(con, t, sha, HAND_MERGE_BY, HAND_MERGE_NOTE)
+            continue
+        seen = con.execute("SELECT 1 FROM events WHERE entity='task' AND entity_id=? AND action=? AND detail=?",
+                           (t["id"], HAND_MERGE_UNVERIFIED, err)).fetchone()
+        if not seen:
+            event(con, "task", t["id"], HAND_MERGE_UNVERIFIED, err)
 
 
 ACCEPTANCE_WALK = "## Acceptance walk"
@@ -9053,6 +9091,7 @@ def tick_drift(con):
         if blob != json.dumps(drift_pr_states(con), sort_keys=True):
             con.execute("INSERT INTO config(key,value) VALUES('drift_pr_states',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
                         (blob,))
+        accept_hand_merges(con, states)   # before the D2 lines: a closed task is no longer in_review
         for g in goals:
             items = drift_items(con, g, now_dt, states)
             if not items:

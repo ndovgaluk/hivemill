@@ -81,6 +81,11 @@ GROUPS = (
                 "On: the tick merges tier T0 to T2 PRs through the judge's own gate, with no judge agent. Shadow: "
                 "runs the gate and records what it would do. Needs risk tiers. Details: docs/mech-merge.md.",
                 Kind.CHOICE, None, None, OFF_SHADOW_ON),
+        Setting("hand_merge_accept", "Accept pull requests merged by hand on GitHub",
+                "On: the hourly drift check closes a task in review whose pull request GitHub reports merged, after "
+                "checking that the merge commit is on the base branch. Such a merge bypasses the factory's merge gate "
+                "(no judge, no gate checks) and is recorded as a hand merge on the task page. Details: "
+                "docs/hand-merge.md.", Kind.CHOICE, None, None, OFF_ON),
         Setting("workflow_engine", "Workflow engine",
                 "On: the factory builds the workflow engine and the tick runs it, for stories started with factory wf. "
                 "Off: nothing of it runs. Details: docs/workflow-engine.md.", Kind.CHOICE, None, None, OFF_ON),

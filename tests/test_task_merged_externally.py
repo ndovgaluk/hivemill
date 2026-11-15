@@ -128,11 +128,81 @@ class MergedExternallyTests(FactoryTestCase):
         self.assertEqual(p.returncode, 2, p.stderr)
         self.assertIn("not a coder task with a PR", p.stderr)
 
+    def test_manual_close_also_records_a_merged_event_the_engine_reads(self):  # HM-65
+        self.merged()
+        self.assertEqual(self.close().returncode, 0)
+        ev = self.env.sql("SELECT actor, detail FROM events WHERE entity='task' AND entity_id='T-0001' AND action='merged'")
+        self.assertEqual(len(ev), 1)
+        self.assertEqual(ev[0]["detail"], f"@{SHA[:8]} by=zz-test-director: merged-externally — owner merged by hand")
+
     def test_needs_reason(self):
         self.merged()
         p = self.env.run("task", "update", "T-0001", "--status", "done", "--merged-externally", agent="zz-test-director")
         self.assertEqual(p.returncode, 2, p.stderr)
         self.assertEqual(self.status(), "in_progress")
+
+
+class HandMergeAcceptTests(MergedExternallyTests.__base__):
+    """HM-65: the hourly drift check closes an in_review task whose PR GitHub reports MERGED, only with
+    hand_merge_accept on and only when verify_merged_externally passes; the tick runs as a subprocess."""
+
+    def setUp(self):
+        super().setUp()
+        e = self.env
+        e.seed_goal()
+        e.seed_task("T-0001", status="in_review")
+        e.seed_agent("zz-test-director", "director")
+
+    merged = MergedExternallyTests.merged
+
+    def tick(self):
+        self.env.sql("DELETE FROM throttle WHERE key='drift'")   # the drift check runs at most hourly
+        self.ok("tick")
+
+    def task(self):
+        return self.env.sql("SELECT status FROM tasks WHERE id='T-0001'")[0]["status"]
+
+    def events(self, action):
+        return [r["detail"] for r in self.env.sql(
+            "SELECT detail FROM events WHERE entity='task' AND entity_id='T-0001' AND action=? ORDER BY id", (action,))]
+
+    def d2(self):
+        return [r["body"] for r in self.env.sql("SELECT body FROM messages WHERE subject LIKE 'drift G-001%'")
+                if "D2 T-0001" in r["body"]]
+
+    def test_off_by_default_leaves_the_task_in_review_with_its_drift_line(self):
+        self.merged()
+        self.tick()
+        self.assertEqual(self.task(), "in_review")
+        self.assertEqual(self.events("merged"), [])
+        self.assertTrue(self.d2(), "the D2 drift line stays when the switch is off")
+
+    def test_on_and_verified_closes_the_task_as_a_hand_merge(self):
+        self.ok("config", "hand_merge_accept", "on")
+        self.merged()
+        self.tick()
+        self.assertEqual(self.task(), "done")
+        self.assertEqual(self.events("merged"),
+                         [f"@{SHA[:8]} by=github-hand-merge: merged-externally — merged on GitHub outside the factory gate"])
+        self.assertTrue(any("merged-externally by=github-hand-merge" in d for d in self.events("update")))
+        self.assertEqual(self.d2(), [])
+
+    def test_on_but_merge_commit_not_on_base_closes_nothing_and_records_why_once(self):
+        self.ok("config", "hand_merge_accept", "on")
+        self.merged(status="diverged")
+        self.tick()
+        self.tick()
+        self.assertEqual(self.task(), "in_review")
+        self.assertEqual(self.events("merged"), [])
+        unverified = self.events("hand-merge-unverified")
+        self.assertEqual(len(unverified), 1)
+        self.assertIn("not on main", unverified[0])
+
+    def test_switch_takes_only_off_or_on(self):
+        p = self.env.run("config", "hand_merge_accept", "yes")
+        self.assertEqual(p.returncode, 2, p.stderr)
+        self.assertIn("hand_merge_accept must be off or on", p.stderr)
+        self.assertEqual(self.env.run("config", "hand_merge_accept", "on").returncode, 0)
 
 
 if __name__ == "__main__":

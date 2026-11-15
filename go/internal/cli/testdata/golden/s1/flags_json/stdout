@@ -343,6 +343,16 @@
   "current": "python"
  },
  {
+  "key": "hand_merge_accept",
+  "kind": "flag",
+  "default": "off",
+  "summary": "off | on: the hourly drift check closes an in_review task whose PR GitHub reports MERGED, verified and recorded as a hand merge outside the factory gate",
+  "goal": "",
+  "doc": "docs/hand-merge.md",
+  "state": "off",
+  "current": "off"
+ },
+ {
   "key": "herdr_socket",
   "kind": "setting",
   "default": "~/.config/herdr/herdr.sock",

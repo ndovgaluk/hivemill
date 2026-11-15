@@ -261,3 +261,27 @@ func TestFirstDonePicksTheLowestPositionDoneStatus(t *testing.T) {
 		}
 	}
 }
+
+// HM-65: a pull request merged by hand on GitHub and accepted by the factory (factory task update --merged-externally,
+// or the drift check with hand_merge_accept on) leaves a merged event in this form; the run finishes on it.
+func TestAHandMergeEventFinishesTheRun(t *testing.T) {
+	r := built(t)
+	r.tick(t) // merging
+	r.fdb.Exec("UPDATE tasks SET status='done', pr_url='https://example.com/pr/7' WHERE id='T-0001'")
+	r.fdb.Exec("INSERT INTO events(ts, actor, entity, entity_id, action, detail) VALUES('x', 'tick', 'task', 'T-0001', 'merged', " +
+		"'@0abc1234 by=github-hand-merge: merged-externally — merged on GitHub outside the factory gate')")
+	r.tick(t)
+	if r.state(t) != string(RunDone) {
+		t.Fatalf("state %s, want done", r.state(t))
+	}
+	st, _ := OpenState(StatePath(r.home))
+	defer st.Close()
+	var n int
+	st.QueryRow("SELECT count(*) FROM incidents WHERE cause=?", string(CauseClosedWithoutMerge)).Scan(&n)
+	if n != 0 {
+		t.Fatalf("%d closed-without-merge incidents for a hand merge", n)
+	}
+	if !strings.HasSuffix(strings.Join(r.tracker.links, " "), "id-ST-1|"+fakeMergeSHA) {
+		t.Fatalf("links %v", r.tracker.links)
+	}
+}

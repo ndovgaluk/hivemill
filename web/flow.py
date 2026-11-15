@@ -173,6 +173,9 @@ CHILD_FIXING = ("fixing", "stuck")
 CHILD_BLOCKED = ("blocked",)
 CHILD_REVIEWED = ("reviewed", "reported", "done")
 TESTS_FAILED = "local-tests-failed"
+MERGED_EXTERNALLY = "merged-externally"   # bin/factory_cli.py MERGED_EXTERNALLY: a merge accepted after a hand merge (HM-65)
+HAND_MERGE_TITLE = "merged by hand on GitHub (outside the factory gate)"
+HAND_MERGE_NOTE = "by hand on GitHub"
 
 
 def _sev_max(*sevs):
@@ -403,6 +406,7 @@ def build(con, scope, oid, now=None, show_text=False):
                        f"AND action IN ({acts}) AND entity_id IN ({{in}})", task_ids, *dpre, *TIMELINE_ACTIONS)
     erows += q._in(con, f"SELECT id, ts, actor, entity, entity_id, action, {detail} detail FROM events WHERE entity='agent' "
                         f"AND action IN ({acts}) AND entity_id IN ({{in}})", names, *dpre, *TIMELINE_ACTIONS)
+    hand_merged = set()   # tasks closed as a hand merge on GitHub (HM-65)
     for e in sorted(erows, key=lambda r: r["id"]):
         key, ref = f"{Key.EVENT}{e['id']}", {"table": Table.EVENTS, "rowid": e["id"]}
         act, who, det = e["action"], e["entity_id"], e["detail"] or ""
@@ -421,6 +425,13 @@ def build(con, scope, oid, now=None, show_text=False):
         elif act == Action.PR_CREATE:
             add_event(key, ref, e["ts"], tid, e["actor"], None, D.work, fd.N.PR if engine else Node.GATE, EventKind.STATUS,
                       f"{who}: PR opened")
+        elif act == Action.MERGED and MERGED_EXTERNALLY in det:
+            # HM-65: merged by hand on GitHub and accepted afterwards: no judge or engine merged it, so no merge arrow;
+            # an amber mark on the merged box's lane that says so
+            sha = det.split()[0] if det.startswith("@") else ""
+            hand_merged.add(tid)
+            add_event(key, ref, e["ts"], tid, e["actor"], None, D.merged, None, EventKind.STATUS,
+                      f"{who} {HAND_MERGE_TITLE} {sha}".strip(), Severity.WARN, edge=(None, None))
         elif act == Action.MERGED:
             frm_node = Node.JUDGE if D.judge_edge else fd.N.ENGINE
             add_event(key, ref, e["ts"], tid, e["actor"], None, frm_node, D.merged, EventKind.STATUS, f"{who} merged {det}".strip(),
@@ -549,7 +560,8 @@ def build(con, scope, oid, now=None, show_text=False):
         nodes.append({"id": nid, "label": label, "state": state, "planned": planned,
                       "work_s": wait_total if nid == Node.WAIT else sum(works) if mine and all(w is not None for w in works) else None,
                       "current_s": wait_s if nid == Node.WAIT else None,   # the wait going on now; work_s is every wait so far
-                      "note": wait_note if nid == Node.WAIT else _node_note(nid, run, def_note) if engine else None,
+                      "note": wait_note if nid == Node.WAIT else HAND_MERGE_NOTE if nid == D.merged and hand_merged
+                      else _node_note(nid, run, def_note) if engine else None,
                       "links": wait_links if nid == Node.WAIT else [],
                       "tokens": None, "cost": None, "cost_note": COST_NOTE,
                       "agents": [{"name": a["name"], "status": a["status"], "work_s": w, "cost": None, "task_id": a["task_id"],

@@ -104,6 +104,22 @@ class TestAttempts(DetailCase):
         for label in ("Total time", "Rejections", "Attempts"):
             self.assertIn(label, page)
 
+    def test_hand_merge_and_unverified_hand_merge_are_named(self):  # HM-65
+        x = self.con.execute
+        x("INSERT INTO goals VALUES('G-72','p1','Hand','intent','1. a','active',2,'owner',NULL,?,?)", (ts(8, 0), ts(9, 0)))
+        x(T_INS, ("T-72", "G-72", None, "by hand", "s", "a", "coder", "done", "coder-t-72", "https://github.com/o/r/pull/72",
+                  1, ts(9, 0), ts(11, 0)))
+        x(E_INS, (ts(10, 0), "tick", "task", "T-72", "hand-merge-unverified",
+                  "merge commit 1a2b3c4d is not on main (compare says diverged); nothing is closed"))
+        x(E_INS, (ts(11, 0), "tick", "task", "T-72", "merged",
+                  "@1a2b3c4d by=github-hand-merge: merged-externally — merged on GitHub outside the factory gate"))
+        self.con.commit()
+        page = self.page("/task/T-72")
+        self.assertIn("Merged by hand on GitHub (outside the factory gate)", page)
+        self.assertIn("Hand merge could not be verified", page)
+        self.assertIn("1a2b3c4d", page)
+        self.assertIn('badge badge--warn">Merged by hand on GitHub', page)   # merged, but past the gate: not green
+
     def test_task_without_events_has_an_empty_cycle(self):
         self.con.execute(T_INS, ("T-71", "G-1", None, "fresh", "s", "a", "coder", "todo", None, None, 0, ts(9, 0), ts(9, 0)))
         page = self.page("/task/T-71")

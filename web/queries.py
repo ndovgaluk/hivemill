@@ -21,7 +21,8 @@ SUBJECT_MAX = 120
 DETAIL_MAX = 300
 ENDED_AGENT = ("done", "exited", "lost", "stopped")
 PR_CYCLE_ACTIONS = ("add", "update", "note", "reopen", "follow-up", "judge-reject",
-                    "judge-blocked", "merge-failed", "merged", "merge-post-error")
+                    "judge-blocked", "merge-failed", "merged", "merge-post-error",
+                    "hand-merge-unverified")   # HM-65: a PR merged by hand on GitHub that could not be verified
 _TAG_RE = re.compile(r"\[(SC\d+(?:\s*,\s*SC\d+)*)\]")
 _NUM_RE = re.compile(r"^\s*(\d+)[.)]\s*(.*)$")
 _CHUNK = 400

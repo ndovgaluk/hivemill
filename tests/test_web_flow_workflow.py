@@ -63,6 +63,19 @@ class TestOldWorkflow(WorkflowCase):
         self.assertEqual((d["children"], d["layout"]), ([], None))
         self.assertFalse(os.path.exists(path))
 
+    def test_a_hand_merge_is_an_amber_mark_not_a_judge_merge(self):  # HM-65
+        self.seed()
+        self.con.execute(E_INS, (ts(11, 30), "tick", "task", "T-80", "merged",
+                                 "@1a2b3c4d by=github-hand-merge: merged-externally — merged on GitHub outside the factory gate"))
+        self.con.commit()
+        d = self.build(flow.Scope.TASK, "T-80")
+        mark = [e for e in d["events"] if e["title"].endswith("merged by hand on GitHub (outside the factory gate) @1a2b3c4d")]
+        self.assertEqual(len(mark), 1)
+        self.assertEqual((mark[0]["edge"], mark[0]["severity"], mark[0]["from_node"]), (None, flow.Severity.WARN, flow.Node.MAIN))
+        self.assertEqual(self.by_id(d["nodes"])[flow.Node.MAIN]["note"], "by hand on GitHub")
+        self.assertEqual(self.by_id(d["edges"])[flow.Edge.JM]["counts"]["forward"],
+                         sum(e["edge"] == flow.Edge.JM for e in d["events"]))   # the hand merge adds nothing to judge → merged
+
     def test_a_goal_that_is_not_a_run_is_old(self):
         self.seed()
         self.seed_run()

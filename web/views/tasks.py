@@ -18,6 +18,7 @@ TITLE = "Tasks"
 STATUSES = ("todo", "in_progress", "in_review", "blocked", "done", "cancelled")
 REASON_MAX = 120
 _SHA_RE = re.compile(r"^@?([0-9a-f]{7,40})$")
+_LEAD_SHA_RE = re.compile(r"^@([0-9a-f]{7,40})\b")
 _STATUS_RE = re.compile(r"^status=([a-z_]+)")
 _PR_SET_RE = re.compile(r"\bpr=|\bstatus=in_review\b")
 _TASK_RE = re.compile(r"\bT-\d+\b")
@@ -254,6 +255,11 @@ from web.flow import Scope as FlowScope                      # noqa: E402
 from web.html import crumbs, glyph, status                  # noqa: E402
 from web.views.goals import DetailView, not_found           # noqa: E402
 
+HAND_MERGED = "Merged by hand on GitHub (outside the factory gate)"   # HM-65: a `merged` event of a hand merge
+HAND_MERGE_UNVERIFIED = "Hand merge could not be verified"
+MERGED_EXTERNALLY = "merged-externally"   # bin/factory_cli.py MERGED_EXTERNALLY, in the detail of both events
+
+
 def _step_text(i):
     """Label plus the few structured details that are safe to show (never free-text notes)."""
     lab, det = i["label"], i.get("detail") or ""
@@ -268,6 +274,11 @@ def _step_text(i):
         return (f"status -> {m.group(1)}" if m else "update"), None
     if lab == "judge-blocked":
         return "judge blocked: " + queries._t(det, REASON_MAX), None
+    if lab == "hand-merge-unverified":   # the verifier's own message (urls, sha, GitHub state), never owner text
+        return f"{HAND_MERGE_UNVERIFIED}: " + queries._t(det, REASON_MAX), None
+    if lab == "merged" and MERGED_EXTERNALLY in det:
+        m = _LEAD_SHA_RE.match(det)   # "@1a2b3c4d by=github-hand-merge: merged-externally — …"
+        return HAND_MERGED, (m.group(1)[:8] if m else None)
     if lab in ("merged", "merge-failed", "merge-post-error"):
         m = _SHA_RE.match(det)
         return lab.replace("merge-post-error", "merge post-step error"), (m.group(1)[:8] if m else None)
@@ -281,8 +292,8 @@ def _fkind(i):
     if i["kind"] == "verdict":
         return "ok" if lab.split(" ", 1)[1] in _VERDICT_OK else "bad"
     if lab == "merged":
-        return "ok"
-    if lab in ("judge-reject", "judge-blocked", "merge-failed", "reopen"):
+        return "warn" if MERGED_EXTERNALLY in (i.get("detail") or "") else "ok"   # merged, but past the gate
+    if lab in ("judge-reject", "judge-blocked", "merge-failed", "reopen", "hand-merge-unverified"):
         return "bad"
     return "muted"
 
@@ -396,7 +407,9 @@ def _verb(s):
         what, role = lab.split(" ", 1)
         return f"{_role(role)} {'started' if what == 'spawn' else 'finished'}"
     if lab == "merged":
-        return "Merged"
+        return HAND_MERGED if text == HAND_MERGED else "Merged"
+    if lab == "hand-merge-unverified":
+        return HAND_MERGE_UNVERIFIED
     return text[:1].upper() + text[1:]
 
 

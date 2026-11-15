@@ -54,6 +54,7 @@ var DefaultConfig = []ConfigDefault{
 	{"state_dump_interval_s", "3600"},
 	{"state_push", "0"},
 	{"mech_merge", "off"},
+	{"hand_merge_accept", "off"},
 	{"mech_merge_retry_s", "600"},
 	{"workflow_engine", "off"},
 	{"workflow_reviewer_session", "fresh"},

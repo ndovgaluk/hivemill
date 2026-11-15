@@ -27,8 +27,9 @@ from web.views import settings  # noqa: E402
 KEY = "worktree_reuse"
 MECH_MERGE = "mech_merge"
 REVIEW_AUTOSPAWN = "review_autospawn"
+HAND_MERGE = "hand_merge_accept"   # HM-65
 AUTOMATION_KEYS = ("lead_parking", "lead_less_dispatch", REVIEW_AUTOSPAWN, "coder_ci_handoff", "prcheck_required",
-                   "risk_tiers", MECH_MERGE, "workflow_engine", "workflow_reviewer_session", "workflow_ci")
+                   "risk_tiers", MECH_MERGE, HAND_MERGE, "workflow_engine", "workflow_reviewer_session", "workflow_ci")
 TOKEN_RE = re.compile(rb'name="token" value="([^"]+)"')
 
 
@@ -141,6 +142,14 @@ class SettingsPage(ServerCase):
         row = text[text.index(f'id="set-{MECH_MERGE}"'):]
         row = row[:row.index("</form>")]
         self.assertEqual(re.findall(r'<option[^>]*value="([^"]*)"', row), [v for v, _ in settings.OFF_SHADOW_ON])
+
+    def test_hand_merge_row_says_it_bypasses_the_gate_and_offers_off_and_on(self):  # HM-65
+        text = self.get("/settings")[2].decode()
+        row = text[text.index(f'id="set-{HAND_MERGE}"'):]
+        row = row[:row.index("</form>")]
+        self.assertIn("Accept pull requests merged by hand on GitHub", text)
+        self.assertIn("bypasses the factory&#x27;s merge gate", text.replace("&#39;", "&#x27;"))
+        self.assertEqual(re.findall(r'<option[^>]*value="([^"]*)"', row), [v for v, _ in settings.OFF_ON])
 
     def test_lan_page_shows_commands_for_the_automation_group(self):
         self.httpd.app.loopback = False

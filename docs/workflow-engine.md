@@ -300,7 +300,7 @@ The engine never starts a builder fresh by itself: a fresh one would not know th
 
 The same holds while the run is `merging` and the builder has not opened the pull request yet. A `merging` run with no
 pull request, no agent and no change for 2 hours is reported to the boss once (`stale-merging`); a run whose task is
-`done` without a `merged` event (closed by hand) is reported once (`closed-without-merge`) and waits.
+`done` without a `merged` event (closed by hand) is reported once (`closed-without-merge`) and waits. A pull request merged by hand on GitHub is accepted with `factory task update T --status done --merged-externally --reason ...`, or by the hourly drift check when `hand_merge_accept` is on; both record the `merged` event the run waits for (`docs/hand-merge.md`).
 
 `factory wf resume --goal G [--fresh-builder]` (boss or owner) restarts a `blocked` run: `stuck` children go back to
 `fixing` with their rounds reset, `blocked` children to `todo`, and the counters of early ends start over.
