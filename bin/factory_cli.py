@@ -15342,21 +15342,31 @@ def _boss_wake_qualifying(con, recipient, wake_after_s, clock_ts, other_after_s=
     return out
 
 
+_RULE_LINE_RE = re.compile(r"^[─━═]{8,}$")   # the rule line Claude Code draws above and below its input box
+
+
 def has_unsent_input(text):
-    """True when the bottom region holds anything a human may be typing: any prompt line (`> text`, `❯ text`, also
-    inside a box border) other than the option lines of the classified dialog itself, or an empty prompt line that
-    is followed by more text (a draft whose first line is empty). Fail closed: a "> 2. merge it" draft is input."""
+    """True when the bottom region holds anything a human may be typing. Only the LAST prompt line (`> text`,
+    `❯ text`, also inside a box border) that is not an option line of the classified dialog counts: earlier prompt
+    lines are sent messages in the transcript (HM-72, M682). It is a draft when it holds text, or when it is empty and
+    more text follows it inside the input box, i.e. before the rule line that closes the box (a draft whose first
+    line is empty); the status bar under that rule is not input. With no closing rule (another layout) any later
+    text counts. Fail closed: a "> 2. merge it" draft is input."""
     block = _dialog_block(text)
     exempt = block[2] if block else set()
     lines = _bottom_lines(text)
-    for i, l in enumerate(lines):
-        m = _PROMPT_RE.match(l)
-        if not m or i in exempt:
-            continue
-        if m.group(1):
-            return True
-        if any(j not in exempt and j > i for j in range(i + 1, len(lines))) and \
-                (not block or i < block[1]):
+    prompts = [i for i, l in enumerate(lines) if i not in exempt and _PROMPT_RE.match(l)]
+    if not prompts:
+        return False
+    i = prompts[-1]
+    if _PROMPT_RE.match(lines[i]).group(1):
+        return True
+    if block and i >= block[1]:
+        return False
+    for j in range(i + 1, len(lines)):
+        if _RULE_LINE_RE.match(lines[j]):
+            return False
+        if j not in exempt:
             return True
     return False
 

@@ -125,6 +125,45 @@ class BossWakeTests(BossWakeBase):
         self.tick()
         self.assertEqual(self.prompts(), [])
 
+    # HM-72: the boss pane of M682 (2026-11-14), shape checked on the live pane on 2026-11-15, words made neutral: an
+    # old sent prompt in the transcript, then Claude Code's input box (rule lines around an empty ❯) and its status bar
+    RULE = "─" * 60
+    M682_PANE = ("❯ read inbox\n"
+                 "● Read the inbox: one escalation, answered.\n"
+                 "  Nothing else is waiting on you.\n"
+                 "✻ Brewed for 34s · done 6:33 PM\n"
+                 f"{RULE}\n{{box}}{RULE}\n"
+                 "  Opus 5.5 · medium | factory | main | ctx 8% | $1.67\n"
+                 "  ⏵⏵ auto mode on (shift+tab to cycle)\n")
+
+    def boss_pane(self, box="❯\n"):
+        self.env.set_herdr(read_text={BOSS: self.M682_PANE.format(box=box)})
+
+    def test_m682_pane_old_sent_prompt_and_empty_input_box_wakes(self):  # HM-72
+        self.mail("escalation", 16)
+        self.boss_pane()
+        self.tick()
+        self.assertEqual(len(self.prompts()), 1)
+        self.assertEqual(len(self.wake_events()), 1)
+
+    def test_draft_in_the_input_box_blocks_wake(self):  # HM-72: the last prompt line holds typed text
+        self.mail("escalation", 16)
+        self.boss_pane("❯ owner draft here\n")
+        self.tick()
+        self.assertEqual(self.prompts(), [])
+
+    def test_draft_whose_first_line_is_empty_blocks_wake(self):  # HM-72: text inside the box under an empty ❯
+        self.mail("escalation", 16)
+        self.boss_pane("❯\n  second line of an owner draft\n")
+        self.tick()
+        self.assertEqual(self.prompts(), [])
+
+    def test_empty_prompt_without_a_closing_rule_still_blocks_wake(self):  # HM-72: another layout fails closed
+        self.mail("escalation", 16)
+        self.env.set_herdr(read_text={BOSS: "● done\n❯\n  something under the prompt\n"})
+        self.tick()
+        self.assertEqual(self.prompts(), [])
+
     def test_busy_pane_no_wake(self):
         self.mail("escalation", 16)
         self.herdr_idle(status="blocked")
