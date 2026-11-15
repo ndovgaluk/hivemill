@@ -32,7 +32,7 @@ from web.views import ROUTES  # noqa: E402
 
 XSS = "<script>alert(1)</script>"
 PAGES = ["/", "/goals", "/goal/G-1", "/tasks", "/task/T-1", "/agents", "/resources", "/throughput", "/quality",
-         "/changelog", "/tokens", "/settings"]
+         "/changelog", "/tokens", "/settings", "/halt"]   # HM-44: the Urgent stop page
 APIS = ["/api/home.json", "/api/goals.json", "/api/tasks.json", "/api/agents.json", "/api/resources.json",
         "/api/throughput.json", "/api/quality.json", "/api/changelog.json", "/api/tokens.json", "/api/settings.json"]
 ALL_ROUTES = PAGES + APIS + ["/healthz", "/static/app.css", "/static/favicon.svg"]
@@ -425,7 +425,7 @@ class TestVocabularyAndStubs(ServerCase):
     def test_registry_complete(self):
         self.assertEqual(set(ROUTES), {"/", "/goals", "/goal/<id>", "/tasks", "/task/<id>", "/agents", "/resources",
                                        "/throughput", "/quality", "/changelog", "/tokens",
-                                       "/settings"})
+                                       "/settings", "/halt"})
         for v in ROUTES.values():
             self.assertTrue(callable(v.data) and callable(v.render))
 

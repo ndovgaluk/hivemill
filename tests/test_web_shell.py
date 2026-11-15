@@ -39,7 +39,7 @@ def nav_item(text, href):
 
 class TestEveryRouteRenders(ServerCase):
     def test_twelve_routes_have_the_shell(self):
-        self.assertEqual(len(PAGES), 12)   # HM-1 added /settings
+        self.assertEqual(len(PAGES), 13)   # HM-1 added /settings, HM-44 /halt
         for path in PAGES:
             with self.subTest(path):
                 code, _, body = self.get(path)
@@ -428,13 +428,45 @@ class TestSidebarTasks(ShellDb):
             self.task(f"T-D{n}", "done", updated=f"2026-10-0{day}T10:00:00+00:00")
         self.assertEqual(self.ids(self.tasks_li(), "navsub navsub--done"), ["T-D2", "T-D5", "T-D3"])
 
+    def test_five_in_work_updated_last_and_a_link_to_the_rest(self):  # HM-73
+        for n in range(1, 8):   # T-1 updated first … T-7 last
+            self.task(f"T-{n}", "in_progress", updated=f"2026-10-0{n}T10:00:00+00:00")
+        self.task("T-90", "done")
+        li = self.tasks_li()
+        self.assertEqual(self.ids(li, "navsub"), ["T-7", "T-6", "T-5", "T-4", "T-3"])
+        self.assertIn('<a href="/tasks" class="more-link">2 more in work</a>', li)
+        self.assertEqual(self.ids(li, "navsub navsub--done"), ["T-90"])   # the "+" still holds only finished tasks
+        self.assertIn('aria-label="Show the last 3 finished tasks"', li)
+
+    def test_the_current_task_stays_in_the_list_when_further_down(self):  # HM-73
+        for n in range(1, 8):
+            self.task(f"T-{n}", "in_progress", updated=f"2026-10-0{n}T10:00:00+00:00")
+        nav = main_nav(self.get("/task/T-1"))
+        li = nav.split('href="/tasks"', 1)[1].split('href="/agents', 1)[0]
+        self.assertEqual(self.ids(li, "navsub"), ["T-7", "T-6", "T-5", "T-4", "T-3", "T-1"])
+        self.assertIn(">1 more in work</a>", li)
+
+    def test_the_task_panel_folds_behind_a_chevron_closed_by_default(self):  # HM-73
+        self.task("T-1", "in_progress")
+        li = self.tasks_li()
+        self.assertRegex(li, r'</span></a><details class="navdone navpanel" data-key="nav-tasks-panel"[^>]*><summary '
+                             r'class="navplus navchev" aria-label="Show tasks" aria-expanded="false">')
+        self.assertNotRegex(li, r'<details class="navdone navpanel"[^>]* open>')
+        self.assertIn('href="/task/T-1"', li.split('class="navplus navchev"', 1)[1])   # the tasks sit inside the fold
+
+    def test_no_link_with_five_or_fewer_in_work(self):  # HM-73
+        for n in range(1, 6):
+            self.task(f"T-{n}", "in_progress")
+        self.assertNotIn("more in work", self.tasks_li())
+
     def test_open_when_nothing_in_work_and_no_plus_without_done(self):
         self.task("T-4", "done")
         self.assertRegex(self.tasks_li(), r'<details class="navdone" data-key="nav-done-tasks"[^>]* open>')
         self.con.execute("DELETE FROM tasks")
         self.task("T-1", "in_progress")
         li = self.tasks_li()
-        self.assertNotIn("navdone", li)
+        self.assertNotIn("navsub--done", li)   # no "+" list; the panel's own fold (HM-73) is a navdone too
+        self.assertNotIn('data-key="nav-done-tasks"', li)
         self.assertEqual(self.ids(li, "navsub"), ["T-1"])
 
     def test_org_filter_and_current_task(self):
@@ -504,6 +536,16 @@ class TestSidebarGoals(ShellDb):
         nav = main_nav(self.get("/tasks"))
         self.assertEqual(re.findall(r'href="/goal/(G-\d+)"', self.sub(nav, "navsub navsub--done")), ["G-014", "G-013", "G-012"])
         self.assertRegex(nav, r'<details class="navdone" data-key="nav-done-goals"[^>]* open>')
+
+    def test_five_active_goals_and_a_more_row(self):  # HM-73
+        for n in range(1, 8):
+            self.goal(f"G-00{n}", "active")
+        nav = main_nav(self.get("/tasks"))
+        active = self.sub(nav)
+        self.assertEqual(re.findall(r'href="/goal/(G-\d+)"', active), ["G-001", "G-002", "G-003", "G-004", "G-005"])
+        self.assertIn('<li class="navgoal"><a href="/goals" class="more-link">2 more active</a></li>', active)
+        nav = main_nav(self.get("/goal/G-007"))   # the current goal stays in the list
+        self.assertEqual(re.findall(r'href="/goal/(G-\d+)"', self.sub(nav)), ["G-001", "G-002", "G-003", "G-004", "G-005", "G-007"])
 
     def test_only_active_goals_with_the_goals_page_indicators(self):
         from web import charts

@@ -3,7 +3,7 @@
 View tasks replace only their own module; this registry is fixed. `/goal/<id>` and `/task/<id>` map to the
 `detail` attribute of the goals/tasks modules.
 """
-from web.views import agents, changelog, goals, home, quality, resources, settings, tasks, throughput, tokens
+from web.views import agents, changelog, goals, halt, home, quality, resources, settings, tasks, throughput, tokens
 
 ROUTES = {
     "/": home,
@@ -18,4 +18,5 @@ ROUTES = {
     "/changelog": changelog,
     "/tokens": tokens,
     "/settings": settings,   # HM-1
+    "/halt": halt,           # HM-44: Urgent stop and Start again
 }

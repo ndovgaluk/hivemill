@@ -28,6 +28,7 @@ from web import queries
 from web.html import page
 from web.tokens import TokenIndex
 from web.views import ROUTES
+from web.views import halt as halt_view  # HM-44
 from web.views import settings as settings_view
 
 STATIC = Path(__file__).resolve().parent / "static"
@@ -159,7 +160,8 @@ class Handler(BaseHTTPRequestHandler):
 
     def _dispatch(self):
         app = self.server.app
-        settings_post = self.command == "POST" and urlsplit(self.path).path in (SETTINGS_PATH, settings_view.GATE_PATH)
+        settings_post = self.command == "POST" and urlsplit(self.path).path in (SETTINGS_PATH, settings_view.GATE_PATH,
+                                                                                 halt_view.HALT_PATH, halt_view.START_PATH)
         if self.command not in ("GET", "HEAD") and not settings_post:
             return self._error(405, "method not allowed", {"Allow": "GET, HEAD"})
         if not app.sem.acquire(blocking=False):
@@ -175,6 +177,8 @@ class Handler(BaseHTTPRequestHandler):
                 self.query = {}
             self._path = parts.path
             if settings_post:
+                if parts.path in (halt_view.HALT_PATH, halt_view.START_PATH):
+                    return self._halt_post(app, host, parts.path)
                 return self._gate_post(app, host) if parts.path == settings_view.GATE_PATH else self._settings_post(app, host)
             self._route(parts.path)
         except (BrokenPipeError, ConnectionResetError, TimeoutError):
@@ -214,7 +218,7 @@ class Handler(BaseHTTPRequestHandler):
                 view, params, active = ROUTES.get(f"/{m.group(1)}/<id>"), {"id": m.group(2)}, f"/{m.group(1)}s"
         if view is None:
             return self._error(404, "not found")
-        self._view(view, active, params)
+        self._view(view, getattr(view, "NAV", active), params)   # a page outside the menu names the item it sits under
 
     def _view(self, view, active, params, as_json=False):
         app = self.server.app
@@ -229,7 +233,8 @@ class Handler(BaseHTTPRequestHandler):
             else:
                 shell = {**queries.shell_status(con, app.usage_fn() if app.usage_fn else None, app.defaults,
                                                  mem=app.mem_fn() if app.mem_fn else None, now=ctx.now,
-                                                 org=queries.org_param(ctx.query)), "now": ctx.now}
+                                                 org=queries.org_param(ctx.query)), "now": ctx.now,
+                         "loopback": app.loopback}   # HM-44: the Urgent stop button only on a loopback bind
                 # DVDG-561: the goal and task pages refresh their flow data themselves; no 60 s full-page reload there
                 body = page(getattr(view, "TITLE", active), view.render(ctx, data), active, shell=shell,
                             refresh=getattr(view, "REFRESH", True),
@@ -296,6 +301,21 @@ class Handler(BaseHTTPRequestHandler):
         target = (f"{SETTINGS_PATH}?{settings_view.Q_GATE_SAVED}={quote(project)}" if ok else
                   f"{SETTINGS_PATH}?{settings_view.Q_GATE_ERROR}={quote(project)}&{settings_view.Q_MSG}={quote(msg)}")
         self._send(303, "", "text/plain; charset=utf-8", {"Location": f"{target}#gate-{quote(project)}"})
+
+    def _halt_post(self, app, host, path):
+        """HM-44: Urgent stop (`factory halt --reason`) or Start again (`factory start`), behind the same guard as the
+        Settings forms (loopback bind, same Origin, form token). The CLI checks the owner role and does the work; its
+        last line comes back on the page."""
+        form = self._checked_form(app, host)
+        if form is None:
+            return None
+        reason = form.get("reason", "").strip()[:halt_view.REASON_MAX] or halt_view.DEFAULT_REASON
+        args = ["halt", "--reason", reason] if path == halt_view.HALT_PATH else ["start", "--reason", "Start again (dashboard)"]
+        ok, msg = halt_view.run(app.factory_home, args, env=app.config_env)
+        q = halt_view.Q_DONE if ok else halt_view.Q_MSG
+        what = "halt" if path == halt_view.HALT_PATH else "start"
+        self._send(303, "", "text/plain; charset=utf-8",
+                   {"Location": f"{halt_view.HALT_PATH}?{halt_view.Q_WHAT}={what}&{q}={quote(msg or what)}"})
 
     def _settings_post(self, app, host):
         """HM-1: change one curated setting. Every check refuses on its own status; nothing is written unless all pass,

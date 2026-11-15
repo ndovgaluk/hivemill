@@ -86,6 +86,7 @@ var DefaultConfig = []ConfigDefault{
 	{"gate_ignore_pending_ci", "0"},
 	{"herdr_socket", "~/.config/herdr/herdr.sock"},
 	{"terminal_backend", "auto"},
+	{"factory_halt", "0"},
 	{"stop_timeout_s", "300"},
 	{"sandbox_roles", ""},
 	{"worker_gh_roles", ""},

@@ -49,6 +49,8 @@ CLASSES = frozenset({
     # HM-1 settings page (web/views/settings.py)
     "settings", "set-intro", "set-row", "set-text", "set-name", "set-key", "set-help", "set-ctl", "set-now", "set-value",
     "set-default", "set-form", "set-input", "set-btn", "set-cmd", "set-note", "set-note--ok", "set-note--bad",
+    "halt-btn", "halt-banner", "halt-page", "halt-state", "halt-go",   # HM-44 Urgent stop
+    "navpanel", "navchev",   # HM-73 the folding task panel
     "flow-full", "flow-root",   # DVDG-561: the React flow debugger's full-width section and mount element
     # HM-36 goals in the sidebar
     "navgoals", "navsub", "navsub--done", "navgoal", "navgoal-l1", "navgoal-l2", "navgoal-t", "navdone", "navplus", "nav-on", "nav-off",
@@ -102,6 +104,10 @@ _SVG12 = {  # status glyphs: shape alone tells the states apart (todo/cancelled,
 }
 _SVG12["active"] = _SVG12["in_progress"]
 _SVG12["stopped"] = _SVG12["exited"]
+# HM-44: the Urgent stop control: a stop octagon with a bar, light on dark red (owner, 2026-11-15: small, one icon)
+_HALT_ICON = ('<svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true" fill="none" stroke="currentColor" '
+              'stroke-width="1.6" stroke-linejoin="round"><path d="M5.2 1.5h5.6l3.7 3.7v5.6l-3.7 3.7H5.2l-3.7-3.7V5.2Z"/>'
+              '<path d="M5.5 8h5" stroke-linecap="round"/></svg>')
 _HEALTH_GLYPH = {"success": "done", "warning": "queued", "danger": "lost", "neutral": "exited"}
 
 _ATTR_RE = re.compile(r"^[a-z-]+$")
@@ -427,9 +433,20 @@ def shell_header(title, shell, crumb_trail=None, org_nav=None, path=None):
                     title="Cursor usage today",
                 )
             )
+        halt = shell.get("halt")
+        if shell.get("loopback") and not halt:   # HM-44: a link to the confirm page, never a one-click form
+            cluster.append(el("a", Safe(_HALT_ICON), el("span", "Urgent stop", class_="sr-only"), href="/halt",
+                              title="Urgent stop", aria_label="Urgent stop", class_="halt-btn"))
     shell_cls = "shellbar shellbar--task" if path and str(path).startswith("/task/") else "shellbar"
-    return el("header", el("div", crumb_trail, el("h1", title), class_="titlebar"), el("div", cluster, class_="cluster"),
-              class_=shell_cls)
+    header = el("header", el("div", crumb_trail, el("h1", title), class_="titlebar"), el("div", cluster, class_="cluster"),
+                class_=shell_cls)
+    halt = (shell or {}).get("halt")
+    if not halt:
+        return header
+    closing = f" · {halt['closing']} agent(s) still closing" if halt["closing"] else ""
+    banner = el("div", el("strong", f"Factory halted since {halt['since'] or 'an unknown time'}: {halt['reason']}"),
+                closing, " · ", el("a", "Start again", href="/halt"), class_="halt-banner", role="alert")
+    return el("div", header, banner)
 
 
 def _topbar(shell, org=None):
@@ -495,13 +512,35 @@ def _nav_lists(active, done, entry, current, key, show, hide):
     return parts
 
 
+NAV_SHOWN = 5   # HM-73: goals or tasks listed under Goals / Tasks before a "N more" row
+
+
+def _capped(items, current, entry, more_label, href):
+    """HM-73: the first NAV_SHOWN items (and the current one when it is further down) as rows, plus a "N more …" row
+    linking to `href` when there are more: (rows, shown items)."""
+    shown = items[:NAV_SHOWN] + [x for x in items[NAV_SHOWN:] if x["id"] == current]
+    rows = [entry(x) for x in shown]
+    if len(items) > len(shown):
+        rows.append(el("li", el("a", f"{len(items) - len(shown)} {more_label}", href=href, class_="more-link"), class_="navgoal"))
+    return rows, shown
+
+
+def _with_rows(parts, rows, shown):
+    """Put `rows` (a capped list with its "N more" row) in place of _nav_lists' first list."""
+    if not rows:
+        return parts
+    return [el("ul", rows, class_="navsub")] + (parts[1:] if shown else parts)
+
+
 def _nav_goals(shell, org, current):
-    """The sidebar's goal lists under "Goals" (HM-36): active goals, and under the "+" the last done goals followed by
-    the last blocked or cancelled ones (HM-48)."""
+    """The sidebar's goal lists under "Goals" (HM-36): the first NAV_SHOWN active goals and a "N more active" row
+    (HM-73), and under the "+" the last done goals followed by the last blocked or cancelled ones (HM-48)."""
     s = shell or {}
-    return _nav_lists(s.get("goals") or [], (s.get("goals_done") or []) + (s.get("goals_stopped") or []),
-                      lambda g: _nav_goal(g, org, current), current, _NAV_DONE_KEY,
-                      "Show done and stopped goals", "Hide done and stopped goals")
+    entry = lambda g: _nav_goal(g, org, current)   # noqa: E731
+    rows, shown = _capped(s.get("goals") or [], current, entry, "more active", _with_org(NAV_GOALS_PATH, org))
+    parts = _nav_lists(shown, (s.get("goals_done") or []) + (s.get("goals_stopped") or []), entry, current, _NAV_DONE_KEY,
+                       "Show done and stopped goals", "Hide done and stopped goals")
+    return _with_rows(parts, rows, shown)
 
 
 NAV_TASKS_PATH = "/tasks"
@@ -521,11 +560,29 @@ def _nav_task(t, org, current):
               class_="navgoal is-current" if t["id"] == current else "navgoal")
 
 
+_NAV_TASKS_PANEL_KEY = "nav-tasks-panel"
+_PANEL_SHOW, _PANEL_HIDE = "Show tasks", "Hide tasks"
+_CHEV = '<svg class="{}" viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.6" ' \
+        'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="{}"/></svg>'
+_CHEV_DOWN, _CHEV_UP = _CHEV.format("nav-off", "M4 6l4 4 4-4"), _CHEV.format("nav-on", "M4 10l4-4 4 4")
+
+
 def _nav_tasks(shell, org, current):
-    """The sidebar's task lists under "Tasks" (HM-43): tasks in work, and the last finished tasks under the "+"."""
-    return _nav_lists((shell or {}).get("tasks") or [], (shell or {}).get("tasks_done") or [],
-                      lambda t: _nav_task(t, org, current), current, _NAV_DONE_TASKS_KEY,
-                      "Show the last 3 finished tasks", "Hide finished tasks")
+    """The sidebar's task lists under "Tasks" (HM-43): the NAV_SHOWN tasks in work updated last (HM-73), the current
+    task too when it is further down, a "N more in work" link to the Tasks page for the others, and the last finished
+    tasks under the "+" (unchanged)."""
+    work, done = (shell or {}).get("tasks") or [], (shell or {}).get("tasks_done") or []
+    entry = lambda t: _nav_task(t, org, current)   # noqa: E731
+    rows, shown = _capped(work, current, entry, "more in work", _with_org(NAV_TASKS_PATH, org))
+    parts = _with_rows(_nav_lists(shown, done, entry, current, _NAV_DONE_TASKS_KEY,
+                                  "Show the last 3 finished tasks", "Hide finished tasks"), rows, shown)
+    if not parts:
+        return parts
+    # HM-73: the whole panel folds behind a chevron after the title, closed by default; theme.js keeps the choice
+    chev = el("summary", Safe(_CHEV_DOWN), Safe(_CHEV_UP), class_="navplus navchev", aria_label=_PANEL_SHOW,
+              aria_expanded="false")
+    return [el("details", chev, *parts, class_="navdone navpanel", data_key=_NAV_TASKS_PANEL_KEY, data_show=_PANEL_SHOW,
+               data_hide=_PANEL_HIDE)]
 
 
 def _shell_navs(active, shell, org=None, current_goal=None, current_task=None):

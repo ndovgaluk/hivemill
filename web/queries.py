@@ -1070,17 +1070,36 @@ _NAV_TASK_DONE = "done"
 
 
 def nav_tasks(con, org=None):
-    """(in work, done) tasks for the sidebar (HM-43), each {id, title, status, goal_id}: tasks in progress or in review
-    by id, and the NAV_DONE_TASKS done tasks updated last, newest first. `org` keeps only tasks whose goal is in that
+    """(in work, done) tasks for the sidebar (HM-43), each {id, title, status, goal_id}: every task in progress or in review,
+    updated last first (ties by id; the sidebar shows the first few, web/html.py NAV_SHOWN, HM-73), and the NAV_DONE_TASKS done
+    tasks updated last, newest first. `org` keeps only tasks whose goal is in that
     org. Fixed number of queries."""
     gorgs = goal_orgs(con)
     keep = lambda r: org is None or org_of_goal(gorgs, r["goal_id"]) == org   # noqa: E731
     pick = lambda r: {"id": r["id"], "title": r["title"], "status": r["status"], "goal_id": r["goal_id"]}   # noqa: E731
     q = "SELECT id, title, status, goal_id, updated FROM tasks WHERE status IN ({}) ORDER BY {}"
-    work = [pick(r) for r in con.execute(q.format(",".join("?" * len(NAV_TASKS_IN_WORK)), "id"), NAV_TASKS_IN_WORK) if keep(r)]
+    work = [r for r in con.execute(q.format(",".join("?" * len(NAV_TASKS_IN_WORK)), "id"), NAV_TASKS_IN_WORK) if keep(r)]
+    work.sort(key=lambda r: parse_ts(r["updated"]) or _TS_FLOOR, reverse=True)   # stable: ties keep the id order
     done = [r for r in con.execute(q.format("?", "id"), (_NAV_TASK_DONE,)) if keep(r)]
     done.sort(key=lambda r: (parse_ts(r["updated"]) or _TS_FLOOR, r["id"]), reverse=True)
-    return work, [pick(r) for r in done[:NAV_DONE_TASKS]]
+    return [pick(r) for r in work], [pick(r) for r in done[:NAV_DONE_TASKS]]
+
+
+HALT_KEY = "factory_halt"   # bin/factory_cli.py HALT_KEY (HM-44)
+HALT_CLOSING = ("queued", "starting", "live")
+
+
+def halt_status(con):
+    """HM-44: None while the factory runs; while the owner's halt is on, {since, reason, closing}: when and why
+    (the latest `halt` event) and how many agents are not stopped yet."""
+    r = con.execute("SELECT value FROM config WHERE key=?", (HALT_KEY,)).fetchone()
+    if not r or r[0] != "1":
+        return None
+    ev = con.execute("SELECT ts, detail FROM events WHERE entity='factory' AND action='halt' ORDER BY id DESC LIMIT 1").fetchone()
+    closing = con.execute(f"SELECT COUNT(*) FROM agents WHERE status IN ({','.join('?' * len(HALT_CLOSING))})",
+                          HALT_CLOSING).fetchone()[0]
+    return {"since": ev["ts"] if ev else None, "reason": (ev["detail"] if ev else None) or "no reason recorded",
+            "closing": closing}
 
 
 def shell_status(con, usage, defaults, mem=None, now=None, org=None):
@@ -1103,7 +1122,9 @@ def shell_status(con, usage, defaults, mem=None, now=None, org=None):
     p5 = usage.get("five_hour") if fresh else None
     p7 = usage.get("seven_day") if fresh else None
     ok = fresh and not stale
-    if mem is not None and mem < _cfg_num(cfg, defaults, "min_mem_available_mb", 1024):
+    if cfg.get(HALT_KEY) == "1":   # HM-44: the owner's halt outranks everything: never "All normal" while halted
+        health = {"tone": "danger", "text": "Factory halted"}
+    elif mem is not None and mem < _cfg_num(cfg, defaults, "min_mem_available_mb", 1024):
         health = {"tone": "danger", "text": "Memory low"}
     elif ok and ((p5 is not None and p5 >= cap5) or (p7 is not None and p7 >= cap7)):
         health = {"tone": "danger", "text": "Usage cap reached"}
@@ -1124,7 +1145,7 @@ def shell_status(con, usage, defaults, mem=None, now=None, org=None):
     work_tasks, done_tasks = nav_tasks(con, org)
     return {"needs": needs, "agents_attention": queued + n.get("blocked", 0), "health": health,
             "cursor": cursor_limits.display(con, t), "goals": active_goals, "goals_done": done_goals, "goals_stopped": stopped_goals,
-            "tasks": work_tasks, "tasks_done": done_tasks}
+            "tasks": work_tasks, "tasks_done": done_tasks, "halt": halt_status(con)}
 
 
 # ───────────────────────────── overview (G-019 B4) ─────────────────────────────

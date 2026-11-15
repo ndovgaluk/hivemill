@@ -50,7 +50,7 @@
     }
     if (!d.open && get("localStorage", store) === "1") d.open = true;
     sync();
-    d.addEventListener("toggle", function () { put("localStorage", store, d.open ? "1" : "0"); sync(); });
+    d.addEventListener("toggle", function () { put("localStorage", store, d.open ? "1" : "0"); sync(); if (!d.open) [].forEach.call(d.querySelectorAll("details.navdone[open]"), function (x) { x.open = false; }); });   // HM-73: folding the Tasks panel closes its "+"
   });
   window.addEventListener("pagehide", function () {
     put("sessionStorage", KEEP, JSON.stringify({ path: here, at: Date.now(), y: window.scrollY,

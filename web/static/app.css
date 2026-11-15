@@ -236,8 +236,9 @@ summary { cursor: pointer; min-height: var(--tap); display: list-item; list-styl
 .nav-item .count { margin-left: auto; }
 /* HM-36: goals under "Goals": active ones, and the last done ones behind the "+" at the right end of the item */
 .navgoals { position: relative; }
-.navgoals > .nav-item { padding-right: 40px; }
-.navgroup .navsub { margin: 2px 0 6px 22px; }
+.navgoals > .nav-item { padding-right: 40px; height: 30px; }   /* HM-73: Goals and Tasks carry lists: a tighter title row */
+.navgroup .navsub { margin: 0 0 2px 22px; }
+.navgoals .navplus { height: 30px; min-height: 30px; }   /* the + and the chevron centre on the 30 px title row */
 .navgroup .navsub--done { margin-top: 0; }   /* HM-36: the done list sits right under the "+" */
 .navgoal a { display: block; padding: 4px 8px; border-radius: var(--r-sm); color: var(--text-2); font: 400 12px/16px var(--font); }
 .navgoal a:hover { background: var(--fill); text-decoration: none; }
@@ -253,8 +254,11 @@ summary { cursor: pointer; min-height: var(--tap); display: list-item; list-styl
            border-radius: var(--r-sm); color: var(--text-3); font: 500 15px/1 var(--font); cursor: pointer; list-style: none; }
 .navplus::-webkit-details-marker { display: none; }   /* the + spans the whole 36 px row (global summary min-height = --tap), so it centres on Goals/Tasks */
 .navplus:hover { background: var(--fill); color: var(--text-1); }
-.navdone .nav-on, .navdone[open] .nav-off { display: none; }
-.navdone[open] .nav-on { display: inline; }
+.navdone > summary .nav-on, .navdone[open] > summary .nav-off { display: none; }   /* each disclosure shows its own state */
+.navdone[open] > summary .nav-on { display: inline; }
+/* HM-73: the chevron right after the "Tasks" title that folds the whole task panel (closed by default) */
+.navchev { right: auto; left: 84px; }
+.navpanel { display: block; }
 .themebox { padding: 12px 8px 16px; margin-top: auto; }
 .seg { display: inline-flex; border: 1px solid var(--border); border-radius: var(--r-sm); padding: 2px; gap: 2px; background: var(--surface-0); }
 .seg button { display: inline-flex; align-items: center; justify-content: center; gap: 4px; flex: 1; min-height: 28px; padding: 0 4px;
@@ -368,6 +372,7 @@ summary { cursor: pointer; min-height: var(--tap); display: list-item; list-styl
 }
 @media (min-width: 1440px) {
   .page, .shellbar { max-width: 1240px; margin-left: auto; margin-right: auto; width: 100%; }
+  .halt-banner { max-width: calc(1240px - 2 * var(--gutter)); margin-left: auto; margin-right: auto; }
 }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { transition: none !important; animation: none !important; scroll-behavior: auto !important; }
@@ -782,4 +787,14 @@ details.flow-note[open] > summary { color: var(--text-1); }
 .set-note { margin: 0; font-size: 12px; }
 .set-note--ok { color: var(--success-fg); }
 .set-note--bad { color: var(--danger-fg); }
+/* HM-44 Urgent stop */
+.halt-btn { display: inline-flex; align-items: center; justify-content: center; padding: 6px;
+  color: var(--danger-fg); background: var(--danger-bg); border: 1px solid var(--danger-solid); border-radius: var(--r-sm); }
+.halt-btn:hover { background: var(--danger-solid); color: var(--surface-1); }
+.halt-banner { box-sizing: border-box; margin: 0 var(--gutter) 12px; padding: 8px 12px; color: var(--danger-fg); background: var(--danger-bg);
+  border: 1px solid var(--danger-solid); border-radius: var(--r-sm); }
+.halt-page { max-width: 760px; }
+.halt-state { color: var(--danger-fg); font-weight: 600; }
+.halt-go { background: var(--danger-solid); border-color: var(--danger-solid); }
+.halt-page .set-btn { padding-left: 20px; padding-right: 20px; }   /* Stop everything now, Start again */
 @media (max-width: 700px) { .set-row { grid-template-columns: 1fr; } .set-ctl { justify-items: start; } }

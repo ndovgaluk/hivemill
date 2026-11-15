@@ -231,6 +231,7 @@ DEFAULT_CONFIG = {
     "gate_ignore_pending_ci": "0",  # HM-52: 1 = in local mode nothing waits for GitHub checks; the local run is the test run
     "herdr_socket": "~/.config/herdr/herdr.sock",  # herdr() pins this for every herdr call, whatever the caller env holds
     "terminal_backend": "auto",  # auto | herdr | hc — which CLI talks to the agent host (herdr TUI vs herdr-core `hc`); auto prefers herdr when both are on PATH
+    "factory_halt": "0",         # 1 = the owner halted the whole factory (factory halt / Urgent stop, HM-44): no spawn, no merge, the tick only stops and reaps
     "stop_timeout_s": "300",     # `factory stop`: the tick force-closes the pane of a stopped agent still live after this long
     # worker sandbox (G-010): comma list of roles whose claude runs in the namespace sandbox, each one of
     # workerbox.SANDBOXABLE (reviewer, qa, coder, researcher). Empty = off = today's behaviour. Read fresh at every spawn.
@@ -3065,6 +3066,10 @@ def _config_value_rules(key, value):
         a.value = a.value.strip()
         if not (a.value.isascii() and a.value.isdigit() and int(a.value) <= 50):
             die(f"worktree_pool_max must be an integer 0..50, not {a.value!r}", 2)
+    if a.key == "factory_halt":   # HALT_KEY; a literal, as go/internal/cli/cmd_s1_test.go reads the keys from this source
+        a.value = a.value.strip()
+        if a.value not in ("0", "1"):
+            die(f"factory_halt must be 0 or 1, not {a.value!r}", 2)
     if a.key == "hand_merge_accept":
         a.value = a.value.strip().lower()
         if a.value not in HAND_MERGE_VALUES:
@@ -3116,6 +3121,8 @@ def cmd_config(a):
         return
     if a.key and a.value is not None:
         require_role(con, "director")
+        if a.key == HALT_KEY and actor_role(con) != "owner":   # HM-44: the halt is the owner's alone
+            die("factory_halt is set only by the owner, with factory halt and factory start", 3)
         if a.key not in DEFAULT_CONFIG:
             die(f"unknown key {a.key}; known: {', '.join(DEFAULT_CONFIG)}")
         a.value, err = _config_trap(_config_value_rules, a.key, a.value)
@@ -6003,6 +6010,7 @@ STATUS_ONLY_HELD = STATUS_ONLY_PREFIX + "[head ready] "  # PR was ready when rej
 
 def cmd_judge(a):
     con = db()
+    refuse_if_halted(con)   # HM-44: no merge, no reject, no train while the factory is halted
     if getattr(a, "no_code_change", False) and not a.reject:
         die("--no-code-change only goes with --reject; nothing was merged or rejected", 2)
     if getattr(a, "train", None):
@@ -9982,6 +9990,7 @@ def spawn(con, role, goal=None, team=None, task=None, name=None, cwd=None, promp
     spawn_args so a queued spawn and every relaunch keep it; only cmd_spawn and those two re-applications set it.
     hold: queue the row with this reason even when the gate is open (the tick dequeue orders it with the others)."""
     refuse_worker("spawn")  # belt: every caller (spawn, up, tick, relaunch, team new, msg) already refuses first
+    refuse_if_halted(con)   # HM-44: while the owner's halt is on, nothing starts, for any caller
     if role not in ROLES:
         die(f"role must be one of {ROLES}")
     if sandbox_optin and role not in workerbox.SANDBOXABLE:  # before any side effect (stale pane release, queue row)
@@ -12390,6 +12399,109 @@ def cmd_src(a):
     if rc:
         die(why, 1)
     print(f"extracted {a.ref} to {dest}")
+
+
+# ── HM-44: Urgent stop: the owner halts the whole factory, and starts it again ──
+HALT_KEY = "factory_halt"
+HALT_MSG = "the factory is halted by the owner (factory halt); start it again with factory start"
+HALT_EVENT, START_EVENT = "halt", "start"
+HALT_ENTITY, HALT_ID = "factory", "factory"
+HALT_STATUSES = ("queued", "starting", "live")   # every agent the halt stops
+HALT_REASON = "owner halt (Urgent stop)"
+
+
+def halted(con):
+    return cfg(con, HALT_KEY) == "1"
+
+
+def refuse_if_halted(con):
+    if halted(con):
+        die(HALT_MSG, 3)
+
+
+def halt_stop_one(con, r, retry_after_s=0):
+    """Stop agent row `r` for the halt; returns (name, outcome) with outcome 'stopped', 'cancelled', 'gone' or
+    'still closing: <why>'. Queued: cancelled (row only). Starting: left for the tick, which stops it once it is live.
+    Live: the factory stop flag and the forced stop path (force_stop 'now'); a failed close stays counted and is
+    retried by the halted tick, at most once per `retry_after_s`."""
+    name = r["name"]
+    if r["status"] == "queued":
+        return name, "cancelled" if cancel_queued(con, name, actor(), HALT_REASON) else "gone"
+    if r["status"] == "starting":
+        return name, "still closing: starting (the tick stops it once it is live)"
+    if con.execute("UPDATE agents SET stop_requested_at=?, stop_attempt_at=NULL, stop_failed_kind=NULL "
+                   "WHERE name=? AND status='live' AND stop_requested_at IS NULL", (now(), name)).rowcount:
+        event(con, "agent", name, "stop-requested", {"by": actor(), "reason": HALT_REASON})
+        con.commit()
+        seen = None
+    else:
+        cur = con.execute("SELECT status, stop_attempt_at FROM agents WHERE name=?", (name,)).fetchone()
+        if not cur or cur["status"] != "live":
+            return name, "gone"
+        att = _ts(cur["stop_attempt_at"])
+        if retry_after_s and att and (dt.datetime.now().astimezone() - att).total_seconds() < retry_after_s:
+            return name, "still closing: retried at most once per stop_timeout_s"
+        seen = cur["stop_attempt_at"]
+    res, _note = force_stop(con, name, "now", attempt_seen=seen)
+    if res == "stopped":
+        return name, "stopped"
+    if res == "skip":
+        cur = con.execute("SELECT status FROM agents WHERE name=?", (name,)).fetchone()
+        return name, "still closing: another stop attempt is running" if cur and cur["status"] == "live" else "gone"
+    return name, f"still closing: {res.split(':', 1)[1]}"
+
+
+def halt_closing(con):
+    """Agents the halt has not stopped yet (queued, starting or live)."""
+    ph = ",".join("?" * len(HALT_STATUSES))
+    return con.execute(f"SELECT * FROM agents WHERE status IN ({ph}) ORDER BY name", HALT_STATUSES).fetchall()
+
+
+def cmd_halt(a):
+    """HM-44 `factory halt [--reason]`, owner only: set factory_halt=1 (nothing starts or merges from now on), record the
+    `halt` event, then stop every queued, starting or live agent, HQ included. Exit 1 while any is still closing."""
+    refuse_worker("halt")
+    con = db()
+    require_role(con)   # the owner only
+    lock = tick_lock()  # noqa: F841 — no tick runs between the flag and the stops
+    reason = (a.reason or "").strip() or "no reason given"
+    con.execute("INSERT INTO config(key,value) VALUES(?, '1') ON CONFLICT(key) DO UPDATE SET value='1'", (HALT_KEY,))
+    event(con, HALT_ENTITY, HALT_ID, HALT_EVENT, reason)
+    con.commit()
+    results = [halt_stop_one(con, r) for r in halt_closing(con)]
+    for name, outcome in results:
+        print(f"{name}: {outcome}")
+    closing = [n for n, o in results if o.startswith("still closing")]
+    print(f"factory halted: {len(results) - len(closing)} stopped, {len(closing)} still closing"
+          + ("; the tick retries them" if closing else "") + ". Start it again with factory start.")
+    if closing:
+        sys.exit(1)
+
+
+def cmd_start(a):
+    """HM-44 `factory start`, owner only: clear the halt, record the `start` event, then bring HQ and the leads back as
+    `factory up` does. Goals and tasks keep the states they had."""
+    refuse_worker("start")
+    con = db()
+    require_role(con)
+    con.execute("INSERT INTO config(key,value) VALUES(?, '0') ON CONFLICT(key) DO UPDATE SET value='0'", (HALT_KEY,))
+    event(con, HALT_ENTITY, HALT_ID, START_EVENT, (a.reason or "").strip() or "factory start")
+    con.commit()
+    print("factory halt cleared; starting HQ and the leads (factory up)")
+    if not a.no_up:
+        cmd_up(types.SimpleNamespace(no_boss=False))
+
+
+def halt_tick(con, agents):
+    """The tick while halted (HM-44): reap panes that exited, retry the stops that did not close, export. No spawn, no
+    dequeue, no wake, no nudge, no relaunch, no review, judge or merge step, no factory-workflow tick."""
+    if agents is not None:
+        reap_exited_panes(con, agents)
+    retry = int(cfg(con, "stop_timeout_s"))
+    for r in halt_closing(con):
+        name, outcome = halt_stop_one(con, r, retry_after_s=retry)
+        if outcome.startswith("still closing") and not outcome.endswith("stop_timeout_s"):
+            print(f"halt: {name} {outcome}")
 
 
 def cmd_stop(a):
@@ -16304,6 +16416,15 @@ def cmd_tick(a, locked=False):
         hc_list_ok = hc_list is not None
         hc_by_name = {x["name"]: x for x in (hc_list or []) if x.get("name")}
     _pt_lap("herdr_list")
+    if halted(con):   # HM-44: the owner's Urgent stop: only stop, reap and export
+        halt_tick(con, agents)
+        _pt_lap("halt")
+        _pt_git(True)
+        export(con)
+        _pt_git(False)
+        _pt_lap("export")
+        _pt_emit(con)
+        return
     morning_digest(con)
     _pt_lap("digest")
     tmp_alert(con)
@@ -20303,6 +20424,13 @@ def main():
                    help="delete stale factory/* branches on origin (safety-checked, logged; director, cleaner, owner)")
     x.set_defaults(fn=cmd_clean)
     x = sp.add_parser("export"); x.add_argument("--no-push", action="store_true"); x.set_defaults(fn=cmd_export)
+    x = sp.add_parser("halt", help="owner: Urgent stop: halt the whole factory (no start, no merge) and stop every agent")
+    x.add_argument("--reason", default=None)
+    x.set_defaults(fn=cmd_halt)
+    x = sp.add_parser("start", help="owner: clear the halt of factory halt and bring HQ and the leads back (factory up)")
+    x.add_argument("--reason", default=None)
+    x.add_argument("--no-up", action="store_true", help="only clear the halt; start nothing")
+    x.set_defaults(fn=cmd_start)
     x = sp.add_parser("up", help="rebuild HQ + leads after a reboot"); x.add_argument("--no-boss", action="store_true")
     x.set_defaults(fn=cmd_up)
     x = sp.add_parser("relaunch", help="owner/director (boss: the director): restart one agent with --resume and full role flags")

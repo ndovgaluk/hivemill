@@ -230,6 +230,7 @@ INSERT INTO "config"("key","value") VALUES('gate_retry_error','1');
 INSERT INTO "config"("key","value") VALUES('gate_ignore_pending_ci','0');
 INSERT INTO "config"("key","value") VALUES('herdr_socket','~/.config/herdr/herdr.sock');
 INSERT INTO "config"("key","value") VALUES('terminal_backend','auto');
+INSERT INTO "config"("key","value") VALUES('factory_halt','0');
 INSERT INTO "config"("key","value") VALUES('stop_timeout_s','300');
 INSERT INTO "config"("key","value") VALUES('sandbox_roles','');
 INSERT INTO "config"("key","value") VALUES('worker_gh_roles','');

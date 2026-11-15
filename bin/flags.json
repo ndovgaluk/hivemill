@@ -164,6 +164,14 @@
    "doc": "docs/exited-pane-reap.md"
   },
   {
+   "key": "factory_halt",
+   "kind": "setting",
+   "default": "0",
+   "summary": "1 = the owner halted the whole factory (factory halt, the dashboard's Urgent stop): nothing starts or merges and the tick only stops and reaps; factory start clears it",
+   "goal": "",
+   "doc": "docs/urgent-stop.md"
+  },
+  {
    "key": "factory_remote_url",
    "kind": "setting",
    "default": "",
