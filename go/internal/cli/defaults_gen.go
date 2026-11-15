@@ -30,6 +30,7 @@ var DefaultConfig = []ConfigDefault{
 	{"lead_less_dispatch", "0"},
 	{"review_autospawn", "off"},
 	{"coder_ci_handoff", "off"},
+	{"coder_self_review", "on"},
 	{"coder_ci_resume_max", "2"},
 	{"review_reserved_slots", "2"},
 	{"retro_enabled", "1"},

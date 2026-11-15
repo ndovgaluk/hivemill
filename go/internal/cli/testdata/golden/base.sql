@@ -174,6 +174,7 @@ INSERT INTO "config"("key","value") VALUES('reserved_worker_slots','10');
 INSERT INTO "config"("key","value") VALUES('lead_less_dispatch','0');
 INSERT INTO "config"("key","value") VALUES('review_autospawn','off');
 INSERT INTO "config"("key","value") VALUES('coder_ci_handoff','off');
+INSERT INTO "config"("key","value") VALUES('coder_self_review','on');
 INSERT INTO "config"("key","value") VALUES('coder_ci_resume_max','2');
 INSERT INTO "config"("key","value") VALUES('review_reserved_slots','2');
 INSERT INTO "config"("key","value") VALUES('retro_enabled','1');

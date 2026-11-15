@@ -175,6 +175,7 @@ DEFAULT_CONFIG = {
     "lead_less_dispatch": "0",   # 0 = off, shadow = events only, 1 = the tick spawns workers for ready tasks of parked teams (G-018 T-0467)
     "review_autospawn": "off",   # off | on: the tick starts reviewer + QA (or one combined agent for T0/T1) when a PR opens (G-022 #6, docs/review-autospawn.md)
     "coder_ci_handoff": "off",   # off | resume | fresh: coder runs factory done at PR open without waiting for CI; the tick starts review at green (T-1003, docs/prcheck.md)
+    "coder_self_review": "on",   # on | off: off tells a new coder to skip the self-review step (docs/self-review.md)
     "coder_ci_resume_max": "2",   # with coder_ci_handoff on: at most this many tick starts of a handed-off coder per task on a red head, then the lead is mailed (T-1004, docs/lead-wake.md)
     "review_reserved_slots": "2",  # with review_autospawn=on: this many of max_live_agents are kept for reviewer/qa; coder/pm/cleaner spawns cannot take them
     "retro_enabled": "1",        # only the exact string "1" starts a new daily retro run from retro_hour
@@ -11034,6 +11035,7 @@ def _spawn_start(con, role, goal, team, task, name, cwd, prompt, model, resume, 
     evaluator = role == "evaluator"
     prompt = coder_judge_reject_kickoff(con, role, task, gated_reviewer_prompt(con, role, task, prompt))
     prompt = coder_ci_handoff_kickoff(con, role, prompt)
+    prompt = coder_self_review_kickoff(con, role, prompt)
     org = args.get("org") or orgs.DEFAULT_ORG
     model = model or role_model(con, role, org)
     effort = effort_args(con, model)  # validate before any worktree/workspace/pane side effect
@@ -11825,6 +11827,17 @@ def coder_ci_handoff_kickoff(con, role, prompt):
     line = ("coder_ci_handoff is on: do not wait for CI. After self-review set the task in_review and run "
             "factory done; the tick starts review at green CI.")
     return f"{prompt} {line}" if prompt else line
+
+
+CODER_SELF_REVIEW_OFF_LINE = ('coder_self_review is off: skip step 7 (skill coder-skills:self-review), start no review '
+                              'subagent or workflow, and put the line "Self-review: off (config coder_self_review)" in the PR body.')
+
+
+def coder_self_review_kickoff(con, role, prompt):
+    """Coder kickoff extra with coder_self_review off; any other value (including an unknown one) counts as on."""
+    if role != "coder" or cfg(con, "coder_self_review") != "off":
+        return prompt
+    return f"{prompt} {CODER_SELF_REVIEW_OFF_LINE}" if prompt else CODER_SELF_REVIEW_OFF_LINE
 
 
 def pr_pushed_head_ok(pr_url, head):

@@ -244,6 +244,20 @@ class SettingsWrite(FactoryTestCase):
         row = body[body.index(f'id="set-{REVIEW_AUTOSPAWN}"'):]
         self.assertRegex(row[:row.index("</form>")], r'class="set-value">On<')
 
+    def test_coder_self_review_off_is_saved_and_other_values_are_refused(self):  # HM-32
+        text = self.page()[2].decode()
+        self.assertLess(text.index("Worktrees"), text.index("Coder checks"))
+        self.assertLess(text.index("Coder checks"), text.index("Automation"))
+        row = text[text.index('id="set-coder_self_review"'):]
+        row = row[:row.index("</form>")]
+        self.assertEqual(re.findall(r'<option[^>]*value="([^"]*)"', row), [v for v, _ in settings.OFF_ON])
+        st, h, _ = self.submit("coder_self_review", "off")
+        self.assertEqual(st, 303, h)
+        self.assertEqual(self.value("coder_self_review"), "off")
+        st, _, _ = self.submit("coder_self_review", "maybe")
+        self.assertEqual(st, 400)
+        self.assertEqual(self.value("coder_self_review"), "off")
+
     def test_value_the_cli_refuses_is_reported_and_not_written(self):
         before = self.value("worktree_pool_max")
         st, h, _ = self.submit("worktree_pool_max", "999")

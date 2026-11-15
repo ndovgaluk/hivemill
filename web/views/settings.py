@@ -56,6 +56,12 @@ GROUPS = (
         Setting("worktree_pool_max", "Free worktrees kept per project",
                 "How many unused worktrees factory clean keeps per project while reuse is on.", Kind.INT, 0, 50),
     )),
+    ("Coder checks", "Checks a coder runs on its own work before review. Details: docs/self-review.md.", (
+        Setting("coder_self_review", "Coder self-review",
+                "On: before review, a coder has one fresh helper agent read its own change (three for risky changes) "
+                "and fixes what it finds. Off: the coder skips this; the reviewer, QA and judge still check the "
+                "change. Applies to coders started after the change.", Kind.CHOICE, None, None, OFF_ON),
+    )),
     ("Automation", "Steps the tick can do itself instead of a lead or a judge agent. All are off by default. Each "
                    "applies from the next tick; Off is the rollback.", (
         Setting("lead_parking", "Lead parking",

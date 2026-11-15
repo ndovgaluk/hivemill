@@ -35,3 +35,10 @@ cmd_judge, refresh_branch, cmd_refresh, head_has_main or verdict_carries, or is 
 Rule: exactly 3 agents (security, spec, tests), all Sonnet, no verifiers, never Opus or Fable.
 Findings come back as `unverified`; the coder checks each one (steps 3-5).
 PR-body line: `Self-review: N findings, fixed/not (3-angle)`. The reviewer path is unchanged.
+
+## Switching it off
+Config key `coder_self_review` (`on` default, `off`), set with `factory config coder_self_review off` or on the
+Settings page ("Coder checks"). With `off`, the kickoff of a newly started coder gets one extra sentence: skip step 7,
+start no review subagent or workflow, and put `Self-review: off (config coder_self_review)` in the PR body, so the
+reviewer sees that no self-review ran. The 3-angle run for guard and merge-gate diffs is skipped too. Any other value
+counts as `on`. It applies only to coders spawned after the change; reviewer, QA and judge are unchanged.

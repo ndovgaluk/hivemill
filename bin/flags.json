@@ -99,6 +99,14 @@
    "doc": "docs/lead-wake.md"
   },
   {
+   "key": "coder_self_review",
+   "kind": "setting",
+   "default": "on",
+   "summary": "on | off: off tells a newly started coder to skip the self-review step",
+   "goal": "G-007",
+   "doc": "docs/self-review.md"
+  },
+  {
    "key": "cursor_pilot_roles",
    "kind": "flag",
    "default": "",

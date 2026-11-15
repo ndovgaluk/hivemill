@@ -178,6 +178,7 @@ Read the Upgrade section of that version's release notes (https://github.com/vol
 | `stop_timeout_s` | `300` | `factory stop`: after this long the tick force-closes the pane of a stopped agent that is still live. |
 | `sandbox_roles` | empty | Comma list of roles (from `reviewer`, `qa`, `coder`) whose Claude runs in the namespace sandbox. Empty = off. Read at every spawn. |
 | `task_clones` | `0` | `1` = a new coder task gets a standalone `git clone --shared` instead of a worktree (docs/git-hardening.md, "Per-task clones"). Only `0` or `1`. |
+| `coder_self_review` | `on` | `off` tells a newly started coder to skip its self-review step and say so in the PR body (docs/self-review.md, "Switching it off"). Any other value counts as `on`. |
 | `serve_bind` | empty | `factory serve` listen address. Empty = the source address of the default route. |
 | `serve_port` | `8765` | `factory serve` TCP port. |
 | `serve_hostnames` | empty | Extra `Host` names `factory serve` accepts besides its bind address, comma separated. For example a LAN name such as `factory.example`. |
