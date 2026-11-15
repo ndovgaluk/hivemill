@@ -64,7 +64,7 @@ Symptom: the command ended with exit code 15 and printed nothing, twice.
 Cause: the pattern also matches the `bash -lc` command line that contains it, so the shell kills itself (inferred from the exit code 15 = SIGTERM).
 Rule: never `pgrep -f`/`pkill -f` with a pattern that appears in the same command; match the binary name only (`pgrep -x`), or kill from a separate call.
 Evidence: two tool calls of 2026-11-14 (HM-35)
-Promoted: no
+Promoted: yes (CLAUDE.local.md "Gotchas")
 
 ### 2026-11-14 · mistake · A tick step that launches its program with `systemd-run --user` does not pass the tick's environment
 Symptom: the HM-22 `tick_workflow` passed `env={…FACTORY_HOME…}` to `subprocess.run(["systemd-run", …])`; under systemd the engine would have started without `FACTORY_HOME` and the later `FACTORY_CLI`.
