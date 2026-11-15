@@ -87,7 +87,8 @@ class LegacyCase(FactoryTestCase):
 # T-1336 (G-041 S1-c): SCHEMA_VERSION -> sha256(SCHEMA + migrate() source). Changing the schema or migrate() without
 # bumping SCHEMA_VERSION (and the Go SchemaVersion in go/internal/factorydb) fails the pin test: add the new version here.
 SCHEMA_PINS = {1: "4036fa8c89b1d08474cad7826bac84a173503c552557e05e768144aef9a4c82d",
-               2: "939fcfc8929aca7d86df284747ece77d0688b3473db27b918c431802d92d3a12"}   # 2: the worktree_pool table (G-001) merged with upstream's versioning
+               2: "939fcfc8929aca7d86df284747ece77d0688b3473db27b918c431802d92d3a12",   # 2: the worktree_pool table (G-001) merged with upstream's versioning
+               3: "eb3526fa386939feff93b3a23a5b87c23c463de0a9066894ea2df52c933a04a3"}   # 3: goals.hold (HM-42)
 
 
 class SchemaVersionTests(FactoryTestCase):

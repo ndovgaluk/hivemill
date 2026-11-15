@@ -156,7 +156,7 @@ class TestCriteria(DetailCase):
         x("INSERT INTO goals VALUES('G-81','p1','Untagged goal',NULL,'1. one','active',3,'owner',NULL,?,?)", (ts(8, 0), ts(9, 0)))
         x(T_INS, ("T-82", "G-81", None, "plain task", "s", "a", "coder", "done", None, None, 1, ts(8, 0), ts(9, 0)))
         page = self.page("/goals")
-        rows = {m.group(1): m.group(0) for m in re.finditer(r'<li class="goalrow">.*?<span class="mono lrow-id">(G-\d+)</span>.*?</li>', page, re.S)}
+        rows = {m.group(1): m.group(0) for m in re.finditer(r'<li class="goalrow">.*?<a href="/goal/G-\d+" class="mono lrow-id">(G-\d+)</a>.*?</li>', page, re.S)}
         self.assertIn("criteria 1/2", rows["G-80"])
         self.assertNotIn("criteria", rows["G-81"])
 
@@ -172,7 +172,7 @@ class TestCriteria(DetailCase):
 
 class TestGoalsPage(DetailCase):
     def order(self, path):
-        return re.findall(r'<span class="mono lrow-id">(G-\d+)</span>', re.split(r'data-key="goals-done"', self.page(path).split('<main', 1)[1])[0])   # main only: the sidebar lists goals too (HM-36)
+        return re.findall(r'<a href="/goal/G-\d+" class="mono lrow-id">(G-\d+)</a>', re.split(r'data-key="goals-done"', self.page(path).split('<main', 1)[1])[0])   # main only: the sidebar lists goals too (HM-36)
 
     def test_sort_whitelist(self):
         x = self.con.execute

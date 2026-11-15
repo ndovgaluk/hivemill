@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 
 	"factory/go/internal/identity"
 )
@@ -178,6 +179,9 @@ func safeAdvance(e *Engine, r Run) (err error) {
 	if closed, err := e.closeIfGoalCancelled(r); err != nil || closed {
 		return err
 	}
+	if held, err := e.goalHeld(r.GoalID); err != nil || held { // HM-42: a paused goal's run waits, starting nobody
+		return err
+	}
 	if e.Deps != nil { // queued comments, marks and mails first, each once
 		if err := e.runPending(r); err != nil {
 			return err
@@ -217,4 +221,19 @@ func firstLine(s string) string {
 		}
 	}
 	return s
+}
+
+// goalHeld reports whether the owner paused or stopped the run's goal (factory goal pause|stop, HM-42): goals.hold is
+// set. A factory DB older than the column (or without a goals table, as some test rigs) holds nothing.
+func (e *Engine) goalHeld(goal string) (bool, error) {
+	var hold sql.NullString
+	err := e.Factory.QueryRow("SELECT hold FROM goals WHERE id=?", goal).Scan(&hold)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) || strings.Contains(err.Error(), "no such column") ||
+			strings.Contains(err.Error(), "no such table") {
+			return false, nil
+		}
+		return false, err
+	}
+	return hold.Valid && hold.String != "", nil
 }

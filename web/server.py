@@ -28,6 +28,7 @@ from web import queries
 from web.html import page
 from web.tokens import TokenIndex
 from web.views import ROUTES
+from web.views import goal_control as goal_control_view  # HM-42
 from web.views import halt as halt_view  # HM-44
 from web.views import settings as settings_view
 
@@ -161,7 +162,8 @@ class Handler(BaseHTTPRequestHandler):
     def _dispatch(self):
         app = self.server.app
         settings_post = self.command == "POST" and urlsplit(self.path).path in (SETTINGS_PATH, settings_view.GATE_PATH,
-                                                                                 halt_view.HALT_PATH, halt_view.START_PATH)
+                                                                                 halt_view.HALT_PATH, halt_view.START_PATH,
+                                                                                 goal_control_view.PATH)
         if self.command not in ("GET", "HEAD") and not settings_post:
             return self._error(405, "method not allowed", {"Allow": "GET, HEAD"})
         if not app.sem.acquire(blocking=False):
@@ -177,6 +179,8 @@ class Handler(BaseHTTPRequestHandler):
                 self.query = {}
             self._path = parts.path
             if settings_post:
+                if parts.path == goal_control_view.PATH:
+                    return self._goal_control_post(app, host)
                 if parts.path in (halt_view.HALT_PATH, halt_view.START_PATH):
                     return self._halt_post(app, host, parts.path)
                 return self._gate_post(app, host) if parts.path == settings_view.GATE_PATH else self._settings_post(app, host)
@@ -301,6 +305,21 @@ class Handler(BaseHTTPRequestHandler):
         target = (f"{SETTINGS_PATH}?{settings_view.Q_GATE_SAVED}={quote(project)}" if ok else
                   f"{SETTINGS_PATH}?{settings_view.Q_GATE_ERROR}={quote(project)}&{settings_view.Q_MSG}={quote(msg)}")
         self._send(303, "", "text/plain; charset=utf-8", {"Location": f"{target}#gate-{quote(project)}"})
+
+    def _goal_control_post(self, app, host):
+        """HM-42: Pause, Resume or Stop one goal, behind the Settings guard; an unknown action or a malformed goal id is
+        refused before anything runs. The CLI checks the role and the goal's state; its last line comes back."""
+        form = self._checked_form(app, host)
+        if form is None:
+            return None
+        goal, action = form.get("goal", ""), form.get("action", "")
+        if action not in goal_control_view.ACTIONS or not goal_control_view.GOAL_RE.match(goal):
+            return self._error(400, "bad goal or action")
+        reason = form.get("reason", "").strip()[:goal_control_view.REASON_MAX] or f"owner: {action} (dashboard)"
+        ok, msg = goal_control_view.run(app.factory_home, goal, action, reason, env=app.config_env)
+        q = "done" if ok else "msg"
+        self._send(303, "", "text/plain; charset=utf-8",
+                   {"Location": f"/goal/{goal}?ctl={action}&{q}={quote(msg or action)}"})
 
     def _halt_post(self, app, host, path):
         """HM-44: Urgent stop (`factory halt --reason`) or Start again (`factory start`), behind the same guard as the

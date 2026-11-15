@@ -285,3 +285,23 @@ func TestAHandMergeEventFinishesTheRun(t *testing.T) {
 		t.Fatalf("links %v", r.tracker.links)
 	}
 }
+
+// HM-42: a run whose goal the owner paused (goals.hold) is not advanced: no call to the factory, no state change;
+// resumed, it goes on.
+func TestARunOfAPausedGoalWaits(t *testing.T) {
+	r := built(t)
+	r.fdb.Exec("ALTER TABLE goals ADD COLUMN hold TEXT") // the rig's goals table predates the column (start_test.go)
+	if _, err := r.fdb.Exec("UPDATE goals SET hold='paused' WHERE id='G-001'"); err != nil {
+		t.Fatal(err)
+	}
+	before, calls := r.state(t), len(r.factory.calls)
+	r.tick(t)
+	if r.state(t) != before || len(r.factory.calls) != calls {
+		t.Fatalf("a paused goal's run moved: %s -> %s, calls %v", before, r.state(t), r.factory.calls[calls:])
+	}
+	r.fdb.Exec("UPDATE goals SET hold=NULL WHERE id='G-001'")
+	r.tick(t)
+	if r.state(t) == before {
+		t.Fatalf("the resumed run did not go on from %s", before)
+	}
+}

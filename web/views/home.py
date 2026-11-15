@@ -6,7 +6,7 @@ import statistics
 from scout import orgs as _orgs
 from web import charts, queries
 from web.db import has_column
-from web.components import (AGENT_COLS, agent_row, ago, ctx_org, empty_state, feed, feed_row, list_row, needs_you_row, org_badge,
+from web.components import (key_link, AGENT_COLS, agent_row, ago, ctx_org, empty_state, feed, feed_row, list_row, needs_you_row, org_badge,
                             org_href, pr_label, row_status, tile)
 from web.html import el, glyph, link, org_dot, status
 from web.views import resources
@@ -389,7 +389,7 @@ def goal_row(g, now, *, crit=None, last=None, needs=0, extra=None, body=None, op
               el("span", prs, class_="gprs") if prs else None, extra,
               el("span", f"needs you {needs}", class_="gneeds fg-danger") if needs else None,
               el("span", f"last activity {act}", class_="gact") if act else None, class_="gm")
-    head = [row_status(g["status"]), el("span", g["id"], class_="mono lrow-id"), title, meta]
+    head = [row_status(g["status"]), key_link(g["id"]), title, meta]
     if body is None:
         return el("li", *head, class_="goalrow")
     return el("li", el("details", el("summary", el("div", *head, class_="gsum")), body, class_="disc gnode",

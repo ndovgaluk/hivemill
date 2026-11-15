@@ -7,11 +7,13 @@ from types import SimpleNamespace
 from web import charts, queries, tokens as wtokens
 from web.prices import PRICES_AS_OF
 from scout import orgs as _orgs
-from web.components import (AGENT_COLS, COLLAPSED, agent_row, GROUP_ORDER, ago, chip, chips, ctx_org, data_table, disclosure, empty_state, filter_bar, needs_you_row,
+from web.components import (key_link, AGENT_COLS, COLLAPSED, agent_row, GROUP_ORDER, ago, chip, chips, ctx_org, data_table, disclosure, empty_state, filter_bar, needs_you_row,
                             org_badge, org_href, row_status, section, segmented, flow_mount)
 from web.flow import Scope as FlowScope
-from web.html import CLASSES, LABELS, badge, card, crumbs, dur, el, link, table, ts
+from web.html import CLASSES, LABELS, Safe, badge, card, crumbs, dur, el, link, table, ts
 from web.views.home import _needs, goal_row, needs_by_goal
+from web.db import has_column
+from web.views import goal_control   # HM-42
 
 TITLE = "Goals"
 
@@ -166,6 +168,9 @@ def _detail_data(ctx, id=None, **params):
     g["found"] = True
     g["teams_detail"] = [dict(t, scope=queries._t(t["scope"], TEAM_SCOPE_MAX)) for t in queries.goal_teams(ctx.db).get(id, {}).get("teams", [])]
     g["tasks"] = queries.tasks(ctx.db, goal=id)
+    g["hold"] = _hold(ctx.db, id)   # HM-42: the owner's pause or stop, with when and why
+    g["editable"] = bool(getattr(ctx, "loopback", False))
+    g["ctl"] = {k: ctx.query.get(k) for k in ("ctl", "done", "msg")} if getattr(ctx, "query", None) else {}
     p = ctx.db.execute("SELECT version, created FROM plans WHERE goal_id=? ORDER BY version DESC LIMIT 1", (id,)).fetchone()
     g["plan"] = {"version": p["version"], "created": p["created"]} if p else None
     ids = {t["id"] for t in g["tasks"]}
@@ -286,7 +291,7 @@ def _tasks_table(d, now):
         rows = [t for t in d["tasks"] if t["status"] == s]
         if not rows:
             continue
-        cells = [[row_status(t["status"]), t["id"],
+        cells = [[row_status(t["status"]), key_link(t["id"], cls="mono"),
                   el("span", el("a", t["title"], href=f"/task/{t['id']}"), " ", task_badge("blocked", t["waits"]) if s == "blocked" else None),
                   t["assignee"] or t["role"], link(t["pr_url"], "PR") if t["pr_url"] else "", t["attempts"] if t["attempts"] else ""]
                  for t in rows]
@@ -363,6 +368,54 @@ def _now_tasks(tasks):
     return el("span", "now: ", *[x for i, a in enumerate(links) for x in ((", ",) if i else ()) + (a,)])
 
 
+def _hold(con, gid):
+    """{hold, since, reason} of a goal the owner paused or stopped (HM-42), else None (also on a DB without the column)."""
+    if not has_column(con, "goals", "hold"):
+        return None
+    r = con.execute("SELECT hold FROM goals WHERE id=?", (gid,)).fetchone()
+    if not r or not r["hold"]:
+        return None
+    ev = con.execute("SELECT ts, detail FROM events WHERE entity='goal' AND entity_id=? AND action IN ('goal-pause','goal-stop') "
+                     "ORDER BY id DESC LIMIT 1", (gid,)).fetchone()
+    return {"hold": r["hold"], "since": ev["ts"] if ev else None, "reason": ev["detail"] if ev else None}
+
+
+def _controls(ctx, d):
+    """HM-42: Pause / Resume and Stop for an open goal, on a loopback bind; the commands otherwise; nothing on a closed goal."""
+    if d["status"] in ("done", "cancelled"):
+        return ""
+    gid, held = d["id"], d.get("hold")
+    if not d.get("editable"):
+        cmd = f"factory goal {'resume' if held else 'pause'} {gid}"
+        return el("p", "Controls: ", el("code", cmd, class_="set-cmd"), " · ", el("code", f"factory goal stop {gid}", class_="set-cmd"),
+                  class_="metarow")
+    # small icon links to the confirmation page, which holds the form: this page keeps form-action 'none' and no token
+    first = "resume" if held else "pause"
+
+    def icon(action, cls):
+        label = f"{goal_control.LABEL[action]} goal {gid}"
+        return el("a", Safe(_CTL_ICON[action]), el("span", label, class_="sr-only"),
+                  href=f"{goal_control.PATH}?goal={gid}&action={action}", title=f"{goal_control.LABEL[action]}…",
+                  aria_label=label, class_=cls)
+    return [" ", icon(first, "goal-ctl-icon"), " ", icon("stop", "goal-ctl-icon goal-ctl-icon--stop")]
+
+
+# HM-42: pause (two bars), resume (play), stop (square), 14 px, currentColor
+_CTL_SVG = ('<svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true" fill="currentColor">{}</svg>')
+_CTL_ICON = {"pause": _CTL_SVG.format('<rect x="3.5" y="2.5" width="3" height="11" rx="1"/><rect x="9.5" y="2.5" width="3" height="11" rx="1"/>'),
+             "resume": _CTL_SVG.format('<path d="M4.5 2.6v10.8a.6.6 0 0 0 .9.5l8.6-5.4a.6.6 0 0 0 0-1L5.4 2.1a.6.6 0 0 0-.9.5Z"/>'),
+             "stop": _CTL_SVG.format('<rect x="3" y="3" width="10" height="10" rx="1.5"/>')}
+
+
+def _ctl_note(d):
+    c = d.get("ctl") or {}
+    if c.get("msg"):
+        return el("p", c["msg"], class_="set-note set-note--bad", role="status")
+    if c.get("done"):
+        return el("p", c["done"], class_="set-note set-note--ok", role="status")
+    return ""
+
+
 def _detail_render(ctx, d):
     if not d.get("found"):
         return not_found("goal", d.get("id"), "/goals", "Back to Goals", _crumb(d.get("id") or "?"))
@@ -371,13 +424,19 @@ def _detail_render(ctx, d):
     tagged = any(c["tasks"] for c in cr)
     summary = f"{done}/{total} tasks" + (f" · {sum(_met(d).values())}/{len(cr)} criteria" if tagged else "")
     team = d["teams_detail"][0]["id"] if d["teams_detail"] else None
+    ctl = _controls(ctx, d)   # HM-42: icons at the end of this line on a loopback bind, else a line of commands below
     meta = el("p", status_badge(d["status"]), " ", org_badge(d.get("org")), " · ",
               f"P{d['priority']}" if d["priority"] is not None else "no priority",
-              " · ", team or "no team", " · updated ", ts(d["updated"]), " · ", _now_tasks(d["tasks"]), class_="metarow")
+              " · ", team or "no team", " · updated ", ts(d["updated"]), " · ", _now_tasks(d["tasks"]),
+              *(ctl if isinstance(ctl, list) else []), class_="metarow")
+    h = d.get("hold")
+    held = el("p", el("strong", f"{'Paused' if h['hold'] == 'paused' else 'Stopped'} by the owner"),
+              f" since {h['since']}" if h["since"] else "", f": {h['reason']}" if h["reason"] else "", class_="halt-state") if h else ""
     main = el("div", _intent(d), _teams(d, ctx.now), charts.meter(done, total, summary), _cost_time_card(d),
               _blocking(d, ctx.now), _criteria(d), _tasks_table(d, ctx.now), class_="gd-main")
     # DVDG-561: the flow debugger sits above the two columns, so it gets the full content width
-    return el("div", _crumb(d["id"]), meta, _goal_flow_section(d), el("div", main, _rail(d), class_="gd"))
+    return el("div", _crumb(d["id"]), meta, held, "" if isinstance(ctl, list) else ctl, _ctl_note(d), _goal_flow_section(d),
+              el("div", main, _rail(d), class_="gd"))
 
 
 detail = DetailView("Goal", _detail_data, _detail_render)

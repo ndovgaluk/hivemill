@@ -58,6 +58,7 @@ Every page under `docs/`, grouped by what you want to do. New to the factory? St
 - [mech-merge.md](mech-merge.md): the tick's mechanical merger for T0-T2 PRs (`mech_merge` off/shadow/on), same gate as the judge.
 - [hand-merge.md](hand-merge.md): accepting a pull request merged by hand on GitHub (`--merged-externally`, switch `hand_merge_accept`), recorded as a merge outside the factory gate.
 - [urgent-stop.md](urgent-stop.md): Urgent stop: `factory halt` / `factory start` and the dashboard button that halts the whole factory and stops every agent.
+- [goal-controls.md](goal-controls.md): Pause, Resume and Stop one goal (`factory goal pause|resume|stop`, the goal page controls) and what a hold does.
 - [workflow-engine.md](workflow-engine.md): the Go workflow engine that runs a Taskosaur story (`workflow_engine` off/on, `factory wf`, its state file and seams).
 - [prcheck.md](prcheck.md): `factory prcheck`, the coder's pre-PR check, and the `prcheck_required` gate on `factory done` (G-022).
 - [local-gate.md](local-gate.md): `factory gate run/show/list`, the local merge gate runner and `gate_runs` table (step 1: not yet read by the judge).

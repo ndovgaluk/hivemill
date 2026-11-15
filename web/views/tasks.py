@@ -5,7 +5,7 @@ from types import SimpleNamespace
 
 from web import charts, ci, queries
 from web.queries import parse_ts
-from web.components import (data_table, disclosure, empty_state, filter_bar, ago, chips, ctx_org, href, org_badge, org_href, pr_label, row_status,
+from web.components import (key_link, data_table, disclosure, empty_state, filter_bar, ago, chips, ctx_org, href, org_badge, org_href, pr_label, row_status,
                             GROUP_ORDER, COLLAPSED)
 from web.prices import PRICES_AS_OF
 from web.tokens import attribute, rollup, task_usage
@@ -182,7 +182,7 @@ def _row(t, now):
     rej = f"{n} rejection{'s' if n != 1 else ''}" + (f" · {t['attempts']} tries" if t["attempts"] and t["attempts"] > 1 else "") if n else ""
     title = el("span", el("a", t["title"], href=f"/task/{t['id']}"), " ", task_badge("blocked", t["waits"]) if t["status"] == "blocked" else None)
     goal = el("span", link(f"/goal/{t['goal_id']}", t["goal_id"]), " ", org_badge(t.get("org")), class_="orgrow") if t["goal_id"] else ""
-    return [row_status(t["status"]), t["id"], title, goal,
+    return [row_status(t["status"]), key_link(t["id"], cls="mono"), title, goal,
             t["assignee"] or "", pr, rej, _metric_cell(t, "cost", lambda v: f"${v:,.2f}"), _metric_cell(t, "tokens", lambda v: f"{v:,}"),
             _metric_cell(t, "wall_s", dur), el("span", ago(t["updated"], now), title=t["updated"])]
 

@@ -404,7 +404,7 @@ WORKTREE_POOL_STATES = ("free", "claimed")  # worktree_pool.state; enforced in c
 # T-1336 (G-041 S1-c): PRAGMA user_version of every DB this code has migrated. The Go CLI (go/internal/factorydb
 # SchemaVersion) answers only when it reads the same number; bump it, and the Go constant, with any SCHEMA or migrate()
 # change (tests/test_db_layout.py hashes both and fails until the pinned hash is renewed together with this number).
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3   # 3: goals.hold (HM-42)
 
 SCHEMA = f"""
 CREATE TABLE IF NOT EXISTS config (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -418,7 +418,7 @@ CREATE TABLE IF NOT EXISTS goals (
   intent TEXT, success_criteria TEXT, status TEXT NOT NULL DEFAULT 'proposed',
   priority INTEGER NOT NULL DEFAULT 2, requested_by TEXT, workspace_id TEXT,
   created TEXT NOT NULL, updated TEXT NOT NULL,
-  org TEXT NOT NULL DEFAULT 'claude', token_limit INTEGER);
+  org TEXT NOT NULL DEFAULT 'claude', token_limit INTEGER, hold TEXT);
 CREATE TABLE IF NOT EXISTS plans (
   id INTEGER PRIMARY KEY AUTOINCREMENT, goal_id TEXT NOT NULL REFERENCES goals(id),
   version INTEGER NOT NULL, body TEXT NOT NULL, author TEXT, created TEXT NOT NULL);
@@ -527,6 +527,12 @@ def migrate(con):
             con.execute("ALTER TABLE goals ADD COLUMN org TEXT NOT NULL DEFAULT 'claude'")
         except sqlite3.OperationalError:  # a concurrent process added it first
             if "org" not in {r["name"] for r in con.execute("PRAGMA table_info(goals)")}:
+                raise
+    if gcols and "hold" not in gcols:  # HM-42: NULL, 'paused' or 'stopped': the owner's hold on a goal
+        try:
+            con.execute("ALTER TABLE goals ADD COLUMN hold TEXT")
+        except sqlite3.OperationalError:  # a concurrent process added it first
+            if "hold" not in {r["name"] for r in con.execute("PRAGMA table_info(goals)")}:
                 raise
     if gcols and "token_limit" not in gcols:  # G-015 SC3 F-74 L2: NULL = no limit
         try:
@@ -3224,8 +3230,81 @@ def norm_checks(v):
     return ",".join(x.strip() for x in (v or "").split(",") if x.strip())
 
 
+# ── HM-42: the owner's controls of one goal: pause, resume, stop (restart: a later step) ──
+GOAL_HOLDS = ("paused", "stopped")
+
+
+def goal_hold(con, goal):
+    """'paused', 'stopped' or None for goal `goal` (None for no goal, or a DB older than the column)."""
+    if not goal:
+        return None
+    try:
+        r = con.execute("SELECT hold FROM goals WHERE id=?", (goal,)).fetchone()
+    except sqlite3.OperationalError:
+        return None
+    return r["hold"] if r and r["hold"] in GOAL_HOLDS else None
+
+
+def goal_agents(con, goal):
+    """The goal's agents that still run or wait to start (its own rows and its tasks' rows)."""
+    ph = ",".join("?" * len(HALT_STATUSES))
+    return con.execute(f"SELECT * FROM agents WHERE status IN ({ph}) AND (goal_id=? OR task_id IN "
+                       f"(SELECT id FROM tasks WHERE goal_id=?)) ORDER BY name", (*HALT_STATUSES, goal, goal)).fetchall()
+
+
+def goal_hold_and_stop(con, gid, hold, reason):
+    """Set the hold, record it, stop every agent of the goal now (factory stop --now path). Exit 1 while one is closing."""
+    con.execute("UPDATE goals SET hold=?, updated=? WHERE id=?", (hold, now(), gid))
+    event(con, "goal", gid, f"goal-{'pause' if hold == 'paused' else 'stop'}", reason)
+    con.commit()
+    results = [halt_stop_one(con, r, why=f"owner: goal {gid} {hold}") for r in goal_agents(con, gid)]
+    for name, outcome in results:
+        print(f"{name}: {outcome}")
+    closing = [n for n, o in results if o.startswith("still closing")]
+    print(f"goal {gid} {hold}: {len(results) - len(closing)} agent(s) stopped, {len(closing)} still closing"
+          + ("; the tick retries them" if closing else ""))
+    return closing
+
+
+def goal_control(con, a):
+    """`factory goal pause|resume|stop G [--reason]`, owner or director (HM-42)."""
+    require_role(con, "director")
+    g = con.execute("SELECT * FROM goals WHERE id=?", (a.id,)).fetchone() if a.id else None
+    if not g:
+        die(f"no goal {a.id}; usage: factory goal {a.action} G-NNN [--reason TEXT]", 2)
+    reason = (a.reason or "").strip() or f"owner: {a.action}"
+    if a.action == "resume":
+        if not goal_hold(con, a.id):
+            die(f"{a.id} is not paused; nothing to resume", 2)
+        if g["status"] in ("done", "cancelled"):
+            die(f"{a.id} is {g['status']}: a stopped goal is not resumed; start a new goal (restart)", 2)
+        con.execute("UPDATE goals SET hold=NULL, updated=? WHERE id=?", (now(), a.id))
+        event(con, "goal", a.id, "goal-resume", reason)
+        con.commit()
+        print(f"goal {a.id} resumed: the tick and its lead start fresh agents from the task states")
+        return
+    if g["status"] in ("done", "cancelled"):
+        die(f"{a.id} is {g['status']}: nothing to {a.action}", 2)
+    if a.action == "pause":
+        closing = goal_hold_and_stop(con, a.id, "paused", reason)
+    else:   # stop: as pause, then the goal is cancelled; its open pull requests are listed, never closed
+        closing = goal_hold_and_stop(con, a.id, "stopped", reason)
+        con.execute("UPDATE goals SET status='cancelled', updated=? WHERE id=?", (now(), a.id))
+        event(con, "goal", a.id, "status", f"cancelled: {reason}")
+        con.commit()
+        prs = [t for t in con.execute("SELECT id, pr_url FROM tasks WHERE goal_id=? AND pr_url IS NOT NULL "
+                                      "AND status NOT IN ('done','cancelled') ORDER BY id", (a.id,))]
+        for t in prs:
+            print(f"open PR left as it is: {t['id']} {t['pr_url']}")
+    if closing:
+        sys.exit(1)
+
+
 def cmd_goal(a):
     con = db()
+    if a.action in ("pause", "resume", "stop"):   # HM-42
+        refuse_worker(f"goal {a.action}")
+        return goal_control(con, a)
     if a.action == "new":
         if actor_role(con) not in ("boss", "owner"):
             die("only the boss creates goals; ask the boss (factory msg boss ...) or add a task to an open goal", 3)
@@ -10027,6 +10106,16 @@ def spawn(con, role, goal=None, team=None, task=None, name=None, cwd=None, promp
         if role == "evaluator":
             raise EvaluatorInvalid(e.code) from None  # the tick cancels on this one only; other exits are retried
         raise
+    goal_held = goal_hold(con, goal)   # not `hold`: that parameter is the queue reason
+    if goal_held:   # HM-42: a goal the owner paused or stopped starts nobody, a relaunch included
+        why = f"goal {goal} is {goal_held} by the owner; factory goal resume {goal} lets it start again"
+        if _TICK["on"]:   # the tick goes on with the other goals: skip this start, one event per agent and hour
+            key = f"spawn-held:{name or role}"
+            if not _throttled(con, key, time.time(), 3600):
+                _throttle_set(con, key, time.time())
+                event(con, "goal", goal, "spawn-held", f"{role} {name or ''}: not started, the goal is {goal_held}".strip())
+            return None
+        die(why, 3)
     if not relaunch:  # a relaunch restarts an agent that already runs: not new work
         goal_token_gate(con, role, goal, task, from_queue)  # G-015 SC3 F-74 L3: before the gate and any queue row
     existing = con.execute("SELECT * FROM agents WHERE name=?", (name,)).fetchone()
@@ -12419,19 +12508,19 @@ def refuse_if_halted(con):
         die(HALT_MSG, 3)
 
 
-def halt_stop_one(con, r, retry_after_s=0):
+def halt_stop_one(con, r, retry_after_s=0, why=HALT_REASON):
     """Stop agent row `r` for the halt; returns (name, outcome) with outcome 'stopped', 'cancelled', 'gone' or
     'still closing: <why>'. Queued: cancelled (row only). Starting: left for the tick, which stops it once it is live.
     Live: the factory stop flag and the forced stop path (force_stop 'now'); a failed close stays counted and is
     retried by the halted tick, at most once per `retry_after_s`."""
     name = r["name"]
     if r["status"] == "queued":
-        return name, "cancelled" if cancel_queued(con, name, actor(), HALT_REASON) else "gone"
+        return name, "cancelled" if cancel_queued(con, name, actor(), why) else "gone"
     if r["status"] == "starting":
         return name, "still closing: starting (the tick stops it once it is live)"
     if con.execute("UPDATE agents SET stop_requested_at=?, stop_attempt_at=NULL, stop_failed_kind=NULL "
                    "WHERE name=? AND status='live' AND stop_requested_at IS NULL", (now(), name)).rowcount:
-        event(con, "agent", name, "stop-requested", {"by": actor(), "reason": HALT_REASON})
+        event(con, "agent", name, "stop-requested", {"by": actor(), "reason": why})
         con.commit()
         seen = None
     else:
@@ -16380,9 +16469,13 @@ def _pt_emit(con):
         pass
 
 
+_TICK = {"on": False}   # HM-42: set while cmd_tick runs, so spawn() skips a held goal instead of exiting
+
+
 def cmd_tick(a, locked=False):
     """Runs every minute from systemd. No LLM tokens: reap, dequeue, nudge, publish."""
     refuse_worker("tick")
+    _TICK["on"] = True
     lock = None if locked else tick_lock()  # noqa: F841 — held until exit
     t_mig = time.perf_counter()
     migrate_db_layout()
@@ -17609,6 +17702,8 @@ def cmd_up(a):
                   pane=restored_pane(r), relaunch=True, org=org)  # running() found no pane: a stale live row is not live
     for t in con.execute("SELECT * FROM teams WHERE status='active' AND parked_at IS NULL").fetchall():  # parked: the tick wakes it
         r = con.execute("SELECT * FROM agents WHERE name=?", (t["lead_agent"],)).fetchone()
+        if goal_hold(con, t["goal_id"]):   # HM-42: a paused or stopped goal's lead stays down
+            continue
         if r and r["status"] != "cancelled" and not running(r):
             spawn(con, "lead", r["goal_id"], t["id"], name=r["name"], resume=r["session_id"], from_queue=True,
                   pane=restored_pane(r), relaunch=True)
@@ -20241,7 +20336,8 @@ def main():
     x.add_argument("--gate-count-cmd", default=None, help="prints the test count of a tree (director only)")
     x.add_argument("--gate-timeout-s", type=int, default=None); x.set_defaults(fn=cmd_project)
 
-    x = sp.add_parser("goal"); x.add_argument("action", choices=["new", "list", "show", "edit", "status", "audit", "signoff", "close", "org", "tokens"])
+    x = sp.add_parser("goal"); x.add_argument("action", choices=["new", "list", "show", "edit", "status", "audit", "signoff", "close", "org", "tokens",
+                                                                "pause", "resume", "stop"])
     x.add_argument("--org", help="goal new: the owning org (default: your own org); goal list: filter")
     x.add_argument("id", nargs="?"); x.add_argument("status", nargs="?")
     x.add_argument("--ready", action="store_true"); x.add_argument("--gaps", action="store_true")

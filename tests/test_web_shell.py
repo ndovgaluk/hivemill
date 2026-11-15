@@ -39,7 +39,7 @@ def nav_item(text, href):
 
 class TestEveryRouteRenders(ServerCase):
     def test_twelve_routes_have_the_shell(self):
-        self.assertEqual(len(PAGES), 13)   # HM-1 added /settings, HM-44 /halt
+        self.assertEqual(len(PAGES), 14)   # HM-1 added /settings, HM-44 /halt, HM-42 /goal-control
         for path in PAGES:
             with self.subTest(path):
                 code, _, body = self.get(path)

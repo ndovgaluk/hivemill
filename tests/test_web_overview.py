@@ -228,7 +228,7 @@ class TestStrip(Base):
 
 
 def goal_li(page, gid):
-    m = re.search(r'<li class="goalrow[^"]*">(?:(?!<li class="goalrow).)*?<span class="mono lrow-id">%s</span>.*?(?=<li class="goalrow|</ul></div></section>)' % gid, page, re.S)
+    m = re.search(r'<li class="goalrow[^"]*">(?:(?!<li class="goalrow).)*?<a href="/goal/%s" class="mono lrow-id">%s</a>.*?(?=<li class="goalrow|</ul></div></section>)' % (gid, gid), page, re.S)   # HM-75: the key is a link
     assert m, f"no goal row {gid}"
     return m.group(0)
 

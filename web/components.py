@@ -122,11 +122,24 @@ def segmented(label, items, scroll_strip=False):
 
 # ── C4 list row and data table ──
 
+_KEY_RE = re.compile(r"^(?:(T)-\d+|(G)-\d+)$")   # HM-75: a factory task key or goal key
+
+
+def key_link(ident, cls="mono lrow-id", org=None):
+    """HM-75: a task key (T-0022) or goal key (G-004) as a link to its page; anything else (a team id, "no team") as
+    plain text in a span."""
+    m = _KEY_RE.match(str(ident or ""))
+    if not m:
+        return el("span", ident, class_=cls)
+    href = f"/{'task' if m.group(1) else 'goal'}/{ident}" + (f"?org={org}" if org else "")
+    return el("a", ident, href=href, class_=cls)
+
+
 def list_row(glyph_key, ident, title, url=None, meta=()):
     """List row (overview, grouped lists): glyph, mono id, title (the one link), flexible gap, right metadata.
     `meta` values that are empty render nothing."""
     t = el("a", title, href=url) if url else el("span", title)
-    return el("li", row_status(glyph_key), el("span", ident, class_="mono lrow-id") if ident else None, t,
+    return el("li", row_status(glyph_key), key_link(ident) if ident else None, t,
               el("span", [el("span", m) for m in meta if m not in (None, "")], class_="lrow-meta"), class_="lrow")
 
 
@@ -189,7 +202,7 @@ def data_table(columns, groups, sort=None, sort_href=None, key="tbl", empty=None
 def feed_row(title, url, goal=None, pr_url=None, sha=None, when=None, when_title=None):
     """Changelog row: Done glyph, title link, goal id, PR "#226" (link), short sha, relative time on the right."""
     return el("li", row_status("done"), el("a", title, href=url, class_="feed-title"),
-              el("span", goal, class_="feed-goal") if goal else None,
+              el("span", key_link(goal, cls="mono"), class_="feed-goal") if goal else None,   # HM-75: the goal opens
               (el("span", link(pr_url, pr_label(pr_url)), class_="mono") if pr_url else None),   # link() keeps only github pull URLs
               el("span", sha[:8], class_="mono feed-sha") if sha else None,
               el("span", when, title=when_title, class_="feed-when") if when else None, class_="feed-row")

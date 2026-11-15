@@ -14,7 +14,7 @@ from urllib.parse import quote
 from web import queries
 from web.db import has_column
 from scout import orgs as _orgs
-from web.components import (AGENT_COLS, agent_row, ago, chips, ctx_org, data_table, disclosure, empty_state, filter_bar, org_badge,
+from web.components import (key_link, AGENT_COLS, agent_row, ago, chips, ctx_org, data_table, disclosure, empty_state, filter_bar, org_badge,
                             org_of, row_status, runtime_badge, section)
 from web.html import Safe, badge, el, link, status
 
@@ -390,8 +390,9 @@ def _running(d, now):
     groups = []
     for (o, tid), members in by.items():
         t = teams.get(tid)
-        text = f"{tid} · {t['goal_id']}" if t and t["goal_id"] else (tid or "HQ (no team)")
-        label = Safe(f"{org_badge(o)} {el('span', text)}") if many else text
+        # HM-75: the goal key of a team opens its goal
+        text = el("span", tid, " · ", key_link(t["goal_id"], cls="mono")) if t and t["goal_id"] else el("span", tid or "HQ (no team)")
+        label = Safe(f"{org_badge(o)} {text}") if many else Safe(str(text))
         groups.append({"key": f"{o}-{tid or 'none'}", "label": label, "count": len(members), "rows": [_cells(a, now) for a in members]})
     return section("Running", data_table(COLS, groups, key="agents-run", empty="No live agents."), count=len(d["live"]))
 

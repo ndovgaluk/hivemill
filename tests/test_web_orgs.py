@@ -228,7 +228,7 @@ class TestTwoOrgs(Base):
     def test_agents_org_chips_filter_and_groups(self):
         d, html = self.page(agents)
         self.assertEqual(d["live_by_org"]["cursor"], 4)
-        self.assertIn('<span class="org org-cursor" title="Cursor org">Cursor</span> <span>t-c · G-4</span>', html)
+        self.assertIn('<span class="org org-cursor" title="Cursor org">Cursor</span> <span>t-c · <a href="/goal/G-4" class="mono">G-4</a></span>', html)   # HM-75
         self.assertNotIn('class="rt ', html)                       # org implies runtime: no second chip
         self.assertIn('<span class="facet-label">Org</span>', html)
         d, html = self.page(agents, query={"org": "cursor"})

@@ -796,5 +796,12 @@ details.flow-note[open] > summary { color: var(--text-1); }
 .halt-page { max-width: 760px; }
 .halt-state { color: var(--danger-fg); font-weight: 600; }
 .halt-go { background: var(--danger-solid); border-color: var(--danger-solid); }
-.halt-page .set-btn { padding-left: 20px; padding-right: 20px; }   /* Stop everything now, Start again */
+.halt-page .set-btn { padding-left: 20px; padding-right: 20px; }
+/* HM-42: Pause / Resume and Stop on the goal page: small icons at the end of the header line */
+.goal-ctl-form { display: inline-flex; margin: 0; }
+.goal-ctl-icon { display: inline-flex; align-items: center; justify-content: center; vertical-align: middle; padding: 4px;
+  color: var(--text-2); background: transparent; border: 1px solid transparent; border-radius: var(--r-sm); }
+.goal-ctl-icon:hover { color: var(--text-1); background: var(--fill); text-decoration: none; }
+.goal-ctl-icon--stop { color: var(--danger-fg); }
+.goal-ctl-icon--stop:hover { color: var(--danger-fg); background: var(--danger-bg); }
 @media (max-width: 700px) { .set-row { grid-template-columns: 1fr; } .set-ctl { justify-items: start; } }

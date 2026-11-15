@@ -11,7 +11,7 @@ CREATE TABLE goals (
   intent TEXT, success_criteria TEXT, status TEXT NOT NULL DEFAULT 'proposed',
   priority INTEGER NOT NULL DEFAULT 2, requested_by TEXT, workspace_id TEXT,
   created TEXT NOT NULL, updated TEXT NOT NULL,
-  org TEXT NOT NULL DEFAULT 'claude', token_limit INTEGER);
+  org TEXT NOT NULL DEFAULT 'claude', token_limit INTEGER, hold TEXT);
 CREATE TABLE plans (
   id INTEGER PRIMARY KEY AUTOINCREMENT, goal_id TEXT NOT NULL REFERENCES goals(id),
   version INTEGER NOT NULL, body TEXT NOT NULL, author TEXT, created TEXT NOT NULL);

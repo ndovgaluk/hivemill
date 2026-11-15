@@ -188,7 +188,7 @@ class TestPages(PageCase):
         a = self.text("/agents")
         self.assertIn('<table class="dt">', a)
         self.assertRegex(a, r'class="chip"[^>]*><span>Running</span> <span class="chip-n">2<')
-        self.assertRegex(a, r'<tr class="grp"><th colspan="5" scope="colgroup">t-a · G-1 <span class="grp-n">2<')
+        self.assertRegex(a, r'<tr class="grp"><th colspan="5" scope="colgroup"><span>t-a · <a href="/goal/G-1" class="mono">G-1</a></span> <span class="grp-n">2<')   # HM-75
         c = self.text("/changelog")
         self.assertIn('class="seg seg-links"', c)
         self.assertRegex(c, r'<li class="feed-row">')
@@ -225,12 +225,12 @@ class TestPages(PageCase):
         self.assertLessEqual(TASK_ROW_KEYS, set(rows[0]))
 
     def test_sort_is_a_whitelist_and_junk_falls_back_to_the_default(self):
-        default = re.findall(r"<td class=\"c-id mono\">(T-\d+)", self.text("/tasks"))
+        default = re.findall(r"<td class=\"c-id mono\"><a href=\"/task/T-\d+\" class=\"mono\">(T-\d+)", self.text("/tasks"))
         self.assertTrue(default)
         for q in ("sort=title;DROP%20TABLE%20tasks&dir=asc", "sort=nonexistent&dir=x", "sort=title&dir=up", "sort=updated"):
             t = self.text("/tasks?" + q)
             self.assertIn('aria-sort="descending"><a href="/tasks?sort=updated&amp;dir=asc"', t, q)
-            self.assertEqual(re.findall(r"<td class=\"c-id mono\">(T-\d+)", t), default, q)
+            self.assertEqual(re.findall(r"<td class=\"c-id mono\"><a href=\"/task/T-\d+\" class=\"mono\">(T-\d+)", t), default, q)
         self.assertEqual(self.con.execute("SELECT count(*) FROM tasks").fetchone()[0], 6)   # the table is still there
         t = self.text("/tasks?sort=title&dir=asc")
         self.assertIn('aria-sort="ascending"><a href="/tasks?sort=title&amp;dir=desc"', t)
@@ -285,7 +285,7 @@ class TestCounts(PageCase):
         self.assertIn('<span>Queued</span> <span class="chip-n">1</span>', a)
         self.assertRegex(a, r'<h2>Running <span class="sect-n">2</span>')
         self.assertRegex(a, r'<h2>Queued <span class="sect-n">1</span>')
-        self.assertRegex(a, r'scope="colgroup">t-a · G-1 <span class="grp-n">2<')
+        self.assertRegex(a, r'scope="colgroup"><span>t-a · <a href="/goal/G-1" class="mono">G-1</a></span> <span class="grp-n">2<')   # HM-75
 
     def test_ended_chip_and_disclosure_show_the_same_number(self):
         from web.views import agents

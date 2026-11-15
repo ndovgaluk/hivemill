@@ -32,7 +32,7 @@ from web.views import ROUTES  # noqa: E402
 
 XSS = "<script>alert(1)</script>"
 PAGES = ["/", "/goals", "/goal/G-1", "/tasks", "/task/T-1", "/agents", "/resources", "/throughput", "/quality",
-         "/changelog", "/tokens", "/settings", "/halt"]   # HM-44: the Urgent stop page
+         "/changelog", "/tokens", "/settings", "/halt", "/goal-control"]   # HM-44 Urgent stop, HM-42 goal control
 APIS = ["/api/home.json", "/api/goals.json", "/api/tasks.json", "/api/agents.json", "/api/resources.json",
         "/api/throughput.json", "/api/quality.json", "/api/changelog.json", "/api/tokens.json", "/api/settings.json"]
 ALL_ROUTES = PAGES + APIS + ["/healthz", "/static/app.css", "/static/favicon.svg"]
@@ -425,7 +425,7 @@ class TestVocabularyAndStubs(ServerCase):
     def test_registry_complete(self):
         self.assertEqual(set(ROUTES), {"/", "/goals", "/goal/<id>", "/tasks", "/task/<id>", "/agents", "/resources",
                                        "/throughput", "/quality", "/changelog", "/tokens",
-                                       "/settings", "/halt"})
+                                       "/settings", "/halt", "/goal-control"})
         for v in ROUTES.values():
             self.assertTrue(callable(v.data) and callable(v.render))
 
@@ -603,3 +603,22 @@ class TestServeShim(FactoryTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestKeysAreLinks(ServerCase):
+    """HM-75: every task key (T-0022) and goal key (G-004) in a page's content is a link to its page. The breadcrumb's
+    last item names the page itself and stays text."""
+    KEY = re.compile(r"\b[TG]-\d{1,6}\b")
+
+    def test_no_bare_task_or_goal_key_in_any_page(self):
+        for path in PAGES:
+            with self.subTest(path):
+                body = self.get(path)[2].decode()
+                main = body.split("<main", 1)[1].split("</main>", 1)[0]
+                for pat in (r"<script.*?</script>", r"<noscript>.*?</noscript>", r'<nav aria-label="Breadcrumb".*?</nav>',
+                            r"<a\b[^>]*>.*?</a>", r"<[^>]+>"):
+                    main = re.sub(pat, " ", main, flags=re.S)
+                self.assertEqual(self.KEY.findall(main), [], f"bare keys on {path}")
+
+    def test_the_tasks_table_id_opens_the_task(self):
+        self.assertRegex(self.get("/tasks")[2].decode(), r'<td class="c-id mono"><a href="/task/(T-\d+)" class="mono">\1</a>')
