@@ -54,7 +54,7 @@ class TsrLinks(WorkflowCase):
         text = self.page("/goal/G-90")
         self.assertIn('<span class="mono tsr-key">HM-1</span>', text)
         self.assertNotIn("/tasks/HM-1", text)
-        self.assertIn("Set tsr_web_url on the Settings page", text)
+        self.assertIn("Optional: set the TSR base URL on the Settings page", text)
 
     def test_a_goal_that_is_no_story_run_shows_no_key_and_no_card(self):
         self.seed()   # G-80, an old-workflow goal
@@ -68,6 +68,36 @@ class TsrLinks(WorkflowCase):
         self.con.execute("DELETE FROM events WHERE action='story-run-links'")
         self.con.commit()
         self.assertIn(STORY, self.page("/goal/G-90"))
+
+    # HM-45 follow-up (owner, 2026-11-16): every key is a chip with a copy button for that key
+    def chips(self, text):
+        return re.findall(r'<span class="tsr-chip">(.*?)</button></span>', text, re.S)
+
+    def test_every_key_is_a_chip_with_a_copy_button_for_that_key(self):
+        self.url(BASE)
+        for path, keys in (("/goal/G-90", {"HM-1", "HM-2", "HM-3"}), ("/goals", {"HM-1"}), ("/", {"HM-1"})):
+            with self.subTest(path):
+                chips = self.chips(self.page(path))
+                self.assertTrue(chips, path)
+                seen = set()
+                for c in chips:
+                    key = re.search(r'data-copy="([^"]+)"', c).group(1)
+                    seen.add(key)
+                    self.assertIn(f'href="{BASE}/tasks/{key}" target="_blank" rel="noopener noreferrer" class="mono tsr-key"', c)
+                    self.assertIn(f'<button type="button" class="tsr-copy" data-copy="{key}" aria-label="Copy {key}"', c)
+                self.assertEqual(seen, keys)
+
+    def test_without_the_address_the_chip_still_copies(self):
+        chips = self.chips(self.page("/goal/G-90"))
+        self.assertTrue(chips)
+        self.assertTrue(all("<a " not in c and 'class="tsr-copy"' in c for c in chips))
+
+    def test_copy_js_copies_the_chip_key(self):
+        js = (ROOT / "web" / "static" / "copy.js").read_text()
+        self.assertIn('closest("button.tsr-copy")', js)
+        self.assertIn('getAttribute("data-copy")', js)
+        self.assertIn("navigator.clipboard", js)
+
 
 class Config(FactoryTestCase):
     def test_the_address_must_be_http_or_https(self):

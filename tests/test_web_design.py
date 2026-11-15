@@ -225,7 +225,7 @@ class Shell(unittest.TestCase):
 
     def test_scripts_only_local_and_blocking_in_head(self):
         scripts = re.findall(r"<script\b[^>]*>", self.doc)
-        self.assertEqual(scripts, [f'<script src="{wh.asset("theme.js")}">'])
+        self.assertEqual(scripts, [f'<script src="{wh.asset("theme.js")}">', f'<script src="{wh.asset("copy.js")}" defer>'])
         self.assertNotIn("<script>", self.doc)
         self.assertNotRegex(self.doc, r"\son\w+=")
         self.assertNotRegex(self.doc, r"""(src|href)=["']https?:""")

@@ -9,7 +9,7 @@ import sqlite3
 from urllib.parse import quote
 
 from web import flowdefs
-from web.html import el
+from web.html import Safe, el
 
 NEW_TAB, NEW_TAB_REL = "_blank", "noopener noreferrer"
 
@@ -39,9 +39,23 @@ def stories_by_goal(con):
         return {}
 
 
-def key_el(key, url, cls="mono"):
-    """A TSR key: a new-tab link to `{url}/tasks/{key}` when the base address is set, else plain text."""
-    if not url:
-        return el("span", key, class_=cls)
-    href = f"{url}/tasks/{quote(key, safe='')}"
-    return el("a", key, href=href, target=NEW_TAB, rel=NEW_TAB_REL, class_=cls, title=f"Open {key} in Taskosaur")
+# HM-45 follow-up (owner, 2026-11-16): a key is a grey chip with a copy icon; theme.js copies `data-copy` on click and
+# shows the check mark for a moment. Without JavaScript the button does nothing and the link still works.
+_COPY_SVG = ('<svg class="i-copy" viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.5" '
+             'stroke-linejoin="round" aria-hidden="true"><rect x="5.5" y="5.5" width="8" height="8" rx="1.5"/>'
+             '<path d="M10.5 3.5v-.5A1.5 1.5 0 0 0 9 1.5H3A1.5 1.5 0 0 0 1.5 3v6A1.5 1.5 0 0 0 3 10.5h.5"/></svg>'
+             '<svg class="i-ok" viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.75" '
+             'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 8.5 6.5 12 13 4.5"/></svg>')
+
+
+def key_el(key, url):
+    """A TSR key as a chip: a new-tab link to `{url}/tasks/{key}` when the base address is set (else plain text), then a
+    button that copies the key."""
+    if url:
+        label = el("a", key, href=f"{url}/tasks/{quote(key, safe='')}", target=NEW_TAB, rel=NEW_TAB_REL,
+                   class_="mono tsr-key", title=f"Open {key} in Taskosaur")
+    else:
+        label = el("span", key, class_="mono tsr-key")
+    copy = el("button", Safe(_COPY_SVG), type="button", class_="tsr-copy", data_copy=key,
+              aria_label=f"Copy {key}", title=f"Copy {key}")
+    return el("span", label, copy, class_="tsr-chip")

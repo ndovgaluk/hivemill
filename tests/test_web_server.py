@@ -52,12 +52,13 @@ def get(httpd, path, host="auto", method="GET"):
 
 
 THEME_SCRIPT = f'<script src="{wh.asset("theme.js")}"></script>'   # the theme toggle (versioned, HM-49)
+COPY_SCRIPT = f'<script src="{wh.asset("copy.js")}" defer></script>'   # HM-45: copies a Taskosaur key from its chip
 FLOW_SCRIPT = '<script type="module" src="/static/flow/flow.js"></script>'  # DVDG-561: the committed React flow bundle
 
 
 def assert_known_scripts(case, text):
-    """Only the two known same-origin script tags may appear; anything else (inline or another file) fails."""
-    case.assertNotIn("<script", text.replace(THEME_SCRIPT, "").replace(FLOW_SCRIPT, ""))
+    """Only the three known same-origin script tags may appear; anything else (inline or another file) fails."""
+    case.assertNotIn("<script", text.replace(THEME_SCRIPT, "").replace(COPY_SCRIPT, "").replace(FLOW_SCRIPT, ""))
 
 
 class ServerCase(unittest.TestCase):

@@ -161,7 +161,8 @@ goal (entity `workflow`), a JSON list of `{key, workspace, project}`. The dashbo
   (key, state, fix rounds);
 - the Goals list and the Overview show the story key after the goal's title.
 
-Without `tsr_web_url` the keys are plain text. `factory config tsr_web_url` takes only an `http://` or `https://` address.
+Taskosaur is an optional integration: the base address is never required, and without `tsr_web_url` the keys are plain
+chips (copy still works). Goals that are not story runs show no key and no card. `factory config tsr_web_url` takes only an `http://` or `https://` address.
 
 ## CI mode
 

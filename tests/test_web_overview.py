@@ -296,7 +296,7 @@ class TestTree(Base):
         self.assertIn("<details", tree)
         self.assertNotIn("<script", page)
         js = sorted(p.name for p in (ROOT / "web/static").iterdir() if p.suffix == ".js")
-        self.assertEqual(js, ["theme.js"])
+        self.assertEqual(js, ["copy.js", "theme.js"])   # HM-45: copy.js only copies a Taskosaur key; the tree needs neither
 
     def test_owner_wait_sorts_first_and_opens(self):
         self.w.execute("UPDATE messages SET read_at=? WHERE read_at IS NULL", (ts(9, 0),))   # G-1 no longer waits on the owner

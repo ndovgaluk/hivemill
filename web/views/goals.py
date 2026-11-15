@@ -341,12 +341,12 @@ def _tsr(ctx, gid):
         return None, None
     url = tsrlinks.web_url(ctx.db)
     stories = tsr_context(ctx.db)["stories"].get(gid) or [run.story]
-    head = [x for k in stories for x in (" ", tsrlinks.key_el(k, url, cls="mono tsr-key"))]
+    head = [x for k in stories for x in (" ", tsrlinks.key_el(k, url))]
     rows = [el("li", tsrlinks.key_el(c["key"], url), " ", c["state"],
                f" · {c['rounds']} fix round{'s' if c['rounds'] != 1 else ''}" if c["rounds"] else "") for c in run.children]
     card = el("section", el("h3", "Taskosaur", class_="childrenHead"),
               el("p", "Story ", *head[1:], class_="muted"), el("ul", rows, class_="lrow-list") if rows else None,
-              None if url else el("p", "Set tsr_web_url on the Settings page to open these in Taskosaur.", class_="muted"),
+              None if url else el("p", "Optional: set the TSR base URL on the Settings page to open these in Taskosaur.", class_="muted"),
               class_="tsr-card", aria_label="Taskosaur")
     return head, card
 

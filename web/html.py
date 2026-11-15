@@ -53,7 +53,7 @@ CLASSES = frozenset({
     "navpanel", "navchev",   # HM-73 the folding task panel
     "goal-ctl-form", "goal-ctl-icon", "goal-ctl-icon--stop",   # HM-42 goal controls
     "exec", "exec-legend",   # HM-47 execution states
-    "tsr-key", "tsr-card", "childrenHead",   # HM-45 Taskosaur links
+    "tsr-key", "tsr-card", "childrenHead", "tsr-chip", "tsr-copy", "i-copy", "i-ok",   # HM-45 Taskosaur links (chips)
     "flow-full", "flow-root",   # DVDG-561: the React flow debugger's full-width section and mount element
     # HM-36 goals in the sidebar
     "navgoals", "navsub", "navsub--done", "navgoal", "navgoal-l1", "navgoal-l2", "navgoal-t", "navdone", "navplus", "nav-on", "nav-off",
@@ -638,7 +638,8 @@ def page(title, body, active="/", refresh=True, shell=None, crumb_trail=None, or
               el("title", f"{title} - factory"),
               el("link", rel="icon", href=asset("favicon.svg"), type="image/svg+xml"),
               el("link", rel="stylesheet", href=asset("app.css")),
-              el("script", src=asset("theme.js")))  # blocking on purpose: sets the stored theme before the first paint
+              el("script", src=asset("theme.js")),  # blocking on purpose: sets the stored theme before the first paint
+              el("script", src=asset("copy.js"), defer=True))  # HM-45: copy a Taskosaur key from its chip
     org_nav = org_filter(path, query, org) if path and shell else None
     main = el("div", shell_header(title, shell, crumb_trail, org_nav, path), el("main", Safe(body) if not isinstance(body, Safe) else body, id="content", class_="page"),
               more, class_="main")

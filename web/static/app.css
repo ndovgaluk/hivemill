@@ -798,7 +798,15 @@ details.flow-note[open] > summary { color: var(--text-1); }
 .halt-go { background: var(--danger-solid); border-color: var(--danger-solid); }
 .halt-page .set-btn { padding-left: 20px; padding-right: 20px; }
 /* HM-45: Taskosaur keys of a story run */
-.tsr-key { font-size: 12px; }
+.tsr-chip { display: inline-flex; align-items: center; gap: 2px; padding: 1px 2px 1px 7px; border-radius: var(--r-sm);
+            background: var(--fill); color: var(--text-2); vertical-align: middle; white-space: nowrap; }
+.tsr-key { font-size: 12px; line-height: 20px; color: inherit; }
+a.tsr-key:hover { color: var(--text-1); text-decoration: underline; }
+.tsr-copy { display: inline-flex; align-items: center; justify-content: center; padding: 3px; border: 0;
+            border-radius: 4px; background: transparent; color: var(--text-3); cursor: pointer; }
+.tsr-copy:hover { color: var(--text-1); background: var(--surface-0); }
+.tsr-copy .i-ok, .tsr-copy[data-copied] .i-copy { display: none; }
+.tsr-copy[data-copied] .i-ok { display: block; color: var(--success-fg); }
 .tsr-card { margin-top: var(--s3); padding-top: var(--s2); border-top: 1px solid var(--border); }
 .childrenHead { margin: 0 0 4px; font-size: 13px; font-weight: 600; }
 /* HM-47: the execution state badge and its reason; the legend */

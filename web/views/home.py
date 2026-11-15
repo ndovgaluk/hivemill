@@ -385,7 +385,7 @@ def goal_row(g, now, *, crit=None, last=None, needs=0, extra=None, body=None, op
     title = el("span", el("a", g["title"], href=f"/goal/{g['id']}"),
                el("span", f"P{g['priority']}", class_="chip-p") if g["priority"] is not None else None, " ", org_badge(g.get("org")),
                " ", execstate.badge(state) if state else None,   # HM-47: what is really going on, with its reason
-               *([" ", *[tsrlinks.key_el(k, tsr["url"], cls="mono tsr-key") for k in tsr["keys"]]]
+               *([" ", *[tsrlinks.key_el(k, tsr["url"]) for k in tsr["keys"]]]
                  if tsr and tsr.get("keys") else []),   # HM-45: the Taskosaur story of a story run
                class_="gtitle")
     meta = el("div", charts.meter(done, total, f"{done}/{total} tasks"),
