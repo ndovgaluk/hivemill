@@ -261,3 +261,4 @@ One line per turn: what was asked, what was done or found. Explanations live in 
 - 2026-11-15: HM-44 (Urgent stop) and HM-73 (sidebar: 5 tasks or goals plus a more row, task panel folded behind a chevron) committed and pushed on the owner approval.
 - 2026-11-15: HM-42 (goal Pause/Resume/Stop: goals.hold, schema v3, spawn gate with tick skip, engine skip, goal page links + /goal-control confirm page, docs/goal-controls.md) built and tested with the full suite locally, uncommitted, In Review; Restart split into HM-74; preview at http://127.0.0.1:18643/goal/G-002.
 - 2026-11-15: HM-42 controls changed to transparent icons at the end of the goal header line; HM-75 (every task and goal key is a link, key_link + a sweep test) built, uncommitted, In Review.
+- 2026-11-15: HM-47 (one execution state per goal and task: web/execstate.py, badges with reasons on goal/task pages, lists and tables, legend, docs/web-ui.md section) built and tested, uncommitted, In Review.
