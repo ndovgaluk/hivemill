@@ -54,3 +54,4 @@ live install at the time; anything marked "not verified" was not.
 | 43 | [43-reference-run-2-result.md](43-reference-run-2-result.md) | Result of reference run 2 (G-002) against G-001: the numbers, where the 19 hours went, what the switches changed, limits |
 | 44 | [44-devdigest-integration.md](44-devdigest-integration.md) | DevDigest as a PR reviewer for the factory: what it offers, three ways to connect it, recommended design, limits |
 | 44 | [44-handover-for-opus.md](44-handover-for-opus.md) | Work order for Opus 5.5 for 2026-11-15: state, rules, the ordered task list, known engine defects |
+| 45 | [45-claude-code-diff-panel.md](45-claude-code-diff-panel.md) | The changed-files panel beside the chat: Claude Code `/diff`, how to open and close it, what Orca adds |
