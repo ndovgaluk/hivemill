@@ -53,6 +53,7 @@ CLASSES = frozenset({
     "navpanel", "navchev",   # HM-73 the folding task panel
     "goal-ctl-form", "goal-ctl-icon", "goal-ctl-icon--stop",   # HM-42 goal controls
     "exec", "exec-legend",   # HM-47 execution states
+    "tsr-key", "tsr-card", "childrenHead",   # HM-45 Taskosaur links
     "flow-full", "flow-root",   # DVDG-561: the React flow debugger's full-width section and mount element
     # HM-36 goals in the sidebar
     "navgoals", "navsub", "navsub--done", "navgoal", "navgoal-l1", "navgoal-l2", "navgoal-t", "navdone", "navplus", "nav-on", "nav-off",

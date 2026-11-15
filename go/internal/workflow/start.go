@@ -2,6 +2,7 @@ package workflow
 
 import (
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -357,6 +358,9 @@ func (e *Engine) start(p *startPlan, w io.Writer) (string, error) {
 	if err := e.Env.EventAs(e.Factory, ActorEngine, EventEntity, goal, eventCIMode, p.runCI()); err != nil {
 		return goal, err
 	}
+	if err := e.Env.EventAs(e.Factory, ActorEngine, EventEntity, goal, eventStoryRunLinks, storyRunLinks(p)); err != nil {
+		return goal, err
+	}
 	fail := func(step string, cause Cause, err error) (string, error) {
 		detail := map[string]any{"step": step, "error": err.Error(), "stories": keys}
 		var ce *CmdError
@@ -457,4 +461,30 @@ func (e *Engine) agentName(goal, base string) (string, error) {
 		return base, nil
 	}
 	return org + "-" + base, nil
+}
+
+// eventStoryRunLinks is the factory event (entity workflow, id the goal) that tells the dashboard where each story and
+// child of the run lives in Taskosaur (HM-45): a JSON list of {key, workspace, project}. Written once, at start.
+const eventStoryRunLinks = "story-run-links"
+
+type storyRunLink struct {
+	Key       string `json:"key"`
+	Workspace string `json:"workspace"`
+	Project   string `json:"project"`
+}
+
+// storyRunLinks is the detail of the story-run-links event: the run's stories, then its children, in plan order.
+func storyRunLinks(p *startPlan) string {
+	links := make([]storyRunLink, 0, len(p.stories)+len(p.children))
+	add := func(t tsr.Task) {
+		links = append(links, storyRunLink{Key: t.Key, Workspace: t.Project.Workspace.Slug, Project: t.Project.Slug})
+	}
+	for _, s := range p.stories {
+		add(s)
+	}
+	for _, c := range p.children {
+		add(c.task)
+	}
+	b, _ := json.Marshal(links)
+	return string(b)
 }

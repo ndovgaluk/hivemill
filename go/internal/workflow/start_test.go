@@ -623,3 +623,24 @@ func TestACancelledGoalClosesTheRunAndTheStoryCanStartAgain(t *testing.T) {
 		t.Fatalf("start after the cancel: %q %v", errs, r.factory.calls[n:])
 	}
 }
+
+// HM-45: a start records where the story and each child live in Taskosaur, once, for the dashboard's links.
+func TestStartRecordsTheTaskosaurPlacesOfTheStoryAndItsChildren(t *testing.T) {
+	r := newStartRig(t)
+	for k, task := range r.tracker.tasks {
+		task.Project.Slug, task.Project.Workspace.Slug = "dev", "nick"
+		r.tracker.tasks[k] = task
+	}
+	if code, out, errs := run(r.env, "start", "--story", "ST-1", "--project", "p1"); code != 0 {
+		t.Fatalf("start: %d %q %q", code, out, errs)
+	}
+	var n int
+	var detail string
+	r.fdb.QueryRow("SELECT count(*), COALESCE(max(detail), '') FROM events WHERE entity=? AND entity_id='G-001' AND action=?",
+		EventEntity, eventStoryRunLinks).Scan(&n, &detail)
+	want := `[{"key":"ST-1","workspace":"nick","project":"dev"},{"key":"C-1","workspace":"nick","project":"dev"},` +
+		`{"key":"C-2","workspace":"nick","project":"dev"},{"key":"C-3","workspace":"nick","project":"dev"}]`
+	if n != 1 || detail != want {
+		t.Fatalf("story-run-links: %d events, detail %s\nwant %s", n, detail, want)
+	}
+}

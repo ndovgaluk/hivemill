@@ -7,12 +7,12 @@ from types import SimpleNamespace
 from web import charts, queries, tokens as wtokens
 from web.prices import PRICES_AS_OF
 from scout import orgs as _orgs
-from web import execstate   # HM-47
+from web import execstate, flowdefs, tsrlinks   # HM-47, HM-45
 from web.components import (key_link, AGENT_COLS, COLLAPSED, agent_row, GROUP_ORDER, ago, chip, chips, ctx_org, data_table, disclosure, empty_state, filter_bar, needs_you_row,
                             org_badge, org_href, row_status, section, segmented, flow_mount)
 from web.flow import Scope as FlowScope
 from web.html import CLASSES, LABELS, Safe, badge, card, crumbs, dur, el, link, table, ts
-from web.views.home import _needs, goal_row, needs_by_goal
+from web.views.home import _needs, _tsr_of as home_tsr_of, goal_row, needs_by_goal, tsr_context
 from web.db import has_column
 from web.views import goal_control   # HM-42
 
@@ -109,13 +109,14 @@ def _sorted(goals, sort, last):
     return goals
 
 
-def _goal_row(g, d, now, exec_=None):
+def _goal_row(g, d, now, exec_=None, tsr=None):
     return goal_row(g, now, crit=d["criteria"].get(g["id"]), last=d["last_activity"].get(g["id"]) or g["updated"],
-                    needs=d["needs_by_goal"].get(g["id"], 0), extra=_blocked_cell(g), state=(exec_ or {}).get("goals", {}).get(g["id"]))
+                    needs=d["needs_by_goal"].get(g["id"], 0), extra=_blocked_cell(g), state=(exec_ or {}).get("goals", {}).get(g["id"]),
+                    tsr=home_tsr_of(g["id"], tsr))
 
 
-def _goal_list(goals, d, now, exec_=None):
-    return el("ul", [_goal_row(g, d, now, exec_) for g in goals], class_="lrow-list")
+def _goal_list(goals, d, now, exec_=None, tsr=None):
+    return el("ul", [_goal_row(g, d, now, exec_, tsr) for g in goals], class_="lrow-list")
 
 
 def _chips(goals):
@@ -154,10 +155,11 @@ def render(ctx, d):
     order = segmented("Sort open goals", [("Default", org_href("/goals", {}, org), sort is None)] +
                       [(s.capitalize(), org_href("/goals", {"sort": s}, org), sort == s) for s in SORTS])
     exec_ = execstate.states(ctx.db)   # HM-47
-    body = [order, execstate.legend(), _goal_list(_sorted(live, sort, d["last_activity"]), d, ctx.now, exec_)] if live else [empty_state("No open goals.")]
+    tsr = tsr_context(ctx.db)          # HM-45
+    body = [order, execstate.legend(), _goal_list(_sorted(live, sort, d["last_activity"]), d, ctx.now, exec_, tsr)] if live else [empty_state("No open goals.")]
     parts.append(el("div", section("Open goals", *body, count=len(live) or None), id="open-goals"))
     if closed:
-        parts.append(el("div", disclosure("Done", _goal_list(closed, d, ctx.now, exec_), key="goals-done", count=len(closed)), id="done-goals"))
+        parts.append(el("div", disclosure("Done", _goal_list(closed, d, ctx.now, exec_, tsr), key="goals-done", count=len(closed)), id="done-goals"))
     return el("div", *parts)
 
 
@@ -323,11 +325,30 @@ def _teams(d, now):
     return section("Teams", el("ul", rows, class_="teams"), count=len(rows)) if rows else None
 
 
-def _rail(d):
+def _rail(d, tsr_card=None):
     p = d["plan"]
     defs = [("Plan", f"v{p['version']} · " if p else "No plan yet", ts(p["created"]) if p else None),
             ("Created", ts(d["created"]), None), ("Updated", ts(d["updated"]), None)]
-    return el("aside", el("dl", [[el("dt", k), el("dd", a, b)] for k, a, b in defs], class_="rail-dl"), class_="rail", aria_label="Goal details")
+    return el("aside", el("dl", [[el("dt", k), el("dd", a, b)] for k, a, b in defs], class_="rail-dl"), tsr_card,
+              class_="rail", aria_label="Goal details")
+
+
+def _tsr(ctx, gid):
+    """HM-45: (header keys, rail card) of a story run's goal: the story key(s) and each child with its state and fix
+    rounds, as links to Taskosaur when tsr_web_url is set. (None, None) for a goal that is not a story run."""
+    run, _note = flowdefs.read_run(ctx.db, gid)
+    if run is None:
+        return None, None
+    url = tsrlinks.web_url(ctx.db)
+    stories = tsr_context(ctx.db)["stories"].get(gid) or [run.story]
+    head = [x for k in stories for x in (" ", tsrlinks.key_el(k, url, cls="mono tsr-key"))]
+    rows = [el("li", tsrlinks.key_el(c["key"], url), " ", c["state"],
+               f" · {c['rounds']} fix round{'s' if c['rounds'] != 1 else ''}" if c["rounds"] else "") for c in run.children]
+    card = el("section", el("h3", "Taskosaur", class_="childrenHead"),
+              el("p", "Story ", *head[1:], class_="muted"), el("ul", rows, class_="lrow-list") if rows else None,
+              None if url else el("p", "Set tsr_web_url on the Settings page to open these in Taskosaur.", class_="muted"),
+              class_="tsr-card", aria_label="Taskosaur")
+    return head, card
 
 
 def _goal_flow_section(d):
@@ -427,10 +448,12 @@ def _detail_render(ctx, d):
     summary = f"{done}/{total} tasks" + (f" · {sum(_met(d).values())}/{len(cr)} criteria" if tagged else "")
     team = d["teams_detail"][0]["id"] if d["teams_detail"] else None
     ctl = _controls(ctx, d)   # HM-42: icons at the end of this line on a loopback bind, else a line of commands below
+    tsr_head, tsr_card = _tsr(ctx, d["id"])   # HM-45
     state = execstate.states(ctx.db)["goals"].get(d["id"])   # HM-47: the one state, with its reason
     meta = el("p", execstate.badge(state) if state else status_badge(d["status"]), " ", org_badge(d.get("org")), " · ",
               f"P{d['priority']}" if d["priority"] is not None else "no priority",
-              " · ", team or "no team", " · updated ", ts(d["updated"]), " · ", _now_tasks(d["tasks"]),
+              " · ", team or "no team", *([" · TSR"] + tsr_head if tsr_head else []),
+              " · updated ", ts(d["updated"]), " · ", _now_tasks(d["tasks"]),
               *(ctl if isinstance(ctl, list) else []), class_="metarow")
     h = d.get("hold")
     held = el("p", el("strong", f"{'Paused' if h['hold'] == 'paused' else 'Stopped'} by the owner"),
@@ -439,7 +462,7 @@ def _detail_render(ctx, d):
               _blocking(d, ctx.now), _criteria(d), _tasks_table(d, ctx.now), class_="gd-main")
     # DVDG-561: the flow debugger sits above the two columns, so it gets the full content width
     return el("div", _crumb(d["id"]), meta, held, "" if isinstance(ctl, list) else ctl, _ctl_note(d), _goal_flow_section(d),
-              el("div", main, _rail(d), class_="gd"))
+              el("div", main, _rail(d, tsr_card), class_="gd"))
 
 
 detail = DetailView("Goal", _detail_data, _detail_render)

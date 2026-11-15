@@ -149,6 +149,20 @@ exit 2, "factory-workflow is not built; set workflow_engine on and wait for a ti
 | `factory wf review CHILD pass\|changes --notes FILE` | the child's reviewer records its result; see "Review per child" |
 | `factory wf resume --goal ID [--fresh-builder]` | restarts a blocked run (boss or owner) |
 
+## Links to Taskosaur (HM-45)
+
+At start, the engine records where the story and each child live in Taskosaur: one factory event `story-run-links` on the
+goal (entity `workflow`), a JSON list of `{key, workspace, project}`. The dashboard reads the run's keys from `workflow.db`
+(read-only), and with config `tsr_web_url` (Settings page, "TSR base URL", e.g.
+`http://localhost:4001/<workspace>/<project>`) links each key to `{tsr_web_url}/tasks/{key}` in a new tab (owner rule of
+2026-11-15; the recorded places are not used for the link):
+
+- the goal page header shows `TSR` and the story key; the right rail has a "Taskosaur" card with the story and each child
+  (key, state, fix rounds);
+- the Goals list and the Overview show the story key after the goal's title.
+
+Without `tsr_web_url` the keys are plain text. `factory config tsr_web_url` takes only an `http://` or `https://` address.
+
 ## CI mode
 
 Each run has a CI mode: what clears its change before it reaches `main` (HM-67, owner decisions of 2026-11-15).

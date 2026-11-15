@@ -797,6 +797,10 @@ details.flow-note[open] > summary { color: var(--text-1); }
 .halt-state { color: var(--danger-fg); font-weight: 600; }
 .halt-go { background: var(--danger-solid); border-color: var(--danger-solid); }
 .halt-page .set-btn { padding-left: 20px; padding-right: 20px; }
+/* HM-45: Taskosaur keys of a story run */
+.tsr-key { font-size: 12px; }
+.tsr-card { margin-top: var(--s3); padding-top: var(--s2); border-top: 1px solid var(--border); }
+.childrenHead { margin: 0 0 4px; font-size: 13px; font-weight: 600; }
 /* HM-47: the execution state badge and its reason; the legend */
 .exec { white-space: normal; }
 .exec-legend { margin: 0 0 var(--s3); }

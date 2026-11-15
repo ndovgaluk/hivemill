@@ -1025,6 +1025,14 @@
    "doc": ""
   },
   {
+   "key": "tsr_web_url",
+   "kind": "setting",
+   "default": "",
+   "summary": "Taskosaur's base address (e.g. http://localhost:4001/WS/PROJECT); the dashboard links a story run's TSR keys to {it}/tasks/{key} (empty: plain text)",
+   "goal": "",
+   "doc": "docs/workflow-engine.md"
+  },
+  {
    "key": "worker_gh_repos",
    "kind": "setting",
    "default": "",

@@ -6,6 +6,7 @@ event stay the only write path (the server itself keeps its read-only DB connect
 read-only and shows the command instead.
 """
 import os
+import re
 import subprocess
 import sys
 from collections import namedtuple
@@ -30,6 +31,7 @@ class Kind:
     SWITCH = "switch"    # "0" / "1"
     INT = "int"
     CHOICE = "choice"    # one of Setting.options; the CLI does not validate these keys, so the page must
+    URL = "url"          # HM-45: an http(s) address; the page checks the shape and the CLI checks it again
 
 
 ON, OFF = "1", "0"
@@ -94,6 +96,10 @@ GROUPS = (
                 "reviewer for the story: the same reviewer session is resumed for each child and remembers the earlier "
                 "ones. Applies from the next review. Details: docs/workflow-engine.md.", Kind.CHOICE, None, None,
                 (("fresh", "A fresh reviewer for each child"), ("keep", "Keep one reviewer for the story"))),
+        Setting("tsr_web_url", "TSR base URL",
+                "Taskosaur's base address, for example http://localhost:4001/<workspace>/<project>. A story run's goal then "
+                "links its TSR story and children to {address}/tasks/{key} (new tab). Empty: the keys are plain text. Details: docs/workflow-engine.md.",
+                Kind.URL, None, None),
         Setting("workflow_ci", "CI for new story runs",
                 "GitHub: the run opens one pull request, GitHub's checks and the judge clear it. Local: only the tests "
                 "the change can affect run on this machine, then the run merges into main itself. None: no pull request "
@@ -140,6 +146,8 @@ def valid_value(key, value):
         return value in dict(s.options)
     if s.kind == Kind.SWITCH:
         return value in (ON, OFF)
+    if s.kind == Kind.URL:
+        return bool(_URL_RE.fullmatch(value))
     return value.isascii() and value.isdigit()
 
 # query parameters of the redirect after a change (server: Handler._settings_post and Handler._gate_post)
@@ -204,6 +212,8 @@ def _shown(s, value):
         return Label.ON if value == ON else Label.OFF if value == OFF else value
     if s.kind == Kind.CHOICE:
         return dict(s.options).get(value, value)
+    if s.kind == Kind.URL and not value:
+        return "not set"
     return value
 
 
@@ -238,6 +248,9 @@ def data(ctx):
             "projects": projects, "gate_result": gate_result}
 
 
+_URL_RE = re.compile(r"https?://[A-Za-z0-9.-]+(:\d{1,5})?(/[A-Za-z0-9._~/-]*)?")
+
+
 def _control(s):
     if s["kind"] == Kind.SWITCH:
         return el("select", el("option", "On", value=ON, selected=s["value"] == ON),
@@ -246,6 +259,9 @@ def _control(s):
     if s["kind"] == Kind.CHOICE:
         return el("select", *[el("option", o["label"], value=o["value"], selected=s["value"] == o["value"])
                               for o in s["options"]], name="value", class_="set-input", aria_label=s["label"])
+    if s["kind"] == Kind.URL:
+        return el("input", type="url", name="value", value=s["value"], placeholder="http://localhost:4001/workspace/project", maxlength=str(VALUE_MAX),
+                  required=True, class_="set-input", aria_label=s["label"])
     return el("input", type="number", name="value", value=s["value"], min=str(s["min"]), max=str(s["max"]), step="1",
               required=True, class_="set-input", aria_label=s["label"])
 

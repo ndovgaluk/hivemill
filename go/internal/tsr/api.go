@@ -31,7 +31,9 @@ type Task struct {
 	ParentTaskID string `json:"parentTaskId"`
 	Status       Status `json:"status"`
 	Project      struct {
+		Slug      string `json:"slug"` // HM-45: where the task lives (recorded in story-run-links; the dashboard link is {tsr_web_url}/tasks/{key})
 		Workspace struct {
+			Slug         string `json:"slug"`
 			Organization struct {
 				ID string `json:"id"`
 			} `json:"organization"`

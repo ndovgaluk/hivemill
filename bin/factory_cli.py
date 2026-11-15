@@ -203,6 +203,7 @@ DEFAULT_CONFIG = {
     "mech_merge_retry_s": "600", # the merger looks at a PR head it already blocked on (or shadow-recorded) at most this often
     "workflow_engine": "off",    # off | on: build go/cmd/workflow and let the tick launch `factory-workflow tick` (DVDG-565, docs/workflow-engine.md)
     "workflow_reviewer_session": "fresh",  # fresh | keep: story runs review each child with a new reviewer, or resume one per story
+    "tsr_web_url": "",           # HM-45: Taskosaur's base address (e.g. http://localhost:4001/WS/PROJECT); task links are {it}/tasks/{key}; empty = TSR keys on the dashboard are plain text
     "workflow_ci": "github",  # github | local | none: CI mode of new story runs (`factory wf start --ci` overrides; HM-67, HM-54, docs/workflow-engine.md)
     "risk_tiers": "off",        # off | on: `factory task tier T --classify` computes a PR's risk tier (G-022 #1); nothing else reads tiers yet
     "public_text_repos": "",     # comma list OWNER/NAME where the public text rule applies (G-021): judge text check, no state push
@@ -3076,6 +3077,10 @@ def _config_value_rules(key, value):
         a.value = a.value.strip()
         if a.value not in ("0", "1"):
             die(f"factory_halt must be 0 or 1, not {a.value!r}", 2)
+    if a.key == "tsr_web_url":   # HM-45: the dashboard builds links from it: http(s) only, no quotes or spaces
+        a.value = a.value.strip().rstrip("/")
+        if a.value and not re.fullmatch(r"https?://[A-Za-z0-9.-]+(:\d{1,5})?(/[A-Za-z0-9._~/-]*)?", a.value):
+            die(f"tsr_web_url must be an http:// or https:// address such as http://localhost:4001/workspace/project, not {a.value!r}", 2)
     if a.key == "hand_merge_accept":
         a.value = a.value.strip().lower()
         if a.value not in HAND_MERGE_VALUES:

@@ -6,7 +6,7 @@ import statistics
 from scout import orgs as _orgs
 from web import charts, queries
 from web.db import has_column
-from web import execstate   # HM-47
+from web import execstate, tsrlinks   # HM-47, HM-45
 from web.components import (key_link, AGENT_COLS, agent_row, ago, ctx_org, empty_state, feed, feed_row, list_row, needs_you_row, org_badge,
                             org_href, pr_label, row_status, tile)
 from web.html import el, glyph, link, org_dot, status
@@ -375,7 +375,7 @@ def _usage_row(u):
     return resources.usage_row(u)
 
 
-def goal_row(g, now, *, crit=None, last=None, needs=0, extra=None, body=None, opened=False, state=None):
+def goal_row(g, now, *, crit=None, last=None, needs=0, extra=None, body=None, opened=False, state=None, tsr=None):
     """The level-1 goal row, shared by the overview tree and /goals: state glyph, id, title, priority chip, org tag,
     progress (done/total tasks), criteria n/m, open PRs, `extra`, a red "needs you N" when the goal has an owner wait,
     last activity. With `body` (the level-2 list) the row is a <details> that is open when `opened`."""
@@ -385,6 +385,8 @@ def goal_row(g, now, *, crit=None, last=None, needs=0, extra=None, body=None, op
     title = el("span", el("a", g["title"], href=f"/goal/{g['id']}"),
                el("span", f"P{g['priority']}", class_="chip-p") if g["priority"] is not None else None, " ", org_badge(g.get("org")),
                " ", execstate.badge(state) if state else None,   # HM-47: what is really going on, with its reason
+               *([" ", *[tsrlinks.key_el(k, tsr["url"], cls="mono tsr-key") for k in tsr["keys"]]]
+                 if tsr and tsr.get("keys") else []),   # HM-45: the Taskosaur story of a story run
                class_="gtitle")
     meta = el("div", charts.meter(done, total, f"{done}/{total} tasks"),
               el("span", f"criteria {crit[0]}/{crit[1]}", class_="gprs") if crit else None,
@@ -431,7 +433,16 @@ def _team_el(goal_id, t):
     return el("li", el("details", el("summary", head), *body, class_="disc", data_key=key, open=t["owner_wait"] or None), class_="team")
 
 
-def _goals_section(d, now, exec_=None):
+def tsr_context(con):
+    """HM-45: what the goal rows need to show Taskosaur keys, read once per page."""
+    return {"url": tsrlinks.web_url(con), "stories": tsrlinks.stories_by_goal(con)}
+
+
+def _tsr_of(gid, tsr):
+    return {"url": tsr["url"], "keys": tsr["stories"].get(gid, [])} if tsr else None
+
+
+def _goals_section(d, now, exec_=None, tsr=None):
     gl = d["tree"]
     if not gl:
         return _sect("goals", "Goals", empty_state("No open goals"), more=(_o(d, "/goals"), "All goals"))
@@ -439,7 +450,7 @@ def _goals_section(d, now, exec_=None):
     for g in gl:
         body = el("ul", [_team_el(g["id"], t) for t in g["teams"]], class_="teams") if g["teams"] else None
         rows.append(goal_row(g, now, crit=g["criteria"], last=g["last_activity"], needs=g["needs"], body=body, opened=bool(g["needs"]),
-                             state=(exec_ or {}).get("goals", {}).get(g["id"])))
+                             state=(exec_ or {}).get("goals", {}).get(g["id"]), tsr=_tsr_of(g["id"], tsr)))
     return _sect("goals", "Goals", el("ul", rows, class_="lrow-list"), count=len(gl), more=(_o(d, "/goals"), "All goals"))
 
 
@@ -511,5 +522,5 @@ def _quality_section(d):
 
 
 def render(ctx, d):
-    return el("div", _lanes_section(d), _needs_section(d, ctx.now), _goals_section(d, ctx.now, execstate.states(ctx.db)), _system_section(d), _agents_section(d, ctx.now),
+    return el("div", _lanes_section(d), _needs_section(d, ctx.now), _goals_section(d, ctx.now, execstate.states(ctx.db), tsr_context(ctx.db)), _system_section(d), _agents_section(d, ctx.now),
               _shipped_section(d, ctx.now), _quality_section(d), class_="ov")
