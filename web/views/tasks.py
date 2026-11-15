@@ -5,6 +5,7 @@ from types import SimpleNamespace
 
 from web import charts, ci, queries
 from web.queries import parse_ts
+from web import execstate   # HM-47
 from web.components import (key_link, data_table, disclosure, empty_state, filter_bar, ago, chips, ctx_org, href, org_badge, org_href, pr_label, row_status,
                             GROUP_ORDER, COLLAPSED)
 from web.prices import PRICES_AS_OF
@@ -176,11 +177,14 @@ def _metric_cell(t, field, fmt):
     return fmt(t[field])
 
 
-def _row(t, now):
+def _row(t, now, exec_=None):
     pr = el("span", link(t["pr_url"], pr_label(t["pr_url"])), " ", _ci_word(t["ci"])) if t["pr_url"] else ""
     n = t["rejections"]
     rej = f"{n} rejection{'s' if n != 1 else ''}" + (f" · {t['attempts']} tries" if t["attempts"] and t["attempts"] > 1 else "") if n else ""
-    title = el("span", el("a", t["title"], href=f"/task/{t['id']}"), " ", task_badge("blocked", t["waits"]) if t["status"] == "blocked" else None)
+    st = (exec_ or {}).get("tasks", {}).get(t["id"])   # HM-47: the state with its reason (blocked: on whom)
+    title = el("span", el("a", t["title"], href=f"/task/{t['id']}"), " ",
+               execstate.badge(st) if st and st["state"] not in (execstate.DONE, execstate.CANCELLED)
+               else task_badge("blocked", t["waits"]) if t["status"] == "blocked" else None)
     goal = el("span", link(f"/goal/{t['goal_id']}", t["goal_id"]), " ", org_badge(t.get("org")), class_="orgrow") if t["goal_id"] else ""
     return [row_status(t["status"]), key_link(t["id"], cls="mono"), title, goal,
             t["assignee"] or "", pr, rej, _metric_cell(t, "cost", lambda v: f"${v:,.2f}"), _metric_cell(t, "tokens", lambda v: f"{v:,}"),
@@ -229,12 +233,13 @@ def render(ctx, d):
             nxt = "desc"
         return org_href("/tasks", {"status": f["status"], "goal": f["goal"], "sort": col, "dir": nxt}, d.get("org"))
     now = ctx.now
+    exec_ = execstate.states(ctx.db)   # HM-47
     groups = []
     for s in GROUP_ORDER:
         rows = [t for t in d["tasks"] if t["status"] == s]
         if not rows:
             continue
-        groups.append({"key": s, "label": LABELS[s], "count": len(rows), "rows": [_row(t, now) for t in _sorted(rows, sort)],
+        groups.append({"key": s, "label": LABELS[s], "count": len(rows), "rows": [_row(t, now, exec_) for t in _sorted(rows, sort)],
                        "collapsed": s in COLLAPSED and f["status"] != s})
     note = None
     if f["goal"] or f["status"]:
@@ -525,8 +530,8 @@ def _fmt_ci(label):
     return el("span", glyph(_CI_GLYPH[label]), CI_WORDS.get(label, label), class_="st") if label in _CI_GLYPH else None
 
 
-def _meta(d):
-    bits = [status(d["status"]), link(f"/goal/{d['goal_id']}", d["goal_id"]) if d["goal_id"] else None, d["team_id"],
+def _meta(d, state=None):
+    bits = [execstate.badge(state) if state else status(d["status"]),   # HM-47: the one state, with its reason link(f"/goal/{d['goal_id']}", d["goal_id"]) if d["goal_id"] else None, d["team_id"],
             d["assignee"] or d["role"], link(d["pr_url"], pr_label(d["pr_url"])) if d["pr_url"] else None, _fmt_ci(d["ci"])]
     out = []
     for b in (b for b in bits if b):
@@ -665,7 +670,7 @@ def _detail_render(ctx, d):
                class_="tiles")
     blocks = _attempt_blocks(d["steps"])
     cycle = ([_attempt(n, b, n == len(blocks), ctx.now) for n, b in enumerate(blocks, 1)] if blocks else [empty_state("No events yet.")])
-    parts = [el("div", crumb, _meta(d), el("p", _cost_line(d["cost"]), class_="muted"), class_="tblock tblock--wide"), _flow_section(d),
+    parts = [el("div", crumb, _meta(d, execstate.states(ctx.db)["tasks"].get(d["id"])), el("p", _cost_line(d["cost"]), class_="muted"), class_="tblock tblock--wide"), _flow_section(d),
              section("Verdicts", _verdict_summary(d) or empty_state("No verdicts yet.")), tiles,
              _lifecycle_section(d), _usage_section(d), section("PR cycle", *cycle)]
     fu = [el("span", link(f"/task/{f['id']}", f["id"]), " ", f["title"], " ", task_badge(f["status"], f["waits"]), " ") for f in d["follow_ups"]]

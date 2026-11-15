@@ -72,8 +72,10 @@ class TestGoalsList(ViewCase):
         g1 = next(g for g in d["goals"] if g["id"] == "G-1")
         row = re.search(r'<li class="goalrow">.*?G-1.*?</li>', html, re.S).group(0)
         c = self.ctx()
+        from web import execstate
         shared = str(home.goal_row(g1, c.now, crit=d["criteria"].get("G-1"), last=d["last_activity"].get("G-1") or g1["updated"],
-                                   needs=d["needs_by_goal"].get("G-1", 0), extra=goals._blocked_cell(g1)))
+                                   needs=d["needs_by_goal"].get("G-1", 0), extra=goals._blocked_cell(g1),
+                                   state=execstate.states(c.db)["goals"]["G-1"]))   # HM-47: the row carries the state
         self.assertEqual(row, shared)
         for needle in ("G-1", "Goal one", ">P1<", "org-claude", "1/5 tasks", "criteria 1/4", "1 open PR", "needs you 2", "last activity"):
             self.assertIn(needle, row)
@@ -108,8 +110,9 @@ class TestGoalsList(ViewCase):
         self.assertIn('<span class="badge badge--bad">1 owner</span>', html)    # goal table, G-1
         self.assertIn('<span class="badge badge--muted">1 queued</span>', html)
         _, tasks_html = self.page(tasks)
-        self.assertIn('<span class="badge badge--bad">blocked: owner</span>', tasks_html)
-        self.assertIn('<span class="badge badge--muted">blocked (internal)</span>', tasks_html)
+        # HM-47: the tasks table shows the execution state; Blocked names whom it waits on, red only for the owner
+        self.assertRegex(tasks_html, r'<span class="badge badge--bad"[^>]*data-state="blocked">Blocked: owner</span>')
+        self.assertRegex(tasks_html, r'<span class="badge badge--muted"[^>]*data-state="blocked">Blocked: inside the team</span>')
 
     def test_no_internal_card_without_internal_blocked(self):
         self.w.execute("UPDATE tasks SET waits='owner' WHERE id='T-4'")

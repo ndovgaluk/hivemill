@@ -7,6 +7,7 @@ from types import SimpleNamespace
 from web import charts, queries, tokens as wtokens
 from web.prices import PRICES_AS_OF
 from scout import orgs as _orgs
+from web import execstate   # HM-47
 from web.components import (key_link, AGENT_COLS, COLLAPSED, agent_row, GROUP_ORDER, ago, chip, chips, ctx_org, data_table, disclosure, empty_state, filter_bar, needs_you_row,
                             org_badge, org_href, row_status, section, segmented, flow_mount)
 from web.flow import Scope as FlowScope
@@ -108,13 +109,13 @@ def _sorted(goals, sort, last):
     return goals
 
 
-def _goal_row(g, d, now):
+def _goal_row(g, d, now, exec_=None):
     return goal_row(g, now, crit=d["criteria"].get(g["id"]), last=d["last_activity"].get(g["id"]) or g["updated"],
-                    needs=d["needs_by_goal"].get(g["id"], 0), extra=_blocked_cell(g))
+                    needs=d["needs_by_goal"].get(g["id"], 0), extra=_blocked_cell(g), state=(exec_ or {}).get("goals", {}).get(g["id"]))
 
 
-def _goal_list(goals, d, now):
-    return el("ul", [_goal_row(g, d, now) for g in goals], class_="lrow-list")
+def _goal_list(goals, d, now, exec_=None):
+    return el("ul", [_goal_row(g, d, now, exec_) for g in goals], class_="lrow-list")
 
 
 def _chips(goals):
@@ -152,10 +153,11 @@ def render(ctx, d):
         parts.append(internal)
     order = segmented("Sort open goals", [("Default", org_href("/goals", {}, org), sort is None)] +
                       [(s.capitalize(), org_href("/goals", {"sort": s}, org), sort == s) for s in SORTS])
-    body = [order, _goal_list(_sorted(live, sort, d["last_activity"]), d, ctx.now)] if live else [empty_state("No open goals.")]
+    exec_ = execstate.states(ctx.db)   # HM-47
+    body = [order, execstate.legend(), _goal_list(_sorted(live, sort, d["last_activity"]), d, ctx.now, exec_)] if live else [empty_state("No open goals.")]
     parts.append(el("div", section("Open goals", *body, count=len(live) or None), id="open-goals"))
     if closed:
-        parts.append(el("div", disclosure("Done", _goal_list(closed, d, ctx.now), key="goals-done", count=len(closed)), id="done-goals"))
+        parts.append(el("div", disclosure("Done", _goal_list(closed, d, ctx.now, exec_), key="goals-done", count=len(closed)), id="done-goals"))
     return el("div", *parts)
 
 
@@ -425,7 +427,8 @@ def _detail_render(ctx, d):
     summary = f"{done}/{total} tasks" + (f" · {sum(_met(d).values())}/{len(cr)} criteria" if tagged else "")
     team = d["teams_detail"][0]["id"] if d["teams_detail"] else None
     ctl = _controls(ctx, d)   # HM-42: icons at the end of this line on a loopback bind, else a line of commands below
-    meta = el("p", status_badge(d["status"]), " ", org_badge(d.get("org")), " · ",
+    state = execstate.states(ctx.db)["goals"].get(d["id"])   # HM-47: the one state, with its reason
+    meta = el("p", execstate.badge(state) if state else status_badge(d["status"]), " ", org_badge(d.get("org")), " · ",
               f"P{d['priority']}" if d["priority"] is not None else "no priority",
               " · ", team or "no team", " · updated ", ts(d["updated"]), " · ", _now_tasks(d["tasks"]),
               *(ctl if isinstance(ctl, list) else []), class_="metarow")

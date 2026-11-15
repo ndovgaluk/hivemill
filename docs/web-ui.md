@@ -75,6 +75,26 @@ The status header has a global org filter, a segmented control "All · Claude ·
 - `/settings` (HM-1): curated global settings in groups, each with its current value, its default and what it does. The first group is **Worktrees**: `worktree_reuse` (On/Off, see [worktree-reuse.md](worktree-reuse.md)) and `worktree_pool_max` (free worktrees kept per project, 0 to 50). The second group is **Automation** (HM-7), the steps the tick can do itself: `lead_parking`, `lead_less_dispatch`, `review_autospawn`, `coder_ci_handoff`, `prcheck_required`, `risk_tiers` and `mech_merge`, each as a list of its allowed values. The CLI does not validate these keys, so the page accepts only the values it offers and refuses anything else with 400 before the CLI runs. On a loopback bind (`factory serve --bind 127.0.0.1`) each setting has a form with a Save button; on a LAN bind the page is read-only and shows the `factory config <key> <value>` command instead. Saving runs `bin/factory config <key> <value>`, so the CLI validates the value (a refused value is shown under the setting, nothing changes), checks the role (the server's user acts as the owner) and records the usual `config set` event; the server's own database connection stays read-only. The last group is **Merge gate** (HM-53): one row per project saying what clears a change, "GitHub CI" (empty `gate_cmd`) or "Local test run" (the command of [local-gate.md](local-gate.md), section "This factory"), with a switch, and the project's last local gate run (number, result, duration, start, head) or "no run yet"; a project with any other gate command shows "Custom command" and the command, read-only. Switching posts to `/settings/gate`, which has the same checks as `/settings` plus a known project and one of the two modes (400 otherwise, before anything runs), and runs `bin/factory project update`: to the local run it sets `gate_cmd`, `gate_count_cmd` and `gate_timeout_s` 3600; back to GitHub it empties `gate_cmd` and `gate_count_cmd`; `required_checks` is never touched. Below the projects is the `gate_ignore_pending_ci` switch (HM-52).
 - `/healthz`: plain "ok" for health checks. `/api/<page>.json` returns a page's data as JSON.
 
+## Execution states (HM-47)
+
+Every goal and task shows one state that says what is really going on, as a text badge (never colour or an icon alone)
+followed by a one-line reason. The goal page header, the Goals list, the Overview's goal rows, the Tasks table and the task
+page all show the same state for the same goal or task; a "What the states mean" legend sits above the Goals list.
+
+| State | Goal | Task |
+|---|---|---|
+| Running | an agent of the goal is live or starting; the reason names who (role and agent) | an agent of the task is live or starting |
+| Waiting | open, no agent running; the reason says why: queued for a start slot, being planned, waiting for approval, no agent running | queued, review and CI on its PR, not started, after a dependency, no agent running |
+| Paused | held by the owner (`factory goal pause`, `docs/goal-controls.md`), or the whole factory is halted (`docs/urgent-stop.md`) | its goal is paused |
+| Stopping | a stop was requested and an agent has not closed yet; the reason names it and the last failure (`close-failed`, ...) | the same |
+| Stopped | stopped by the owner (`factory goal stop`) | its goal is stopped |
+| Blocked | stuck; the label names who must act, e.g. "Blocked: owner" (red only when it is the owner) | status `blocked`, labelled with its `waits` |
+| Done / Cancelled | as stored | as stored |
+
+Running and Waiting are derived when the page is drawn; Paused and Stopped come from stored data (`goals.hold`,
+`factory_halt`). The derivation is `web/execstate.py`, a fixed number of queries per page. The flow debugger's boxes keep
+their own per-role states.
+
 ## Cursor usage: what is and is not measured
 
 Cursor Agent CLI leaves no token or usage counts on this machine. Checked (read-only, no message content read) on 2026-11-01: `~/.cursor/chats/<hash>/<id>/store.db` holds a `meta` row (agent id, name, mode, created time, last used model) and encrypted content blobs; `~/.cursor/projects/<dir>/agent-transcripts/*.jsonl` lines carry only role, message and tool calls; `~/.cursor/ai-tracking/ai-code-tracking.db` tracks AI-written code hashes, scored commits and conversation summaries per model; `agent-cli-state.json` and `cli-config.json` are settings. None has input, output or cache token counts. Headless runs (`scout/cursor_harness.py`, `--print`) use `--output-format text`, so the factory captures no usage from the CLI's output either.
