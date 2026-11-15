@@ -52,3 +52,81 @@ Final structure:
 
 ## "HM" = Hivemill
 From now on "HM" means Hivemill (saved to memory).
+
+## Q: The Factory should operate with TSR off. Would that be possible? Or is the current workflow based on tasks from TSR?
+
+Answer of 2026-11-16 (Opus 5.5), read from the code at `1b54223` plus the uncommitted HM-45 chip change:
+
+There are two workflows, and only the new one needs Taskosaur.
+
+| Workflow | Input | Needs TSR? |
+|---|---|---|
+| Default (upstream): boss → director → lead → coder, one PR per factory task, reviewer + QA + judge | a goal as free text (`factory goal add`) | **No.** Nothing in `bin/factory_cli.py` calls Taskosaur. |
+| Workflow engine (`factory-workflow`, DVDG-565 / HM-34, switch `workflow_engine`, default `off`) | one or more prepared TSR story keys (`factory wf start --story HM-12`) | **Yes.** It reads the story and children from TSR, and writes comments, the "reviewed by agent" mark, statuses and commit links back. Without `~/.config/factory/tsr-url` and `tsr-token`, a start is refused. |
+
+So today the factory **does** run with TSR off, but only through the default (slow) workflow. The fast workflow is TSR-based by design: the owner decision of 2026-11-14 is that only TSR keys make a batch, and the engine never writes or splits a task itself (`docs/workflow-engine.md`).
+
+What touches TSR when it is off:
+- `workflow_engine off` (the default): nothing of the engine is built or run.
+- HM-45 dashboard links: with `tsr_web_url` empty, the keys are plain chips. Goals that are not story runs show no key and no card.
+- `roles/settings/*.json.in` only deny agents writes to a `.tsr` folder; harmless without TSR.
+- The boss skill `story-run` is used only when the owner names TSR keys; free text goes to the director as before.
+
+Making the fast workflow run without TSR is possible, and the code is shaped for it. The engine reaches TSR only through the `Tracker` interface in `go/internal/workflow/deps.go` (7 methods: `TaskByKey`, `Children`, `Comment`, `AgentCheck`, `Statuses`, `SetStatus`, `LinkCommit`), and the tests already stub it. A second, local tracker would need:
+1. a source of stories without TSR, e.g. a story file in the repo, or stories and children kept in `factory.db` (new tables plus `factory story add`);
+2. a local `Tracker` implementation (status, comments and checks as rows or events in the factory DB, so the dashboard shows them);
+3. a config switch, e.g. `workflow_tracker = tsr | local`, so `wf start` picks the tracker;
+4. the boss skill accepting a local story, and a dashboard view of local stories (owner rule: every feature trackable in the UI).
+
+Not checked: the size of that change; it would be a new TSR task, sized by the planner.
+
+## Q: How does it read from TSR and write? Does it use direct API interaction or MCP?
+
+Answer of 2026-11-16 (Opus 5.5), read from `go/internal/tsr/` and `go/internal/workflow/` at `1b54223`:
+
+**The direct REST API, not MCP.** Factory agents have no MCP, so the workflow engine (Go, `factory-workflow`) calls Taskosaur's HTTP API itself, through package `go/internal/tsr`.
+
+- **Auth:** one personal access token (`tsr_pat_…`) of a Taskosaur *agent user*, sent as `Authorization: Bearer …`. Only agent users may set the "reviewed / tested by agent" marks.
+- **Config:** two files that only the engine reads. Each must be mode 0600, not a symlink and one line, in a folder of mode 0700. On this box both exist, and the base is `http://localhost:4000/api` (the API; the web pages are on 4001):
+  - `~/.config/factory/tsr-url`
+  - `~/.config/factory/tsr-token`
+- **Hardening:** 15 s timeout, at most 3 tries on a network error or a 5xx (never on a 4xx), redirects not followed. The token never appears in a message, log or event.
+- **Agents never hold the token.** They go through `factory wf tsr …` subcommands, which the engine runs with the token, each allowed only for named roles.
+
+| Call (`tsr.Client`) | HTTP | Used for |
+|---|---|---|
+| `TaskByKey` | `GET /tasks/key/{key}` | read a story or child at start; `wf tsr show` |
+| `Children` | `GET /tasks?…` (paged) | the story's children, in board order |
+| `Statuses` | `GET /task-statuses/project?projectId=…` | find the In Progress / In Review / Done status ids |
+| `SetStatus` | `PATCH /tasks/{id}/status` | builder: In Progress / In Review (`wf tsr status`); engine: Done after the merge |
+| `Comment` | `POST /task-comments` | builder / reviewer / QA comments (`wf tsr comment`); the engine's merge report |
+| `AgentCheck` | `PATCH /tasks/{id}/agent-check` | the reviewer's "reviewed by agent" PASSED / FAILED, with the head commit it reviewed |
+| `LinkCommit` | `POST /task-commits` | after the merge: each child's commits and the story's merge commit |
+| `Attachments`, `AttachmentByID`, `Download` | `GET /task-attachments/task/{id}`, `GET /task-attachments/{id}`, `…/download` | agents read attached screenshots and files (`wf tsr attachments`, `wf tsr attachment ID --out PATH`) |
+
+In order: **at start** the engine reads (story, children, statuses). **During the build** agents write through `factory wf tsr` (comments, In Progress / In Review), and the reviewer's result becomes an `AgentCheck` plus a comment. **After the merge** the engine links the commits, posts a report comment and sets every child and the story to Done.
+
+Who else talks to Taskosaur:
+- The **web dashboard**: never. HM-45 only builds links from `tsr_web_url` (the web address, e.g. `http://localhost:4001`).
+- The **owner's Claude Code sessions** (like this one) use the Taskosaur **MCP** server (`mcp__tsr__*`). That is outside the factory.
+
+## Q: do we need to care about DVDG-545?
+
+Answer of 2026-11-16 (Opus 5.5 session). Mostly no. Its useful part was built another way; the rest only serves the old workflow, which is on hold.
+
+**Built, under the workflow engine (DVDG-565 / HM-34) instead of DVDG-545:**
+- Taskosaur is reached over the REST API by a Go client (`go/internal/tsr`), with no MCP client.
+- The token sits in `~/.config/factory/tsr-url` and `tsr-token` (mode 0600, no symlinks). It belongs to an agent user, which matches the owner's decision of 2026-11-13 (a manager-level agent user with a personal access token).
+- Agents never hold the token. They call `factory wf tsr …`, which is held to the caller's own run (`docs/workflow-engine.md`, "Taskosaur access").
+- The engine reads a TSR story and its children and moves each child to In Review and then Done. It sets the "reviewed by agent" mark and links commits.
+- The dashboard links a run's goal to its TSR story and children (HM-45).
+- This is the "tight integration" the owner asked for in the DVDG-545 comments: TSR as the input and working surface.
+
+**Not built, and only needed if the old boss/director/lead workflow comes back:**
+- Mirroring old-workflow goals and factory tasks into TSR (`goals.tsr_key`, `projects.tsr_epic`, `tasks.tsr_key`).
+- The `tsr_sync` switch, the outbox, `tick_tsr_sync`, `factory tsr status|retry|backfill` and `docs/tsr-sync.md`.
+- None of the children DVDG-546…550 has a commit, and all are still To Do.
+
+**Gap to check:** a grep of `roles/` and the Go guard found no worker-guard rule naming `tsr-token`. "Agents never hold the token" may rest on the token's location and the CLI alone. Not checked further.
+
+**Recommendation:** close DVDG-545 and its children as superseded by DVDG-565, with a comment. Or park them until the old workflow is used again (owner decision of 2026-11-14: no slow workflow until HM-34 is done).
