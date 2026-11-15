@@ -24,6 +24,13 @@ Add entries with `/engineering-insights`
 
 ## What Doesn't Work
 
+### 2026-11-15 · mistake · A preview copied with `git archive $(git stash create)` leaves out new, untracked files
+Symptom: the HM-50 preview server exited at start with `ImportError: cannot import name 'flowdefs' from 'web'`.
+Cause: `git stash create` snapshots tracked files only, so a module added in the session and not yet `git add`ed is missing from the copy.
+Rule: copy the tree for a preview with `git ls-files -co --exclude-standard -z | tar --null -T - -c | tar -x -C /tmp/<name>`; check the server log, not only the port.
+Evidence: CLAUDE.local.md "UI work: always give the test URL"; web/flowdefs.py (new in HM-50); preview on port 18641, 2026-11-15
+Promoted: no
+
 ### 2026-11-14 · mistake · A merge-gate design built on a GitHub commit status was overtaken by an open story nobody had read
 Symptom: three answers proposed DevDigest as a gate through a GitHub status plus `required_checks`; story HM-34 (To Do) makes local tests the gate and removes pull requests from engine runs, so the design was redone.
 Cause: the design was drawn from the code alone; the open Taskosaur stories of the epic change that code's direction and were not listed first.
@@ -117,11 +124,18 @@ Promoted: no
 
 ## Codebase Patterns
 
+### 2026-11-15 · decision · The dashboard reads `workflow.db` read-only for the flow diagram; engine coordinates come from the server
+Cause: HM-50 needed each run's workflow, CI mode, children and incidents; the owner chose "Read workflow.db" over new factory events (TSR HM-50 comment, 2026-11-15).
+Rule: read engine state through `web/flowdefs.py` `read_run` (URI `mode=ro`, never created, `user_version` 2 checked); add a box to an engine diagram in `ENGINE_DEFS` with its col/row, not in the flow app.
+Evidence: web/flowdefs.py, web/flow.py (`build`, `OLD`), tests/test_web_flow_workflow.py
+Promoted: no
+
 ### 2026-11-14 · context · The dashboard cannot read `workflow.db`, so an engine feature is visible only through factory events
 Cause: `web/db.py` opens `factory.db` read-only and nothing in `web/` reads `workflow.db`; no run, child or incident state of the engine is shown today.
 Rule: plan the dashboard side of an engine feature as factory events (entity `workflow`, id the goal, JSON detail) that a `web/queries.py` function folds; add a new action to `PR_CYCLE_ACTIONS` when a task page must list it.
 Evidence: web/db.py, web/queries.py (`PR_CYCLE_ACTIONS`), go/internal/workflow/engine.go (`Record`); TSR HM-62
 Promoted: no
+Superseded: 2026-11-15 · The dashboard reads `workflow.db` read-only for the flow diagram; engine coordinates come from the server
 
 ### 2026-11-14 · context · `workflow.db` has no migration step: the engine refuses any `user_version` but its own
 Cause: `initState` creates the schema only on an empty file and returns `ErrStateVersion` for any other version, so a new table or column added to `schema` stops every running story on the live database.
@@ -208,10 +222,12 @@ Promoted: no
 
 ## Recurring Errors & Fixes
 
+- 2026-11-15: `pgrep -f <pattern> | xargs kill` … kills its own shell bit again — `pkill -f 'serve --bind 127.0.0.1 --port 18641'` in the same Bash call as the restart killed that call (exit 144); a separate call that stops the server by PID avoids it
 - 2026-11-13: `wsl … -- bash -lc "<command>"` quoting bit again — three times during DVDG-551 (grep patterns with `|` and quotes, `sed -n` ranges); the script form fixed each
 
 ## Session Notes
 
+- 2026-11-15: HM-50 diagram per workflow → added: a preview copied with `git stash create` leaves out new files; the dashboard reads `workflow.db` read-only
 - 2026-11-14: DevDigest integration planned as TSR tasks (DD-6, HM-55, HM-65) → added: gate design overtaken by an unread open story; dashboard cannot read workflow.db; workflow.db has no migration step
 - 2026-11-14: merge of pull request 11 reached the installed factory by itself → added: the installed factory fast-forwards itself to `origin/main`
 - 2026-11-14: HM-35 review fixes → added: workflow.db query inside its transaction hangs; pgrep -f in bash -lc kills itself

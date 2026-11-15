@@ -194,3 +194,54 @@ What the live data showed on 2026-11-13 (each is a finding the page should surfa
 - $8.11 of the goal's $21.39 was goal overhead.
 
 The design itself was never checked in a browser by the planning session; its logic ran under Node only.
+
+## Q: What's the purpose of the judge in the simple workflow? (2026-11-15, HM-50 demo, goal G-003: simple, CI github)
+
+The Judge box in that picture comes from the CI mode, not from the `simple` workflow.
+
+**Where it comes from.** Each engine run has two settings: the workflow (`simple`, `medium` or `huge`) and the CI mode (`github`, `local` or `none`). The workflow decides what happens before every child is reviewed: Engine, Builder, Reviewer and, for medium and huge, the planned steps. The CI mode decides how the run finishes. This run uses CI `github` (the header says `CI github: pull request, review gate, judge`), so its finish is the factory's own pull request path: Pull request → Review gate (Reviewer, QA) → Judge → Merged.
+
+**What the Judge does.** It makes the merge decision. `factory judge --merge` merges the pull request only when all of these hold:
+
+| Check | Source |
+|---|---|
+| a reviewer PASS and a QA PASS, both on the pull request's current head | the `verdicts` table; QA's PASS must carry a `## Gates` section of commands that passed (`docs/verdict-gates.md`) |
+| GitHub's required checks are green | `gh` |
+| nobody holds or stopped the merge | `tasks.judge_hold_reason`, the judge agent's stop flag (`docs/verdict-gates.md`, "Stop and hold before merge") |
+| no other judge or merger is merging the same task | the per-task merge lock (`bin/factory_cli.py`, the merge lock) |
+
+Then it runs `gh pr merge`. A FAIL goes back along the red "rework" arrow, which for an engine run returns to the Builder. The Judge can be an LLM agent, or the tick's mechanical merger (config `mech_merge`), which runs the same gate without an LLM for low-risk pull requests.
+
+**Is it needed in an engine run?** Not much. In an engine run every child has already been reviewed by an agent, so in `github` mode the code is reviewed twice (per child, then the final gate) before the Judge only checks the verdicts and CI. The ways to skip it already exist:
+
+| CI mode | Finish | Judge |
+|---|---|---|
+| `github` | pull request, final reviewer and QA, GitHub checks, Judge | yes |
+| `local` | the affected tests on this machine, then the engine merges into `main` and pushes | no |
+| `none` | the engine merges and pushes, no tests | no |
+
+Recommendation: run engine stories with `--ci local` (or set Settings, "CI for new story runs", to `local`). That drops the pull request, the second review, QA and the Judge, and keeps a test run. Keep `github` only for a story you want reviewed as a pull request.
+
+**About the demo numbers.** The demo data is made up. The "18m 00s" on Judge, Reviewer and QA belong to agents that `ci/demo_seed.py` invented for task T-0018. The "1h 00m" wait and "6→" counts come from that same seeded data, not from a real engine run.
+
+## Q: If there's no CI setup, or it's local, we need to reflect it. Are these workflow diagrams dynamically drawn or prepared in code beforehand, hardcoded? (2026-11-15, HM-50)
+
+Both CI modes are already drawn. The goal asked about (G-003) is a `github` run. These two show the other modes:
+
+- `http://127.0.0.1:18641/goal/G-004` — CI `local`: Reviewer → **Affected tests** → **Land on main** → Done. A red test run goes back to the Builder along a "red" arrow. There is no Pull request, Review gate or Judge. The header reads `CI local: no PR, affected tests on this machine`.
+- `http://127.0.0.1:18641/goal/G-005` — CI `none`: Reviewer → **Land on main**, marked "no tests", → Done. The header reads `CI none: no PR, no tests`.
+
+(Those URLs were the HM-50 demo server of 2026-11-15, not a permanent address.)
+
+**Are the diagrams drawn dynamically or hardcoded?** Partly each:
+
+| Part | How |
+|---|---|
+| Which boxes and arrows exist, where they sit | **Fixed in code**: `web/flowdefs.py` defines all 9 combinations (`simple`, `medium`, `huge` × CI `github`, `local`, `none`), each box with a grid column and row, and each arrow with a route. The coordinates are computed from those once, when the server starts. |
+| Which of the 9 a page shows | **At request time**, from the run's own row in `workflow.db` (`runs.workflow`, `runs.ci`). A goal that isn't a run there gets the old diagram. |
+| Box states, times, cost, notes, children, incident marks | **At request time**, from `factory.db` and `workflow.db`, refreshed every 30 s. |
+| Drawing in the browser | **Generic**: the flow app draws whatever boxes and coordinates the server sends; it has no code per workflow. Only the old diagram has a fixed layout in the app (`web/flowapp/src/diagram/layout.ts`). |
+
+So adding a step to one workflow, or a new CI mode, means adding a line in `web/flowdefs.py` with its box, column, row and arrow. Nothing changes in the flow app. The diagram is not derived from the engine's Go code, though: if the engine gains a step and nobody adds it there, the picture won't show it.
+
+**One case not checked.** The diagram follows the CI mode the run started with (`runs.ci`). Since HM-52, the project's merge gate can also run locally instead of on GitHub. A run with CI `github` in such a project would still show "Pull request → Review gate → Judge", even though the gate's tests run on this machine. If that combination matters, it needs one more definition, or a note on the Review gate box.
