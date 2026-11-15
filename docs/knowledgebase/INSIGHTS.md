@@ -24,6 +24,20 @@ Add entries with `/engineering-insights`
 
 ## What Doesn't Work
 
+### 2026-11-16 · mistake · An engine story run with `--ci local` on hivemill runs the whole test suite in one serial process
+Symptom: run G-007 (HM-32) built in 10 min and passed review in 5, then sat 41 min in `gating` at module 153 of 411, with about 4 h to go.
+Cause: `go/internal/workflow/land.go` starts `ci/affected.py --base origin/main --run` without `--quick`; a change to `DEFAULT_CONFIG` or another risky path selects every module, run one after another (~17000 s on this box).
+Rule: until the test step runs in parallel, don't start an engine run on hivemill for a change that touches `DEFAULT_CONFIG` or a risky path; use another project, or land by hand.
+Evidence: `go/internal/workflow/land.go:163`; `~/factory/run/workflow/G-007/affected-260b837e031c.log`; HM-32 closing comment
+Promoted: no
+
+### 2026-11-16 · mistake · A new top-level folder in the repo breaks `tests/test_live_checkout_deny.py`
+Symptom: after `.pi/agents` was committed (`4c61db9`), the test failed with `coder: Edit not denied for ~/factory/.pi`.
+Cause: the test lists every top-level entry of `HEAD` and `origin/main` and requires coder and QA settings to deny Edit, Write and NotebookEdit on it in the live checkout.
+Rule: when adding a top-level file or folder, add its six deny rules to `roles/settings/coder.json.in` and `qa.json.in` in the same commit, and run `tests.test_live_checkout_deny`.
+Evidence: fix `419545c`; `tests/test_live_checkout_deny.py:62`
+Promoted: no
+
 ### 2026-11-15 · mistake · A preview copied with `git archive $(git stash create)` leaves out new, untracked files
 Symptom: the HM-50 preview server exited at start with `ImportError: cannot import name 'flowdefs' from 'web'`.
 Cause: `git stash create` snapshots tracked files only, so a module added in the session and not yet `git add`ed is missing from the copy.
@@ -185,6 +199,13 @@ Promoted: no
 
 ## Tool & Library Notes
 
+### 2026-11-16 · context · `tests/test_sandbox_spawn.py` fails when the shell's PATH holds a folder with a space
+Symptom: two failures expecting `export PATH=<agent bin>:…`; the pane line was `export PATH='…'`, quoted.
+Cause: WSL interop adds Windows folders such as `/mnt/c/Program Files/…` to PATH, and the spawn code quotes a PATH that holds a space; the test expects it unquoted.
+Rule: run that module with a clean PATH (`env PATH=/usr/local/bin:/usr/bin:/bin:$HOME/.local/bin python3 -m unittest tests.test_sandbox_spawn`) before calling it a real failure.
+Evidence: `tests/test_sandbox_spawn.py:779` and `:813`; passed with a clean PATH on 2026-11-16
+Promoted: no
+
 ### 2026-11-14 · context · The Python LSP (pyright) of a session started in `D:\` indexes the old Windows checkout, not the WSL clone
 Symptom: `workspaceSymbol tick_mech_merge` answered `/d:/_DEV/__Factories/hivemill/bin/factory_cli.py` line 6118, while the clone `hivemill-engine` had it at line 6606.
 Cause: the LSP workspace root is the session's start folder (`D:\_DEV\__Factories\hivemill`); `\\wsl$` files opened by path get diagnostics but no workspace index. The Go server answers "No packages found" for `\\wsl$` files.
@@ -222,11 +243,13 @@ Promoted: no
 
 ## Recurring Errors & Fixes
 
+- 2026-11-16: A preview copied with `git archive $(git stash create)` leaves out new, untracked files bit again — `git stash create` refused while `web/static/copy.js` was intent-to-add, and the archive had no `copy.js`; copied it by hand
 - 2026-11-15: `pgrep -f <pattern> | xargs kill` … kills its own shell bit again — `pkill -f 'serve --bind 127.0.0.1 --port 18641'` in the same Bash call as the restart killed that call (exit 144); a separate call that stops the server by PID avoids it
 - 2026-11-13: `wsl … -- bash -lc "<command>"` quoting bit again — three times during DVDG-551 (grep patterns with `|` and quotes, `sed -n` ranges); the script form fixed each
 
 ## Session Notes
 
+- 2026-11-16: HM-45 chips, first engine run G-007 (HM-32) → added: `--ci local` runs the full suite serially on hivemill; a new top-level folder breaks test_live_checkout_deny; test_sandbox_spawn and a PATH with spaces
 - 2026-11-15: HM-50 diagram per workflow → added: a preview copied with `git stash create` leaves out new files; the dashboard reads `workflow.db` read-only
 - 2026-11-14: DevDigest integration planned as TSR tasks (DD-6, HM-55, HM-65) → added: gate design overtaken by an unread open story; dashboard cannot read workflow.db; workflow.db has no migration step
 - 2026-11-14: merge of pull request 11 reached the installed factory by itself → added: the installed factory fast-forwards itself to `origin/main`
