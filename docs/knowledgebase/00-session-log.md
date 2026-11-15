@@ -273,3 +273,5 @@ One line per turn: what was asked, what was done or found. Explanations live in 
 - 2026-11-16: HM-45 chips committed (0e4fe07, not pushed), Done. Owner decision: keep using Taskosaur as the engine's story source; no local tracker planned.
 - 2026-11-16: Q: do we need to care about DVDG-545? Answer in 27-tsr-integration-and-models.md (mostly superseded by the workflow engine; old-workflow mirroring not built; possible token guard gap).
 - 2026-11-16: DVDG-545 trimmed to S: only DVDG-546 kept (worker guard + settings deny reads of ~/.config/factory/tsr-token; confirmed the guard allows cat of it today); DVDG-547..550 archived.
+- 2026-11-16: first story run through the new workflow: HM-32 (scope items 6-7 added: flags.json entry, Go defaults and goldens), started as G-007 (T-0031, builder coder-t-0031, workflow simple, ci=local).
+- 2026-11-16: G-007 (HM-32) built in 10 min, reviewed in 5, then stuck 41 min in the engine's serial full-suite test step; owner chose stop and land by hand: G-007/T-0031 cancelled, 260b837 verified and pushed with guard fix 419545c (.pi deny for coder/qa); HM-32 Done. Owner: next engine run targets another project.
