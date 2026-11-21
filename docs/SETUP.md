@@ -54,10 +54,14 @@ The same installer runs without Claude. From a checkout, run it in your own term
 ```
 git clone https://github.com/volekerb/hivemill.git
 cd hivemill
-python3 plugins/hivemill/scripts/install.py --check
-python3 plugins/hivemill/scripts/install.py --dry-run
-python3 plugins/hivemill/scripts/install.py --yes
+plugins/hivemill/scripts/install --check
+plugins/hivemill/scripts/install --dry-run
+plugins/hivemill/scripts/install --yes
 ```
+
+`plugins/hivemill/scripts/install` is a short POSIX shell script, not the installer itself. It detects your OS and CPU (Linux amd64 or arm64, macOS arm64), downloads the `hivemill-install` binary of the plugin's release from GitHub, compares its sha256 with the value written into the script, and only then runs it with your arguments. A different hash, a missing `curl` or `sha256sum`/`shasum`, or an unsupported platform stops it with a non-zero exit before anything runs. The installer is a Go program, so the target machine needs no Python for the install step (the factory itself still needs Python 3.11 or newer). The binary is cached in `${XDG_CACHE_HOME:-~/.cache}/hivemill-install/<version>/` and is checked again on every run. Until the release process has written the hashes (a checkout of the development branch), the script refuses to run; use the Python installer below.
+
+If the Go installer misbehaves, `plugins/hivemill/scripts/install.py` is still in the repository until the Python removal step lands. The release notes name the last ref that carries it, so `git checkout <that ref>` and `python3 plugins/hivemill/scripts/install.py ...` take you back.
 
 `--check` is a read-only report, `--dry-run` prints the ordered plan and changes nothing, `--yes` does the work. Give exactly one of them.
 
@@ -167,7 +171,11 @@ Read the Upgrade section of that version's release notes (https://github.com/vol
 | (tick housekeeping) | — | Hourly the tick also removes stale test-harness homes `/tmp/zz-test-factory-<8 chars>`: real dirs of the factory user directly under `/tmp`, nothing in the tree touched for 1 h, no process of that user with its cwd or an fd inside (an unreadable `/proc/<pid>` keeps everything), at most 500 per pass; one `tmp-harness-swept` event. The `/tmp` percent in `factory res` and the gate text has one decimal. |
 | `max_five_hour_pct` | `92` | The gate closes above this share of the five-hour Claude usage window. |
 | `max_seven_day_pct` | `92` | Same, for the seven-day window. |
+| `usage_reopen_samples` | `3` | After a fresh 5h or 7d reading at or over its cap, a non-cursor spawn stays queued while that reading is stale or unreadable, and until this many consecutive fresh readings (one per usage-file timestamp) are under both caps. With no at-cap reading yet, a stale reading does not close the gate. Cursor spawns ignore it. |
 | `nudge_cooldown_s` | `120` | Minimum seconds between nudges to one agent about unread mail. |
+| `cursor_kickoff_grace_s` | `180` | Cursor agents only: how long a kickoff message may stay unread before the tick submits the kickoff again, and again that long before it relaunches the pane once and then escalates. `0` turns the check off. See [runtimes.md](runtimes.md). |
+| `idle_watchdog` | `shadow` | `off`, `shadow` or `on`. A live worker with no progress for `idle_watchdog_min` gets one nudge, then one fresh relaunch, then one alert to both directors. `shadow` writes event rows only. See [idle-watchdog.md](idle-watchdog.md). |
+| `idle_watchdog_min` | `30` | Minutes without progress before the watchdog nudges. The relaunch comes half that long after the nudge, and the alert that long after the relaunch. |
 | `director_cycle_s` | `900` | How often the tick gives the director a planning cycle. |
 | `blocked_alert_s` | `600` | How long an agent may sit on a dialog before it is reported blocked. |
 | `hq_unblock_s` | `900` | After this long the tick denies (Esc) a permission dialog on a boss, director or lead pane. |
@@ -188,10 +196,12 @@ Read the Upgrade section of that version's release notes (https://github.com/vol
 | `opus_effort` | `medium` | `--effort` level for Opus agents. Empty leaves Claude's default. Sonnet agents are never touched. |
 | `judge_max_refreshes` | `4` | Refreshes one `factory judge --merge` run does before it gives up with `STALE-LOOP`. Invalid or below 1 falls back to 4. |
 | `judge_ci_wait_s` | `2400` | `factory judge --merge` waits this long for pending CI before refusing. |
+| `judge_hold_expiry_min` | `120` | Minutes a manual judge hold (`factory task update --judge-hold`) may stay on a reviewer+QA PASS PR unless its text names a boss decision (`boss-approved M<id>`). `0` = off. See [judge-hold-expiry.md](judge-hold-expiry.md). |
 | `skilleval_root` | `~/.cache/factory-skilleval` | Where vendored third-party skills are kept for evaluation. Must lie outside the factory home and `~/.claude`. |
 | `digest_hour` | `8` | Local hour from which the tick sends the daily digest (director to boss), once a day. |
 | `retro_enabled` | `1` | `1` starts the daily retro agent. `0` turns it off. Any other value does not start a new run. See docs/retro.md. |
 | `retro_hour` | `6` | Local hour from which the tick may start that day's retro. |
+| `retro_org` | `cursor` | `cursor` or `claude`: org/runtime of the daily retro agent (agent name `<org>-retro`). See docs/retro.md. |
 | `retro_max_minutes` | `20` | Wall-clock budget of one retro run. |
 | `scout_enabled` | `1` | `1` = the tick starts the skill scout at each slot; `0` = no new runs. |
 | `scout_slots` | `09,18` | Local hours at which the scout runs, comma separated. |

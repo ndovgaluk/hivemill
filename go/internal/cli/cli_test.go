@@ -53,12 +53,6 @@ func newRig(t *testing.T, env map[string]string) *rig {
 	return r
 }
 
-func repoFile(t *testing.T, rel string) string {
-	t.Helper()
-	wd, _ := os.Getwd() // go/internal/cli
-	return filepath.Join(wd, "..", "..", "..", filepath.FromSlash(rel))
-}
-
 func (r *rig) sql(q string, args ...any) {
 	r.t.Helper()
 	d := dbtest.Raw(r.t, r.dbPath)
@@ -104,7 +98,7 @@ func TestDelegate(t *testing.T) {
 		{"--help", []string{"--help"}, nil},
 		{"whoami -h", []string{"whoami", "-h"}, nil},
 		{"config write", []string{"config", "k", "v"}, nil},
-		{"task tier", []string{"task", "tier", "T-1"}, nil},
+		{"task update with a flag Go does not read", []string{"task", "update", "T-1", "--follow-up-of", "T-2"}, nil},
 		{"agents --bogus", []string{"agents", "--bogus"}, nil},
 		{"no args", nil, nil},
 		{"FACTORY_CLI_IMPL=python forces python", []string{"whoami"}, func(r *rig) { r.env["FACTORY_CLI_IMPL"] = "python" }},
@@ -252,7 +246,7 @@ func TestConfigReads(t *testing.T) {
 	if r.out.String() != "\n" {
 		t.Fatalf("default read %q", r.out.String())
 	}
-	if code := r.run("config", "no_such_key"); code != 2 || !strings.HasPrefix(r.errb.String(), "factory: unknown key no_such_key; known: guard_impl, model_cleaner,") {
+	if code := r.run("config", "no_such_key"); code != 2 || !strings.HasPrefix(r.errb.String(), "factory: unknown key no_such_key; known: guard_impl, model_boss,") {
 		t.Fatalf("unknown key: %d %q", code, r.errb.String())
 	}
 	r.run("config", "--changed")
@@ -419,11 +413,11 @@ func TestDefaultsMatchFlagsJSON(t *testing.T) {
 		t.Fatalf("DEFAULT_CONFIG literal: %v", err)
 	}
 	if len(lit) != len(DefaultConfig) {
-		t.Fatalf("defaults_gen.go has %d keys, DEFAULT_CONFIG has %d: run `go generate ./internal/cli`", len(DefaultConfig), len(lit))
+		t.Fatalf("store/defaults_gen.go has %d keys, DEFAULT_CONFIG has %d: run `go generate ./internal/store`", len(DefaultConfig), len(lit))
 	}
 	for i, e := range lit {
 		if DefaultConfig[i].Key != e.Key || DefaultConfig[i].Value != e.Value {
-			t.Fatalf("defaults_gen.go drifted at %s (%q vs %q): run `go generate ./internal/cli`", e.Key, DefaultConfig[i].Value, e.Value)
+			t.Fatalf("store/defaults_gen.go drifted at %s (%q vs %q): run `go generate ./internal/store`", e.Key, DefaultConfig[i].Value, e.Value)
 		}
 	}
 	flagsPath := repoFile(t, "bin/flags.json")

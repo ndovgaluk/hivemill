@@ -22,6 +22,17 @@ class OrgRegistryTests(unittest.TestCase):
         self.assertEqual([r for r in orgs.ORGS["cursor"]["models"] if orgs.model("cursor", r).startswith("claude-")],
                          ["evaluator"])
 
+    def test_cursor_qa_runs_on_judgement_model(self):
+        # T-1615 (owner decision 2026-11-15): QA is part of the review gate, so cursor qa uses the judgement model.
+        self.assertEqual(
+            (orgs.model("cursor", "qa"), orgs.model("cursor", "reviewer"), orgs.model("cursor", "coder"),
+             orgs.model("claude", "qa")),
+            ("grok-4.7-high", "grok-4.7-high", "composer-2.5", "claude-sonnet-5-5"))
+        # no other cursor build role moved
+        self.assertEqual({r: orgs.model("cursor", r) for r in orgs.BUILD_ROLES if r != "qa"},
+                         {"coder": "composer-2.5", "cleaner": "composer-2.5", "scout": "composer-2.5",
+                          "retro": "composer-2.5", "evaluator": "claude-sonnet-5-5"})
+
     def test_names(self):
         self.assertEqual(orgs.name("cursor", "coder-t-0001"), "cursor-coder-t-0001")
         self.assertEqual(orgs.name("cursor", "cursor-coder-t-0001"), "cursor-coder-t-0001")
@@ -295,6 +306,7 @@ class GoalAlertRoutingTests(FactoryTestCase):
         with e.load_factory() as f:
             con = f.db()
             e.seed_agent(f._rerun_name(con, "T-0001", "qa", self.SHA), "qa", goal="G-001", team=self.TEAM, task="T-0001", status="exited")
+            f._throttle_set(con, f._respawn_key("T-0001", self.SHA, "qa"), 1.0)  # T-1600: the alert is the second ending, after the one replacement
             f._review_alert_no_verdict(con, con.execute("SELECT * FROM tasks WHERE id='T-0001'").fetchone(), self.SHA, 1.0)
             con.commit()
         return {r["recipient"] for r in e.sql("SELECT recipient FROM messages WHERE subject LIKE 'review autospawn: qa ended%'")}

@@ -16,14 +16,15 @@ ENTRIES = json.loads(REGISTRY.read_text())["keys"]
 KINDS = {"flag", "setting"}
 STATES = {"off", "shadow", "on", "removed"}
 FLAGS = {
-    "lead_parking", "stale_policy", "refresh_lane", "lead_less_dispatch", "review_autospawn", "prcheck_required",
-    "git_push", "state_push", "mech_merge", "risk_tiers", "red_main_freeze", "gate_sandbox", "test_sandbox",
-    "test_cgroup", "test_sandbox_subuid", "gate_post_status", "sandbox_roles", "worker_gh_roles", "task_clones", "worktree_reuse",
-    "serve_show_text",
+    "block_conditions", "lead_parking", "stale_policy", "refresh_lane", "lead_less_dispatch", "review_autospawn",
+    "prcheck_required", "git_push", "state_push", "mech_merge", "risk_tiers", "red_main_freeze", "gate_sandbox",
+    "test_sandbox",
+    "test_cgroup", "test_sandbox_subuid", "gate_post_status", "sandbox_roles", "worker_gh_roles", "task_clones",
     "tick_async_start", "lead_wake_debounce_s", "tick_phase_timers", "orphan_reap_mode", "scout_enabled",
     "gate_fast_projects", "issue_intake_repos", "cursor_pilot_roles", "agent_runtimes",
-    "red_pr_owner_alert", "coder_ci_handoff", "idle_coder_reap", "judge_wait_main_run", "workflow_engine",
-    "owner_alert_feed", "owner_alert_send", "gate_ignore_pending_ci", "hand_merge_accept",
+    "red_pr_owner_alert", "coder_ci_handoff", "idle_coder_reap", "judge_wait_main_run",
+    "owner_alert_feed", "owner_alert_send", "idle_watchdog", "gh_call_trace",
+    "worktree_reuse", "serve_show_text", "workflow_engine", "gate_ignore_pending_ci", "hand_merge_accept",  # fork
 }
 BASELINE_ON = {"git_push", "stale_policy", "scout_enabled", "gate_fast_projects"}
 
@@ -77,7 +78,7 @@ class Registry(unittest.TestCase):
         for k in FLAGS:
             if k in BASELINE_ON:
                 self.assertEqual((by[k]["state"], by[k]["promoted_in"]), ("on", "baseline"), k)
-            elif k == "orphan_reap_mode":
+            elif k in ("orphan_reap_mode", "idle_watchdog"):
                 self.assertEqual(by[k]["state"], "shadow")
             else:
                 self.assertEqual(by[k]["state"], "off", k)
@@ -101,6 +102,10 @@ class FlagsCommand(FactoryTestCase):
             return {t: con.execute(f"SELECT * FROM {t}").fetchall() for t in ("config", "agents", "events", "messages")}
         finally:
             con.close()
+
+    def test_block_conditions_rejects_on(self):
+        self.env.seed_agent("zz-test-director", "director")
+        self.refused(2, "config", "block_conditions", "on", agent="zz-test-director")
 
     def test_default_lists_flags_only(self):
         before = self.snapshot()

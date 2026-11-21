@@ -383,7 +383,10 @@ class WorkerGuardTests(unittest.TestCase):
             if role in NON_WORKERS:  # HQ roles run only the PRIV rule (T-0057): --hq, no --role
                 cmds = [h["command"] for g in s["hooks"]["PreToolUse"] for h in g["hooks"]]
                 self.assertEqual(len(cmds), 1, role)
-                self.assertEqual(shlex.split(cmds[0])[-2:], [LIVE_HOOK, "--hq"], role)
+                # T-1803: the boss hook adds --role boss after --hq (hq_deny_hit needs the role)
+                tail = ["--hq", "--role", "boss"] if role == "boss" else ["--hq"]
+                argv = shlex.split(cmds[0])
+                self.assertEqual(argv[-len(tail) - 1:], [LIVE_HOOK] + tail, role)
                 if role == "boss":  # boss also has the inbox UserPromptSubmit hook (T-0093)
                     self.assertIn("UserPromptSubmit", s["hooks"], role)
                 continue
@@ -725,6 +728,7 @@ class ClaudeGuardTests(unittest.TestCase):
                 added = {"Advisor", "Bash(claude:*)", "Bash(sudo:*)", "Bash(su:*)", "Bash(doas:*)", "Bash(pkexec:*)",
                          "Bash(docker:*)", "Edit(/@FACTORY_LIVE_HOME@/db/**)", "Write(/@FACTORY_LIVE_HOME@/db/**)",  # T-A
                          "Edit(/@FACTORY_LIVE_HOME@/run/settings/**)", "Write(/@FACTORY_LIVE_HOME@/run/settings/**)"}  # T-B2
+                added |= {f"Bash({c}:*)" for c in ("hc server stop", "herdr-core server stop", "hc kill", "hc rm", "hc run")}  # T-1446
                 added |= {f"{t}(/@FACTORY_LIVE_HOME@/run/guard-export.json*)"
                           for t in ("Edit", "Write", "MultiEdit", "NotebookEdit")}  # T-0883
                 self.assertEqual([x for x in tdeny if x not in added], [x for x in old if x not in added])

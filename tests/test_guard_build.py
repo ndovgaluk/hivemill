@@ -18,6 +18,15 @@ MAIN_OK = "package main\n\nfunc main() {}\n"
 MAIN_BAD = "package main\n\nfunc main() { this does not compile }\n"
 GO_MOD = "module guardtest\n\ngo 1.20\n"
 BIN_DIR = Path(__file__).resolve().parent.parent / "bin"
+_FAKE_SCHEDULE_GO = (
+    '#!/bin/sh\n'
+    'if [ "$1" = schedule ] && [ "$2" = list ]; then\n'
+    '  echo "fixed schedules: digest_hour=7 retro_hour=22 scout_slots="\n'
+    '  exit 0\n'
+    'fi\n'
+    'echo FAKE-GO\n'
+    'exit 0\n'
+)
 
 
 def rmtree_rw(path):
@@ -271,6 +280,10 @@ class GuardBuildHardeningTests(FactoryTestCase):
             self._seeded = True
         self.assertEqual(self.env.run("config", "guard_impl", impl, agent="dir-1").returncode, 0)
 
+    def hold_expiry_min(self, v):
+        """judge_hold_expiry_min (T-1631: a nonzero value also builds factory-go); tests about cli/tick impl set it to 0."""
+        self.env.sql("INSERT OR REPLACE INTO config(key,value) VALUES('judge_hold_expiry_min',?)", (v,))
+
     def ncalls(self):
         return len(self.calls.read_text().split()) if self.calls.exists() else 0
 
@@ -412,15 +425,82 @@ class GuardBuildHardeningTests(FactoryTestCase):
     def test_gate_python_never_runs_go_and_still_writes_the_flag(self):
         h = write_go(self.env.home_dir)
         self.fake_go(self.OK_BUILD)
+        self.hold_expiry_min("0")
         with self.factory() as f:
             for tick in (True, False):
                 f.guard_tick(f.db(), tick=tick, src=self.env.home_dir, lib=self.lib, go=self.go)
+        # T-1804: since then both binaries are built at python/python (one call each, the second tick finds the stamps),
+        # but the flag stays python: nothing routes to Go
+        self.assertEqual(self.ncalls(), 2)
+        self.assertEqual((self.env.home_dir / "run" / "guard_impl").read_text(), f"python {h}\n")
+        self.assertEqual((self.env.home_dir / "run" / "cli_impl").read_text(), "python -\n")
+
+    def test_python_python_with_hold_expiry_on_builds_factory_go_only(self):  # T-1631, widened by T-1804
+        write_go(self.env.home_dir)
+        self.fake_go(self.OK_BUILD)
+        self.hold_expiry_min("120")
+        with self.factory() as f:
+            f.guard_tick(f.db(), tick=True, src=self.env.home_dir, lib=self.lib, go=self.go)
+        self.assertEqual(self.ncalls(), 2)
+        self.assertTrue((self.lib / "factory-go.stamp").exists())
+        self.assertTrue((self.lib / "worker-guard.stamp").exists())
+
+    def test_python_python_python_builds_each_binary_once_and_stamps_skip(self):  # T-1804 acceptance 1
+        write_go(self.env.home_dir)
+        self.fake_go(self.OK_BUILD)
+        self.hold_expiry_min("0")
+        with self.factory() as f:
+            with mock.patch.object(f, "build_cli_go", wraps=f.build_cli_go) as cli, \
+                    mock.patch.object(f, "build_guard_go", wraps=f.build_guard_go) as guard:
+                f.guard_tick(f.db(), tick=True, src=self.env.home_dir, lib=self.lib, go=self.go)
+                # build_cli_go delegates to build_guard_go with name=factory-go; count the direct guard call apart
+                direct = [c for c in guard.call_args_list if "name" not in c.kwargs]
+                self.assertEqual((cli.call_count, len(direct)), (1, 1))
+            self.assertEqual(self.ncalls(), 2)
+            self.assertTrue((self.lib / "factory-go.stamp").exists())
+            self.assertTrue((self.lib / "worker-guard.stamp").exists())
+            f.guard_tick(f.db(), tick=True, src=self.env.home_dir, lib=self.lib, go=self.go)
+        self.assertEqual(self.ncalls(), 2)  # stamps match: no go invocation
+
+    def test_dispatch_flags_unchanged_by_the_build(self):  # T-1804 acceptance 2
+        h = write_go(self.env.home_dir)
+        self.hold_expiry_min("0")
+        self.set_impl("python")
+        for cli_impl, guard_impl in (("python", "python"), ("python", "go"), ("shadow", "python"), ("go", "go")):
+            self.fake_go(self.OK_BUILD)
+            self.env.sql("INSERT OR REPLACE INTO config(key,value) VALUES('cli_impl',?)", (cli_impl,))
+            self.env.sql("INSERT OR REPLACE INTO config(key,value) VALUES('guard_impl',?)", (guard_impl,))
+            lib = self.tmp / f"lib-{cli_impl}-{guard_impl}"
+            with self.factory() as f:
+                csv = f.cfg(f.db(), "cli_go_cmds")
+                f.guard_tick(f.db(), tick=True, src=self.env.home_dir, lib=lib, go=self.go)
+            want_cli = "python -" if cli_impl == "python" else f"{cli_impl} {h} {csv}"
+            self.assertEqual((self.env.home_dir / "run" / "cli_impl").read_text(), want_cli + "\n", cli_impl)
+            self.assertEqual((self.env.home_dir / "run" / "guard_impl").read_text(), f"{guard_impl} {h}\n", guard_impl)
+            self.assertTrue((lib / "factory-go.stamp").exists() and (lib / "worker-guard.stamp").exists())
+
+    def test_load_over_cap_builds_nothing(self):  # T-1804 acceptance 3
+        write_go(self.env.home_dir)
+        self.fake_go(self.OK_BUILD)
+        self.hold_expiry_min("0")
+        with self.factory() as f, mock.patch.object(f, "load1", return_value=1e9):
+            f.guard_tick(f.db(), tick=True, src=self.env.home_dir, lib=self.lib, go=self.go)
         self.assertEqual(self.ncalls(), 0)
         self.assertFalse(self.lib.exists())
-        self.assertEqual((self.env.home_dir / "run" / "guard_impl").read_text(), f"python {h}\n")
+
+    def test_failing_build_prints_one_line_per_binary_and_returns(self):  # T-1804 acceptance 3
+        write_go(self.env.home_dir)
+        self.fake_go("exit 1")
+        self.hold_expiry_min("0")
+        with self.factory() as f:
+            f.guard_tick(f.db(), tick=True, src=self.env.home_dir, lib=self.lib, go=self.go)
+        lines = [x for x in self.err.getvalue().splitlines() if "go build" in x]
+        self.assertEqual(len(lines), 2, self.err.getvalue())  # guard + factory-go, one line each
+        self.assertFalse((self.lib / "factory-go.stamp").exists())
 
     def test_gate_open_for_go_and_shadow_on_both_paths(self):
         write_go(self.env.home_dir)
+        self.hold_expiry_min("0")  # about guard_impl only
         for impl, tick in (("go", True), ("shadow", False)):
             self.fake_go(self.OK_BUILD)
             lib = self.tmp / f"lib-{impl}"
@@ -428,7 +508,7 @@ class GuardBuildHardeningTests(FactoryTestCase):
             before = self.ncalls()
             with self.factory() as f:
                 f.guard_tick(f.db(), tick=tick, src=self.env.home_dir, lib=lib, go=self.go)
-            self.assertEqual(self.ncalls(), before + 1, impl)
+            self.assertEqual(self.ncalls(), before + 2, impl)  # guard + factory-go (T-1804)
             self.assertTrue((lib / "worker-guard.stamp").exists(), impl)
 
     # E2 / acceptance 17: exactly this environment and argv, whatever the caller's environment holds
@@ -484,24 +564,31 @@ class CliImplTests(FactoryTestCase):
         super().setUpClass()
         cls.bin = None
         cls.seed = os.environ.get("GOMODCACHE_SEED")  # a module cache holding go/go.mod's deps (CI: setup-go + go mod download)
-        if REAL_GO and cls.seed:
-            cls.tmpdir = mktmp(cls, "zz-cli-impl-")
-            out = cls.tmpdir / "factory-go"
-            env = {**os.environ, "CGO_ENABLED": "0", "GOTOOLCHAIN": "local", "GOFLAGS": "", "GOPROXY": "off",
-                   "GOMODCACHE": cls.seed}
-            p = subprocess_run([REAL_GO, "build", "-buildvcs=false", "-trimpath", "-o", str(out), "./cmd/factory"],
-                               BIN_DIR.parent / "go", env)
-            if p.returncode:
+        if not REAL_GO:
+            return
+        cls.tmpdir = mktmp(cls, "zz-cli-impl-")
+        out = cls.tmpdir / "factory-go"
+        env = {**os.environ, "CGO_ENABLED": "0", "GOTOOLCHAIN": "local", "GOPROXY": "off"}
+        if cls.seed:
+            env["GOFLAGS"] = ""
+            env["GOMODCACHE"] = cls.seed
+        else:
+            env["GOFLAGS"] = "-mod=readonly"
+        p = subprocess_run([REAL_GO, "build", "-buildvcs=false", "-trimpath", "-o", str(out), "./cmd/factory"],
+                           BIN_DIR.parent / "go", env)
+        if p.returncode:
+            if cls.seed:
                 raise AssertionError(f"go build ./cmd/factory failed: {p.stderr}")
-            cls.bin = out
+            return
+        cls.bin = out
 
     def setUp(self):
         super().setUp()
         self.h = write_go(self.env.home_dir)
         self.lib = self.env.user_home / ".local" / "lib" / "factory"
         self.lib.mkdir(parents=True)
-        if self.bin is None:  # no real factory-go (needs go + GOMODCACHE_SEED): a fake one is enough for dispatch/flag tests
-            (self.lib / "factory-go").write_text("#!/bin/sh\necho FAKE-GO\n")
+        if self.bin is None:  # no real factory-go: a fake answers dispatch/flag tests; schedule list prints the fixed-schedules line
+            (self.lib / "factory-go").write_text(_FAKE_SCHEDULE_GO)
             (self.lib / "factory-go").chmod(0o755)
         else:
             shutil.copy(self.bin, self.lib / "factory-go")
@@ -570,6 +657,28 @@ class CliImplTests(FactoryTestCase):
     def test_unlisted_command_stays_python(self):  # acceptance 5
         self.assertEqual(self.impl(self.call("agents")), "impl=python")
 
+    def test_schedule_runs_go_even_when_cli_impl_python(self):
+        self.cfg("cli_impl", "python")
+        p = self.call("schedule", "list")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertIn("fixed schedules:", p.stdout)
+
+    def test_schedule_stale_go_binary_exit_2_no_traceback(self):
+        self.cfg("cli_impl", "python")
+        self.stamp.write_text("x\n")
+        p = self.call("schedule", "list")
+        self.assertEqual(p.returncode, 2, p.stderr)
+        self.assertIn("factory schedule needs the Go CLI binary", p.stderr)
+        self.assertNotIn("Traceback", p.stderr)
+        self.stamp.write_text(self.h + "\n")
+
+    def test_schedule_go_handback_exit_2_no_loop(self):
+        p = self.env.run("schedule", "list", agent="dir-1", inproc=False,
+                         extra_env={"FACTORY_CLI_IMPL": "python", "FACTORY_CLI_TRACE": "1"})
+        self.assertEqual(p.returncode, 2, p.stderr)
+        self.assertIn("factory schedule needs the Go CLI binary", p.stderr)
+        self.assertNotIn("Traceback", p.stderr)
+
     def test_user_version_equals_schema_version_after_init(self):
         import sqlite3
         with self.env.load_factory() as f:
@@ -620,15 +729,90 @@ class CliImplTests(FactoryTestCase):
         self.assertEqual(p.returncode, 2, p.stderr)
         self.assertIn("python, go, shadow", p.stderr)
         p = self.env.run("config", "cli_go_cmds", "whoami,task", agent="dir-1", inproc=False)
+        self.assertEqual(p.returncode, 0, p.stderr)
+        p = self.env.run("config", "cli_go_cmds", "whoami,bogus", agent="dir-1", inproc=False)
         self.assertEqual(p.returncode, 2, p.stderr)
-        self.assertIn("'task'", p.stderr)
+        self.assertIn("'bogus'", p.stderr)
+        self.assertIn("is not one", p.stderr)
+        self.cfg("cli_go_cmds", "whoami")
         self.assertEqual(self.env.run("config", "cli_go_cmds", agent="dir-1", inproc=False).stdout.strip(), "whoami")
+
+    def test_cli_go_cmds_accepts_s2_command_words(self):
+        p = self.env.run("config", "cli_go_cmds", "task,msg", agent="dir-1", inproc=False)
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertEqual(self.env.run("config", "cli_go_cmds", agent="dir-1", inproc=False).stdout.strip(), "task,msg")
+
+    def test_shadow_only_read_only_s2_argv_shapes(self):
+        self.cfg("cli_impl", "shadow")
+        self.cfg("cli_go_cmds", "task,msg,digest,inbox")
+        self.assertEqual(self.impl(self.call("task", "show", "T-1")), "impl=shadow")
+        self.assertEqual(self.impl(self.call("msg", "boss", "s", "b")), "impl=python")
+        self.assertEqual(self.impl(self.call("task", "update", "T-1", "--status", "todo")), "impl=python")
+        self.assertEqual(self.impl(self.call("digest", "--send")), "impl=python")
+        for abbrev in ("--s", "--se", "--sen"):
+            self.assertEqual(self.impl(self.call("digest", abbrev)), "impl=python", abbrev)
+        self.assertEqual(self.impl(self.call("inbox", "--show", "")), "impl=python")
+        self.assertEqual(self.impl(self.call("inbox", "--show", "M1", "--show", "")), "impl=python")
+        self.assertEqual(self.impl(self.call("inbox", "--show", "M1", "--sh", "")), "impl=python")
+        self.assertEqual(self.impl(self.call("inbox", "--show", "M1", "--s", "")), "impl=python")
+        self.assertEqual(self.impl(self.call("inbox", "--show", "M1", "--show=")), "impl=python")
+        self.assertEqual(self.impl(self.call("inbox", "--show", "M1", "--limit", "1", "--sh", "")), "impl=python")
+        self.assertEqual(self.impl(self.call("inbox", "--show", "M1")), "impl=shadow")
+
+    def test_cli_go_cmds_known_matches_go_registry(self):
+        import re
+        import sys
+
+        sys.path.insert(0, str(BIN_DIR))
+        import factory_cli  # noqa: E402
+
+        repo = Path(__file__).resolve().parent.parent
+        words = set()
+        pat = re.compile(r'register\("([^"]+)"')
+        for p in (repo / "go" / "internal" / "cli").glob("*.go"):
+            if p.name.endswith("_test.go"):
+                continue
+            for m in pat.finditer(p.read_text()):
+                if not m.group(1).startswith("zz-"):
+                    words.add(m.group(1))
+        self.assertEqual(set(factory_cli.CLI_GO_CMDS_KNOWN), words)
 
     def test_tick_rewrites_the_flag_from_the_db(self):
         self.flag.write_text("go x whoami\n")
         p = self.env.run("tick", extra_env={"FACTORY_LOADAVG": "999"})  # a loaded box skips the build
         self.assertEqual(p.returncode, 0, p.stderr)
         self.assertEqual(self.flag.read_text(), f"go {self.h} whoami\n")
+
+    def test_tick_impl_go_adds_tick_with_cli_impl_python(self):
+        self.cfg("cli_impl", "python")
+        self.cfg("tick_impl", "go")
+        self.assertEqual(self.flag.read_text().strip(), f"go {self.h} tick")
+
+    def test_tick_impl_go_with_cli_go_cmds_includes_tick(self):
+        self.cfg("cli_impl", "go")
+        self.cfg("cli_go_cmds", "whoami")
+        self.cfg("tick_impl", "go")
+        self.assertEqual(self.flag.read_text().strip(), f"go {self.h} whoami,tick")
+
+    def test_tick_impl_go_shadow_warns_and_no_tick_in_csv(self):
+        self.cfg("cli_impl", "shadow")
+        p = self.env.run("config", "tick_impl", "go", agent="dir-1", inproc=False)
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertIn("cli_impl is shadow; the tick stays python", p.stderr)
+        self.assertNotIn("tick", self.flag.read_text())
+
+    def test_tick_impl_bogus_exit_2(self):
+        p = self.env.run("config", "tick_impl", "bogus", agent="dir-1", inproc=False)
+        self.assertEqual(p.returncode, 2, p.stderr)
+        self.assertIn("tick_impl must be one of python, go", p.stderr)
+
+    def test_cli_go_cmds_tick_refused(self):
+        p = self.env.run("config", "cli_go_cmds", "tick", agent="dir-1", inproc=False)
+        self.assertEqual(p.returncode, 2, p.stderr)
+
+    def test_tick_impl_director_only(self):
+        p = self.env.run("config", "tick_impl", "go", agent="lead-1", inproc=False)
+        self.assertEqual(p.returncode, 3, p.stderr)
 
     @unittest.skipUnless(REAL_GO, "no ~/.local/go/bin/go toolchain")
     def test_build_cli_go_writes_binary_then_stamp(self):

@@ -2,6 +2,7 @@
 import importlib.util
 import json
 import os
+import pwd
 import subprocess
 import tempfile
 import unittest
@@ -21,16 +22,34 @@ def _load_factory_cli():
 
 
 class TerminalBackendTests(FactoryTestCase):
-    def test_auto_prefers_herdr_when_both_stubs_on_path(self):
+    def _summary(self):
         with self.env.load_factory() as f:
             con = f.db()
             try:
-                raw, eff, exe = f.terminal_backend_summary(con)
+                return f.terminal_backend_summary(con)
             finally:
                 con.close()
-            self.assertEqual(raw, "auto")
-            self.assertEqual(exe, "herdr")
-            self.assertEqual(eff, "auto→herdr")
+
+    def test_auto_prefers_hc_when_both_on_path(self):
+        self.ok("config", "terminal_backend", "auto", agent="owner")
+        self.assertEqual(self._summary(), ("auto", "auto→hc", "hc"))
+
+    def test_auto_uses_herdr_when_hc_missing(self):
+        self.ok("config", "terminal_backend", "auto", agent="owner")
+        with self.env.load_factory() as f:
+            real = f.shutil.which
+            f.shutil.which = lambda exe, *a, **k: None if exe == "hc" else real(exe, *a, **k)
+            con = f.db()
+            try:
+                got = f.terminal_backend_summary(con)
+            finally:
+                f.shutil.which = real
+                con.close()
+        self.assertEqual(got, ("auto", "auto→herdr", "herdr"))
+
+    def test_explicit_herdr_wins_over_hc(self):
+        self.ok("config", "terminal_backend", "herdr", agent="owner")
+        self.assertEqual(self._summary(), ("herdr", "herdr", "herdr"))
 
     def test_hc_config_routes_herdr_calls_through_hc_stub(self):
         self.ok("config", "terminal_backend", "hc", agent="owner")
@@ -63,7 +82,7 @@ class TerminalBackendTests(FactoryTestCase):
         try:
             self.assertEqual(
                 f._hc_translate_args(argv),
-                ["run", "--bg", "--name", "zz-coder", "--cwd", "/tmp/wt", "claude",
+                ["run", "--bg", "--no-parent", "--name", "zz-coder", "--cwd", "/tmp/wt", "claude",
                  "--model", "opus", "-n", "zz-coder"],
             )
         finally:
@@ -78,7 +97,7 @@ class TerminalBackendTests(FactoryTestCase):
         try:
             self.assertEqual(
                 f._hc_translate_args(argv),
-                ["run", "--bg", "--name", "zz-cur", "--cwd", "/tmp/wt",
+                ["run", "--bg", "--no-parent", "--name", "zz-cur", "--cwd", "/tmp/wt",
                  "/usr/bin/agent", "--workspace", "/tmp/wt", "--model", "opus", "--trust", "--force"],
             )
         finally:
@@ -104,8 +123,8 @@ class TerminalBackendTests(FactoryTestCase):
         os.environ["FACTORY_HC_SPAWN_SCRIPT_ROOT"] = str(root)
         try:
             run_argv = f._hc_translate_args(argv)
-            self.assertEqual(run_argv[:6], ["run", "--bg", "--name", "zz-coder", "--cwd", "/tmp/wt"])
-            self.assertEqual(run_argv[6:8], ["sh", str(root / "zz-coder.hc-spawn.sh")])
+            self.assertEqual(run_argv[:7], ["run", "--bg", "--no-parent", "--name", "zz-coder", "--cwd", "/tmp/wt"])
+            self.assertEqual(run_argv[7:9], ["sh", str(root / "zz-coder.hc-spawn.sh")])
             flat = " ".join(run_argv)
             self.assertNotIn("FACTORY_GH", flat)
             self.assertNotIn("fixture-not", flat)
@@ -115,7 +134,9 @@ class TerminalBackendTests(FactoryTestCase):
             self.assertIn("FACTORY_GH_TOKEN_FILE", body)
             self.assertNotIn("CLAUDE_CODE_MESSAGING_TOKEN", body)
             self.assertNotIn("HC_SOCKET", body)
-            live_sock = os.path.expanduser(f.DEFAULT_CONFIG["herdr_socket"])
+            # the live socket is under the real user's (passwd) home, which is not $HOME when HOME is a temp dir
+            # (the local gate, T-1679): _is_live_socket resolves against pw_dir
+            live_sock = pwd.getpwuid(os.getuid()).pw_dir + f.DEFAULT_CONFIG["herdr_socket"][1:]
             f._HC_RUN_ENV["HERDR_SOCKET_PATH"] = live_sock
             live_body = (root / "zz-coder-live-sock.hc-spawn.sh")
             f._hc_write_spawn_script("zz-coder-live-sock", f._HC_RUN_ENV, "/bin/true", [])
@@ -168,8 +189,9 @@ class TerminalBackendTests(FactoryTestCase):
         self.assertIn("QUEUED", p.stdout)
         row = self.env.sql("SELECT status, pane_id FROM agents WHERE name='zz-done'")[0]
         self.assertEqual(row["status"], "queued")
+        # T-1447: a legacy TUI done row is released on the TUI list (absent there: reaped), still before the queue
         reaped = self.env.sql("SELECT action FROM events WHERE entity_id='zz-done' AND action='reaped'")
-        self.assertEqual(reaped, [])
+        self.assertEqual(len(reaped), 1)
         close_calls = [c for c in self.env.calls("hc") if c["argv"][:2] == ["pane", "close"]]
         herdr_close = [c for c in self.env.calls("herdr") if c["argv"][:2] == ["pane", "close"]]
         self.assertEqual(close_calls + herdr_close, [])
@@ -204,7 +226,7 @@ class TerminalBackendTests(FactoryTestCase):
         queued = self.env.sql("SELECT action FROM events WHERE entity_id='zz-done-gate' AND action='queued'")
         self.assertEqual(len(queued), 1)
         reaped = self.env.sql("SELECT action FROM events WHERE entity_id='zz-done-gate' AND action='reaped'")
-        self.assertEqual(reaped, [])
+        self.assertEqual(len(reaped), 1)  # T-1447: legacy TUI row released on the TUI list
         close_calls = [c for c in self.env.calls("hc") if c["argv"][:2] == ["pane", "close"]]
         herdr_close = [c for c in self.env.calls("herdr") if c["argv"][:2] == ["pane", "close"]]
         self.assertEqual(close_calls + herdr_close, [])
@@ -268,13 +290,20 @@ class TerminalBackendTests(FactoryTestCase):
         self.assertFalse(hc_calls, hc_calls)
 
     def test_res_names_active_backend(self):
+        self.ok("config", "terminal_backend", "auto", agent="owner")
         out = self.ok("res", agent="owner").stdout
-        self.assertRegex(out, r"terminal backend: herdr \(config=auto; effective=auto→herdr\)")
+        self.assertRegex(out, r"terminal backend: hc \(config=auto; effective=auto→hc\)")
 
     def test_doctor_names_active_backend_and_socket_pin(self):
+        self.ok("config", "terminal_backend", "auto", agent="owner")
         out = self.ok("doctor", agent="owner").stdout
-        self.assertIn("terminal backend: herdr (config=auto; effective=auto→herdr)", out)
+        self.assertIn("terminal backend: hc (config=auto; effective=auto→hc)", out)
         self.assertIn("herdr_socket (HERDR_SOCKET_PATH pin):", out)
+
+    def test_doctor_names_herdr_under_explicit_herdr_config(self):
+        self.ok("config", "terminal_backend", "herdr", agent="owner")
+        out = self.ok("doctor", agent="owner").stdout
+        self.assertIn("terminal backend: herdr (config=herdr; effective=herdr)", out)
 
     def test_hc_tick_survives_ls_row_without_pane_id(self):
         """hc ls terminals may omit pane_id; the tick must not KeyError and must exit 0."""
@@ -289,7 +318,7 @@ class TerminalBackendTests(FactoryTestCase):
         self.env.seed_goal()
         self.env.seed_team()
         self.env.seed_agent("zz-pm", "pm", goal="G-001", team="g-001-a", pane_id="p1", status="live")
-        self.env.set_herdr(agents=[])
+        self.env.set_herdr(agents=[{"name": "zz-pm", "agent": "claude", "pane_id": "p1", "agent_status": "working"}])
         p = self.ok("tick", agent="owner")
         self.assertEqual(p.returncode, 0, p.stderr)
         row = self.env.sql("SELECT status FROM agents WHERE name='zz-pm'")[0]
@@ -304,21 +333,13 @@ class TerminalBackendTests(FactoryTestCase):
         self.env.seed_team()
         self.env.seed_agent("zz-done", "coder", goal="G-001", team="g-001-a", pane_id="p-tui", status="done")
         self.env.seed_agent("zz-live", "coder", goal="G-001", team="g-001-a", pane_id="p2", status="live")
-        self.env.set_herdr(agents=[{"name": "zz-hc-term", "agent": "claude", "agent_status": "idle"}])
+        self.env.set_herdr(agents=[{"name": "zz-live", "agent": "claude", "pane_id": "p2", "agent_status": "working"}])
         p = self.ok("tick", agent="owner")
         self.assertEqual(p.returncode, 0, p.stderr)
         rows = {r["name"]: r["status"] for r in self.env.sql("SELECT name, status FROM agents")}
-        self.assertEqual(rows["zz-done"], "done")
+        # T-1447: a legacy TUI row is reconciled on the TUI list (not hc ls): the done row absent there is reaped
+        self.assertEqual(rows["zz-done"], "exited")
         self.assertEqual(rows["zz-live"], "live")
-        exited_ev = [
-            e for e in self.env.sql(
-                "SELECT action FROM events WHERE entity_id='zz-done' AND action IN ('reaped','pane-close-skipped')"
-            )
-        ]
-        self.assertEqual(exited_ev, [])
-        close_calls = [c for c in self.env.calls("hc") if c["argv"][:2] == ["pane", "close"]]
-        herdr_close = [c for c in self.env.calls("herdr") if c["argv"][:2] == ["pane", "close"]]
-        self.assertEqual(close_calls + herdr_close, [])
 
     def test_hc_spawn_refused_while_done_hc_name_still_on_ls(self):
         """hc-hosted done row still on hc ls: spawn must not reuse the name (release_stale_pane fails closed)."""

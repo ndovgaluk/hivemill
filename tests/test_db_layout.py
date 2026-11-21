@@ -88,7 +88,9 @@ class LegacyCase(FactoryTestCase):
 # bumping SCHEMA_VERSION (and the Go SchemaVersion in go/internal/factorydb) fails the pin test: add the new version here.
 SCHEMA_PINS = {1: "4036fa8c89b1d08474cad7826bac84a173503c552557e05e768144aef9a4c82d",
                2: "939fcfc8929aca7d86df284747ece77d0688b3473db27b918c431802d92d3a12",   # 2: the worktree_pool table (G-001) merged with upstream's versioning
-               3: "eb3526fa386939feff93b3a23a5b87c23c463de0a9066894ea2df52c933a04a3"}   # 3: goals.hold (HM-42)
+               3: "eb3526fa386939feff93b3a23a5b87c23c463de0a9066894ea2df52c933a04a3",   # 3: goals.hold (HM-42)
+               # upstream's 2-4 (other hashes) never ran here; 4 is upstream's schedules table
+               5: "c62bb19baaadc7eec9d9f0cf6c2082c153a3fb307394327f1b22baf3e68a2940"}   # 5: fork 3 + upstream 4 (schedules), merged 2026-11-22
 
 
 class SchemaVersionTests(FactoryTestCase):
@@ -127,6 +129,63 @@ class SchemaVersionTests(FactoryTestCase):
         m = re.search(r"SchemaVersion\s*(?:int\s*)?=\s*(\d+)", src)
         self.assertTrue(m, "no SchemaVersion constant found in go/internal/factorydb/factorydb.go")
         self.assertEqual(int(m.group(1)), want)
+
+
+SCHEDULES_COLS = (
+    "id", "hour", "days", "job", "goal_id", "token_cap", "created_by", "created",
+    "removed_at", "last_fired_date", "last_outcome", "last_outcome_at",
+)
+
+
+class SchedulesTableTests(FactoryTestCase):
+    def _cols(self, db):
+        con = sqlite3.connect(db)
+        self.addCleanup(con.close)
+        return [r[1] for r in con.execute("PRAGMA table_info(schedules)")]
+
+    def test_init_has_schedules_table(self):
+        self.assertEqual(self._cols(self.env.db_path), list(SCHEDULES_COLS))
+
+    def test_migrate_adds_schedules_idempotent(self):
+        db = self.env.db_path
+        con = sqlite3.connect(db)
+        con.execute("DROP TABLE schedules")
+        con.commit()
+        con.close()
+        with self.env.load_factory() as f:
+            con = sqlite3.connect(db)
+            con.row_factory = sqlite3.Row
+            con.execute("PRAGMA foreign_keys=ON")
+            f.migrate(con)
+            f.migrate(con)
+            cols = [r[1] for r in con.execute("PRAGMA table_info(schedules)")]
+            con.close()
+        self.assertEqual(cols, list(SCHEDULES_COLS))
+
+    def test_schedules_check_constraints(self):
+        db = self.env.db_path
+        self.env.seed_goal()
+        con = sqlite3.connect(db)
+        self.addCleanup(con.close)
+        con.execute("PRAGMA foreign_keys=ON")
+        base = ("S-001", 9, "mon", "job", "G-001", 1000, "owner", "t")
+        con.execute(
+            "INSERT INTO schedules(id,hour,days,job,goal_id,token_cap,created_by,created) VALUES(?,?,?,?,?,?,?,?)",
+            base,
+        )
+        con.commit()
+        for hour in (24, -1):
+            with self.assertRaises(sqlite3.IntegrityError, msg=f"hour={hour}"):
+                con.execute(
+                    "INSERT INTO schedules(id,hour,days,job,goal_id,token_cap,created_by,created) VALUES(?,?,?,?,?,?,?,?)",
+                    ("S-002", hour, "mon", "job", "G-001", 1000, "owner", "t"),
+                )
+        for cap in (0, -1):
+            with self.assertRaises(sqlite3.IntegrityError, msg=f"token_cap={cap}"):
+                con.execute(
+                    "INSERT INTO schedules(id,hour,days,job,goal_id,token_cap,created_by,created) VALUES(?,?,?,?,?,?,?,?)",
+                    ("S-003", 9, "mon", "job", "G-001", cap, "owner", "t"),
+                )
 
 
 class LayoutTests(FactoryTestCase):
