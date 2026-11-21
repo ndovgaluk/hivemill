@@ -279,3 +279,4 @@ One line per turn: what was asked, what was done or found. Explanations live in 
 - 2026-11-22: Q: do upstream changes since a2232ea6 contradict our workflow optimization, safe to merge? Answer in 02-fork-and-upstream.md (210 commits, 18 conflicting files, gate/workspace/schema overlaps; safe only as a planned merge with the full suite).
 - 2026-11-22: merged upstream/main into main locally (46733ef2, not pushed yet; full suite running). Q: upstream performance changes, answer in 02-fork-and-upstream.md.
 - 2026-11-22: Q: are the upstream improvements used by the workflow engine? Answer in 02-fork-and-upstream.md.
+- 2026-11-22: /com-tsr all push: docs commits 6252349f, a9a9749f; full suite + go test on the upstream merge, test fixes be34dcfa and 18a5a140; pushed a2232ea6..18a5a140 to origin/main; live ~/factory on 18a5a14, schema 5, ticks clean. Insights: 2 entries.

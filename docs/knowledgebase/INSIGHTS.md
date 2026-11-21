@@ -22,7 +22,21 @@ Add entries with `/engineering-insights`
 
 ## What Works
 
+### 2026-11-22 · pattern · Sort post-merge test failures by re-running them alone, then on a clean `upstream/main` worktree
+Symptom: the full suite after the upstream merge failed 22 Python modules and 10 Go packages; most were not caused by the merge.
+Cause: under 12 loaded shards the timing tests ("scans fast", "linear time", parallel probes) fail; several modules also fail on upstream's own code in this WSL box (PATH with Windows dirs, multi-machine placement, nsbox proxy).
+Rule: re-run each failing module alone; for what still fails, `git worktree add --detach <scratch> upstream/main` and run the same module there; only failures absent upstream are the merge's to fix. Read every `FAIL` line, never `go test ./... | tail`.
+Evidence: merge `46733ef2`, fixes `be34dcfa`, `18a5a140`; the first Go run's tail showed 3 of 10 failing packages
+Promoted: no
+
 ## What Doesn't Work
+
+### 2026-11-22 · mistake · Upstream's Go parity tests hard-code upstream's lists, so every upstream merge breaks them on fork additions
+Symptom: after merging upstream on 2026-11-22, Go tests failed with "database has 4, binary expects 5", `TestRoutesMatchPython` (Python routes /settings, /halt, /goal-control), installer plugin lists (boss `factory-boss`) and the s2cli flag list (5 fork flags).
+Cause: the Go ports copy Python's expectations as literals (`go/internal/factorytest/testdata/init.sql`, `web/views/unit_test.go`, `factorytest/installer/plugins_test.go`, `factorytest/s2cli/flags_test.go`); upstream regenerates them from its own tree, without our schema, pages, plugin or flags.
+Rule: after each upstream merge, apply the fork's schema diff to `init.sql` (version, `goals.hold`, `worktree_pool`; don't regenerate it wholesale, upstream hand-edits it) and add fork entries to those lists, then run `go test ./...`.
+Evidence: commit `18a5a140`; `tests/test_flags.py` and `tests/test_plugins.py` hold the Python side of the same lists
+Promoted: no
 
 ### 2026-11-16 · mistake · An engine story run with `--ci local` on hivemill runs the whole test suite in one serial process
 Symptom: run G-007 (HM-32) built in 10 min and passed review in 5, then sat 41 min in `gating` at module 153 of 411, with about 4 h to go.
@@ -242,12 +256,14 @@ Evidence: web/flowapp/src/diagram/Diagram.tsx (`onNodeClick={noop}`); DVDG-556 c
 Promoted: no
 
 ## Recurring Errors & Fixes
+- 2026-11-22: `tests/test_sandbox_spawn.py` fails when the shell's PATH holds a folder with a space bit again — also on a clean `upstream/main` copy after the upstream merge (Windows dirs in the WSL PATH)
 
 - 2026-11-16: A preview copied with `git archive $(git stash create)` leaves out new, untracked files bit again — `git stash create` refused while `web/static/copy.js` was intent-to-add, and the archive had no `copy.js`; copied it by hand
 - 2026-11-15: `pgrep -f <pattern> | xargs kill` … kills its own shell bit again — `pkill -f 'serve --bind 127.0.0.1 --port 18641'` in the same Bash call as the restart killed that call (exit 144); a separate call that stops the server by PID avoids it
 - 2026-11-13: `wsl … -- bash -lc "<command>"` quoting bit again — three times during DVDG-551 (grep patterns with `|` and quotes, `sed -n` ranges); the script form fixed each
 
 ## Session Notes
+- 2026-11-22: upstream merge (`46733ef2`..`18a5a140`) → added: sort post-merge failures against a clean upstream worktree; upstream's Go parity tests hard-code upstream's lists
 
 - 2026-11-16: HM-45 chips, first engine run G-007 (HM-32) → added: `--ci local` runs the full suite serially on hivemill; a new top-level folder breaks test_live_checkout_deny; test_sandbox_spawn and a PATH with spaces
 - 2026-11-15: HM-50 diagram per workflow → added: a preview copied with `git stash create` leaves out new files; the dashboard reads `workflow.db` read-only
