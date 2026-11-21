@@ -841,7 +841,9 @@ class WorkflowEngineSeamTests(FactoryTestCase):
             "DEFAULT_CONFIG key workflow_engine (default off)": _literal("DEFAULT_CONFIG").get("workflow_engine") == "off",
             "guard_tick builds ./cmd/workflow": any(name(c) == "build_guard_go" and any(
                 getattr(k.value, "value", None) == "./cmd/workflow" for k in c.keywords) for c in calls_in("guard_tick")),
-            "cmd_tick calls tick_workflow": any(name(c) == "tick_workflow" for c in calls_in("cmd_tick")),
+            # upstream's tick units (G-041 S3a): cmd_tick walks TICK_UNITS; the engine runs in the mech_merge unit
+            "cmd_tick calls tick_workflow": any(name(c) == "tick_workflow" for fn in ("cmd_tick", "_tick_u_mech_merge")
+                                                for c in calls_in(fn)),
             "the wf subcommand": any(isinstance(c, ast.Call) and name(c) == "add_parser" and c.args
                                      and getattr(c.args[0], "value", None) == "wf" for c in ast.walk(tree)),
             "cmd_spawn passes --resume to spawn": any(name(c) == "spawn" and any(k.arg == "resume" for k in c.keywords)

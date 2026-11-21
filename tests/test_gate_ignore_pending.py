@@ -23,7 +23,13 @@ class JudgeIgnoresPendingChecks(tgi.LocalJudge):
         super().setUp()
         self.env.seed_pr(checks=PENDING)  # GitHub's run has not finished
 
+    def require_unittest(self):
+        """T-1634 (upstream): in local mode only checks named in projects.required_checks are waited for; name the
+        pending check so the key is what decides."""
+        self.env.sql("UPDATE projects SET required_checks='unittest' WHERE id='zz-test-proj'")
+
     def test_must_merge_on_a_local_pass_while_github_checks_are_pending(self):
+        self.require_unittest()
         self.ok("config", KEY, "1")
         seed_run(self.env, self.head)
         p = self.judge()
@@ -42,6 +48,7 @@ class JudgeIgnoresPendingChecks(tgi.LocalJudge):
         self.refused("checks not green: unittest=FAILURE")
 
     def test_key_off_still_waits_for_github(self):
+        self.require_unittest()
         seed_run(self.env, self.head)
         self.refused("checks not green")  # judge_ci_wait_s is 0: the pending check refuses as today
 
