@@ -26,12 +26,27 @@ func TestRoutesMatchPython(t *testing.T) {
 		py = append(py, m[1])
 	}
 	sort.Strings(py)
-	want := []string{"/", "/agents", "/changelog", "/goal/<id>", "/goals", "/quality", "/resources", "/task/<id>", "/tasks", "/throughput", "/tokens"}
-	if !reflect.DeepEqual(py, want) {
-		t.Errorf("Python ROUTES keys are %v, want %v (a new route needs a Go view and a case here)", py, want)
+	// Fork-only pages served by the Python UI alone (factory serve), with no Go view yet: the Settings page (HM-1),
+	// the Urgent stop control (HM-44) and the goal Pause/Resume/Stop control (HM-42). Listed exactly, so any other
+	// Python route without a Go view still fails here.
+	pyOnly := map[string]bool{"/goal-control": true, "/halt": true, "/settings": true}
+	var shared []string
+	for _, k := range py {
+		if !pyOnly[k] {
+			shared = append(shared, k)
+		}
 	}
-	if got := RouteKeys(); !reflect.DeepEqual(got, py) {
-		t.Errorf("Go routes %v != Python ROUTES %v", got, py)
+	for k := range pyOnly {
+		if !strings.Contains(string(b), `"`+k+`"`) {
+			t.Errorf("fork-only route %s is no longer in Python ROUTES; drop it from pyOnly", k)
+		}
+	}
+	want := []string{"/", "/agents", "/changelog", "/goal/<id>", "/goals", "/quality", "/resources", "/task/<id>", "/tasks", "/throughput", "/tokens"}
+	if !reflect.DeepEqual(shared, want) {
+		t.Errorf("Python ROUTES keys are %v, want %v (a new route needs a Go view and a case here)", shared, want)
+	}
+	if got := RouteKeys(); !reflect.DeepEqual(got, shared) {
+		t.Errorf("Go routes %v != Python ROUTES %v", got, shared)
 	}
 }
 

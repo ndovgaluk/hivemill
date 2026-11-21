@@ -9,7 +9,7 @@ CREATE TABLE goals (
   intent TEXT, success_criteria TEXT, status TEXT NOT NULL DEFAULT 'proposed',
   priority INTEGER NOT NULL DEFAULT 2, requested_by TEXT, workspace_id TEXT,
   created TEXT NOT NULL, updated TEXT NOT NULL,
-  org TEXT NOT NULL DEFAULT 'claude', token_limit INTEGER);
+  org TEXT NOT NULL DEFAULT 'claude', token_limit INTEGER, hold TEXT);
 CREATE TABLE plans (
   id INTEGER PRIMARY KEY AUTOINCREMENT, goal_id TEXT NOT NULL REFERENCES goals(id),
   version INTEGER NOT NULL, body TEXT NOT NULL, author TEXT, created TEXT NOT NULL);
@@ -80,6 +80,8 @@ CREATE TABLE gate_runs (
   exit_code INTEGER, test_count INTEGER, main_count INTEGER, cmd TEXT, log_path TEXT, pid INTEGER, actor TEXT,
   note TEXT, created TEXT NOT NULL, started TEXT, finished TEXT);
 CREATE INDEX idx_gate_runs_head ON gate_runs(project_id, head_sha);
+CREATE TABLE worktree_pool (path TEXT PRIMARY KEY, project_id TEXT NOT NULL, state TEXT NOT NULL, task_id TEXT, reset_ok INTEGER NOT NULL DEFAULT 0, claimed_at TEXT, released_at TEXT);
+CREATE INDEX worktree_pool_proj ON worktree_pool(project_id, state);
 CREATE TABLE schedules (
   id TEXT PRIMARY KEY,
   hour INTEGER NOT NULL CHECK(hour BETWEEN 0 AND 23),
@@ -181,7 +183,7 @@ CREATE TABLE skill_trials (
   skill_invoked INTEGER, check_output TEXT, author TEXT,
   void_reason TEXT, void_why TEXT,   -- set by `skilleval void`; the row keeps every other field
   UNIQUE(candidate_id, vendor_sha, task, condition));
-PRAGMA user_version = 4;
+PRAGMA user_version = 5;
 INSERT INTO config(key,value) VALUES('affected_smoke','test_db_layout.py test_inbox.py test_judge.py');
 INSERT INTO config(key,value) VALUES('agent_runtimes','');
 INSERT INTO config(key,value) VALUES('block_conditions','0');

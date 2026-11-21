@@ -85,6 +85,7 @@ var flagNames = []string{
 	"gate_fast_projects", "issue_intake_repos", "cursor_pilot_roles", "agent_runtimes",
 	"red_pr_owner_alert", "coder_ci_handoff", "idle_coder_reap", "idle_watchdog", "judge_wait_main_run",
 	"owner_alert_feed", "owner_alert_send", "gh_call_trace",
+	"worktree_reuse", "serve_show_text", "workflow_engine", "gate_ignore_pending_ci", "hand_merge_accept", // fork, as tests/test_flags.py
 }
 
 var baselineOn = map[string]bool{"git_push": true, "stale_policy": true, "scout_enabled": true, "gate_fast_projects": true}

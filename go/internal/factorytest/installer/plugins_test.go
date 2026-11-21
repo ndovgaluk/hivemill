@@ -20,7 +20,7 @@ import (
 )
 
 var (
-	plPgWithPlugins = map[string]bool{"coder": true, "director": true, "lead": true, "pm": true, "qa": true,
+	plPgWithPlugins = map[string]bool{"boss": true, "coder": true, "director": true, "lead": true, "pm": true, "qa": true,
 		"researcher": true, "reviewer": true, "staff-engineer": true}
 	plPgBadExt   = map[string]bool{".sh": true, ".py": true, ".js": true, ".ts": true, ".cmd": true, ".ps1": true, ".html": true}
 	plPgBadNames = map[string]bool{"hooks": true, "hooks.json": true, ".mcp.json": true}
@@ -202,6 +202,7 @@ func plPgSubdirs(t testing.TB, dir string) []string {
 
 func TestPluginsEveryChildIsAPlugin(t *testing.T) {
 	want := map[string][]string{
+		"boss":           {"factory-boss"}, // fork: story-run skill (DVDG-565), as tests/test_plugins.py
 		"coder":          {"coder-skills"},
 		"director":       {"factory-director"},
 		"lead":           {"factory-lead"},
