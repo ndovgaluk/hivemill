@@ -43,7 +43,7 @@ Symptom: the HM-50 preview server exited at start with `ImportError: cannot impo
 Cause: `git stash create` snapshots tracked files only, so a module added in the session and not yet `git add`ed is missing from the copy.
 Rule: copy the tree for a preview with `git ls-files -co --exclude-standard -z | tar --null -T - -c | tar -x -C /tmp/<name>`; check the server log, not only the port.
 Evidence: CLAUDE.local.md "UI work: always give the test URL"; web/flowdefs.py (new in HM-50); preview on port 18641, 2026-11-15
-Promoted: no
+Promoted: yes (CLAUDE.local.md "Gotchas")
 
 ### 2026-11-14 · mistake · A merge-gate design built on a GitHub commit status was overtaken by an open story nobody had read
 Symptom: three answers proposed DevDigest as a gate through a GitHub status plus `required_checks`; story HM-34 (To Do) makes local tests the gate and removes pull requests from engine runs, so the design was redone.
