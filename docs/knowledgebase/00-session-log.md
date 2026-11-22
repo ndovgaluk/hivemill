@@ -280,3 +280,4 @@ One line per turn: what was asked, what was done or found. Explanations live in 
 - 2026-11-22: merged upstream/main into main locally (46733ef2, not pushed yet; full suite running). Q: upstream performance changes, answer in 02-fork-and-upstream.md.
 - 2026-11-22: Q: are the upstream improvements used by the workflow engine? Answer in 02-fork-and-upstream.md.
 - 2026-11-22: /com-tsr all push: docs commits 6252349f, a9a9749f; full suite + go test on the upstream merge, test fixes be34dcfa and 18a5a140; pushed a2232ea6..18a5a140 to origin/main; live ~/factory on 18a5a14, schema 5, ticks clean. Insights: 2 entries.
+- 2026-11-22: README.md: added "What the application is made of" (parts table) and "How the web UI works (back end)" (request path, read-only DB access, JSON API, flow app, loopback-only owner controls, self-reload, route table); fixed the "read-only" limit line. Uncommitted.

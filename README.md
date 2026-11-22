@@ -162,6 +162,22 @@ flowchart LR
 
 Details: [docs/lifecycle.md](docs/lifecycle.md), [docs/verdict-gates.md](docs/verdict-gates.md), [docs/db-layout.md](docs/db-layout.md).
 
+### What the application is made of
+
+Python 3.11+ and the standard library only: nothing to `pip install`. Go is used only for optional ports (the worker guard, the CLI). Linux only (on Windows, inside WSL2).
+
+| Part | Where | What it does |
+|---|---|---|
+| `factory` CLI | `bin/factory` (a stub) and `bin/factory_cli.py` | Every command: goals, tasks, messages, verdicts, spawn, judge, config, export, `serve`. Agents and the owner work only through it ([cli-layout](docs/cli-layout.md)). |
+| State | `$FACTORY_HOME/db/factory.db` (default `~/factory`) | One SQLite file: goals, plans, tasks, agents, messages, verdicts and an append-only event log. Only `factory init` creates it; the path is resolved in `web/dbpath.py` ([db-layout](docs/db-layout.md)). |
+| Heartbeat | `systemd/factory-tick.timer` → `factory tick` | Every minute: reap ended agents, spawn behind the resource gate, nudge idle ones, export state ([spawn-queue](docs/spawn-queue.md)). |
+| Roles | `roles/<role>.md`, `roles/settings/`, `roles/plugins/`, `roles/hooks/` | The prompt, permissions, skills and the PreToolUse worker guard of each role ([worker-guard](docs/worker-guard.md)). |
+| Agent panes | herdr / herdr-core (`hc`) | One terminal pane per agent, a Claude Code or Cursor Agent session ([terminal-backends](docs/terminal-backends.md)). |
+| Sandboxing and scouting | `scout/` | Orgs and runtimes, the optional worker sandbox, per-role GitHub tokens, the skill scout ([runtimes](docs/runtimes.md), [worker-sandbox](docs/worker-sandbox.md)). |
+| Web UI | `web/` | The dashboard served by `factory serve`, described under [The web UI](#the-web-ui). |
+| CI tooling | `ci/` | Test selection, sharding, the test-count gate, guard corpus and the public-text scanners ([tests-and-ci](docs/tests-and-ci.md)). |
+| Installer plugin | `plugins/hivemill/` | The Claude Code plugin behind `/hivemill:setup` ([SETUP](docs/SETUP.md)). |
+
 ## Features
 
 | Feature | What it does | Docs |
@@ -267,6 +283,46 @@ A read-only web UI shows goals, tasks, live agents, throughput and quality, in l
   </tr>
 </table>
 
+### How the web UI works (back end)
+
+The dashboard is a small server in `web/`, built on Python's `http.server` with no framework, no Node at run time and no outside requests. It reads the factory DB and the Claude Code session logs and renders HTML on the server.
+
+```mermaid
+flowchart LR
+    browser([browser]) -->|"GET page / api JSON"| server["web/server.py<br>Host allowlist, 8 requests at a time, CSP"]
+    server --> views["web/views/*.py<br>data() then render()"]
+    views --> queries["web/queries.py, execstate.py, flow.py<br>pure read-only queries"]
+    queries --> db[("factory.db<br>opened mode=ro, query_only")]
+    views --> tokens["web/tokens.py<br>Claude session logs → tokens and cost"]
+    browser -->|"POST owner form (loopback only)"| server
+    server -->|"runs"| cli["bin/factory config / halt / start / goal pause|resume|stop / project update"]
+    cli --> db
+```
+
+- **One request.** `web/server.py` checks the method and the `Host` header, takes one of 8 request slots (503 when busy), then looks the path up in the route table of `web/views/__init__.py`. Each page is a module with `data(ctx, **params)`, which returns a plain dict, and `render(ctx, data)`, which returns HTML through the helpers in `web/html.py` and `web/components.py`. The view gets a fresh read-only DB connection for that request; nothing is cached across requests.
+- **Read-only data access.** `web/db.py` opens the DB with `mode=ro` and `PRAGMA query_only`, and never imports the CLI (whose DB open migrates). `web/queries.py` holds pure query functions that return JSON-ready dicts. They never select message bodies, plan bodies, task specs or spawn arguments; instruction text appears only when the owner sets `serve_show_text=1` and the server is bound to loopback.
+- **Derived states.** `web/execstate.py` works out the one state each goal and task shows (Running, Waiting, Paused, Stopping, Stopped, Blocked, Done) from the agents, holds and halts in the DB ([web-ui: execution states](docs/web-ui.md#execution-states-hm-47)).
+- **Cost and tokens.** `web/tokens.py` indexes the Claude Code session logs, also those of sandboxed workers, and attributes each session to an agent, task and goal. `web/prices.py` turns tokens into an estimate at list prices. Cursor Agent writes no usage counts, so Cursor-org work shows sessions and agent-hours only.
+- **JSON API.** `/api/<page>.json` returns the same dict a page renders, `/api/flow/goal/<id>.json` and `/api/flow/task/<id>.json` feed the flow debugger, and `/healthz` answers `ok`.
+- **Flow debugger.** The Flow section of the goal and task pages is a React app (TypeScript, Vite, React Flow) in `web/flowapp/`. Its build is committed under `web/static/flow/`, so the server, tests and CI need no Node; a manifest hash makes a test fail when the build is stale ([flow-debugger](docs/flow-debugger.md)). Every other page works without JavaScript.
+- **Owner controls, on loopback only.** The UI answers GET and HEAD, plus five POST paths: `/settings` and `/settings/gate` (curated settings and a project's merge gate), `/halt` and `/start` (urgent stop and start again), and `/goal-control` (pause, resume or stop a goal). Each is refused unless the server is bound to a loopback address, the `Origin` is the server's own, and the form carries the token issued at start. The server never writes itself: it runs the matching `bin/factory` command, which validates the input, checks the role and logs an event.
+- **Self-reload.** About once a minute the server compares its code (`web/`, `scout/`, `bin/factory`) with what it started with. When the new code imports cleanly, it finishes the open requests and re-executes itself on the same port. When the new code fails to import, the old code keeps serving and the journal logs an error.
+
+Pages and their routes:
+
+| Route | Page |
+|---|---|
+| `/` | Overview: what needs you, system gauges, open goals, running agents, shipped work, quality |
+| `/goals`, `/goal/<id>` | Goals by status; one goal with its state, criteria, tasks, flow, cost and time |
+| `/tasks`, `/task/<id>` | Tasks with PR and CI state; one task with its stage flow, verdicts, rework and cost per agent |
+| `/agents` | Running, queued and ended agents by org, team, role and runtime |
+| `/resources` | The spawn gate, capacity gauges and the checks behind them |
+| `/throughput`, `/quality` | Merges over time and where the time goes; rejections, retries and CI pass rate |
+| `/changelog`, `/tokens` | Merged work; token use and estimated cost by goal, task, agent, model and org |
+| `/settings`, `/halt`, `/goal-control` | Owner controls (forms only on a loopback bind) |
+
+Run it: `factory serve` listens on one private LAN address, port 8765 by default (`serve_bind`, `serve_port`, `serve_hostnames`), and refuses wildcard and public addresses. To start it at boot, run `systemd/install.sh --with-serve`, which installs a `factory-serve` unit with tight memory, CPU and filesystem limits. For a local check, run `factory serve --bind 127.0.0.1 --port <port>`. `python3 ci/visual_qa.py` captures every page in both themes and two sizes and checks overflow, contrast and render time. Full reference: [docs/web-ui.md](docs/web-ui.md).
+
 ## Herdr desktop dashboard
 
 If you use the [Herdr app](https://herdr.dev), Hivemill adds a status bar and a dashboard tab to it. The dashboard shows alerts, budget and cost, the Claude and Cursor lanes, active goals and the factory's agents.
@@ -285,7 +341,7 @@ If you use the [Herdr app](https://herdr.dev), Hivemill adds a status bar and a 
 - It is built for a single box, not a cluster. State is one SQLite file.
 - Agent isolation is a tripwire, not a sandbox. Hooks and permission settings stop honest mistakes and make bypasses visible; they do not contain a determined adversary. Read [SECURITY.md](SECURITY.md) for the threat model and the known limits before you point it at anything you cannot afford to lose.
 - The worker sandbox is opt-in (`sandbox_roles`, off by default) and a tripwire, not a boundary: it has no egress filter ([docs/worker-sandbox.md](docs/worker-sandbox.md)).
-- The web UI is read-only and has no authentication; bind it to an address you trust.
+- The web UI has no authentication; bind it to an address you trust. It is read-only on a LAN bind; its owner controls (settings, urgent stop, goal pause/resume/stop) work only on a loopback bind.
 
 Not affiliated with Anthropic. Claude and Claude Code are products of Anthropic.
 
